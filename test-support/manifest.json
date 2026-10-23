@@ -1,0 +1,133 @@
+{
+  "profile": "QuotaCell F0, existing validators only",
+  "binaries": {
+    "proxy": {
+      "file": "binaries/proxy",
+      "bytes": 27360,
+      "sha256": "672b6d8bf809cbcf8e2ec440da4d6aae92241b7c298c3c45a33c3f179a032dba",
+      "ckb_blake2b256": "0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a",
+      "observed_output": {
+        "capacity": "0x27e71e57d00",
+        "lock": {
+          "args": "0xdc7a30c57e8bef48b1f3d26fb0aac10cd65edf30",
+          "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+          "hash_type": "type"
+        },
+        "type": null
+      },
+      "source_capture_sha256": "7a0dc9c25c7f6087de654120ebf8f6fa6ab6890a24744fccc10a1ec26fea011d"
+    },
+    "always-success": {
+      "file": "binaries/always-success",
+      "bytes": 1216,
+      "sha256": "f4ba47fa9a540a74efcee48829dc0cf8b5b9dbba6950ea118aa5d47c42e60d30",
+      "ckb_blake2b256": "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1",
+      "observed_output": {
+        "capacity": "0x1dbb835d00",
+        "lock": {
+          "args": "0xdc7a30c57e8bef48b1f3d26fb0aac10cd65edf30",
+          "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+          "hash_type": "type"
+        },
+        "type": null
+      },
+      "source_capture_sha256": "7314d5dc2a6841aee3e2f7570bf4d8a59a2f852130d677b0b812f1de6b086277"
+    },
+    "xudt": {
+      "file": "binaries/xudt",
+      "bytes": 33696,
+      "sha256": "e9b92e5783f692f6ee99ca20eeda5f3da282e0f4010eb4fbd3db4e3058239349",
+      "ckb_blake2b256": "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95",
+      "observed_output": {
+        "capacity": "0x3137ad45e00",
+        "lock": {
+          "args": "0x9750c176e52911de7f058b3983e8cd73628069db",
+          "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+          "hash_type": "type"
+        },
+        "type": {
+          "args": "0x44ec8b96663e06cc94c8c468a4d46d7d9af69eaf418f6390c9f11bb763dda0ae",
+          "code_hash": "0x00000000000000000000000000000000000000000000000000545950455f4944",
+          "hash_type": "type"
+        }
+      },
+      "source_capture_sha256": "ab82cf2691188186aa6c1390fd09bf38f903b2b26e58f1d41a09773291924ff7",
+      "upstream_deployment_spec": "https://github.com/nervosnetwork/rfcs/blob/53b2c5eb7dd82968327999534be74d7975865b9d/rfcs/0052-extensible-udt/0052-extensible-udt.md"
+    },
+    "secp-code": {
+      "file": "binaries/secp-code",
+      "bytes": 52048,
+      "sha256": "32acace3ce8cce6beda78410efcc1da711736995d91bfbaa9465dc62db79d02f",
+      "ckb_blake2b256": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+      "observed_output": {
+        "capacity": "0x9184e72a000",
+        "lock": {
+          "args": "0x",
+          "code_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "hash_type": "data"
+        },
+        "type": {
+          "args": "0x8536c9d5d908bd89fc70099e4284870708b6632356aad98734fcf43f6f71c304",
+          "code_hash": "0x00000000000000000000000000000000000000000000000000545950455f4944",
+          "hash_type": "type"
+        }
+      },
+      "source_capture_sha256": "7e20538d0f0d450f4ec433c664a47a9f3bdb7fe0b21bce4f46234e21320f5010",
+      "distribution": "crates.io ckb-system-scripts 0.5.4, independently identical to public genesis code-cell bytes"
+    },
+    "secp-data": {
+      "file": "binaries/secp-data",
+      "bytes": 1048576,
+      "sha256": "52d7d0a8a553038718865c68194ca467c94bb4accd78b0416f7e5f09c986f3a3",
+      "ckb_blake2b256": "0x9799bee251b975b82c45a02154ce28cec89c5853ecc14d12b7b8cccfc19e0af4",
+      "observed_output": {
+        "capacity": "0x5f5f04610900",
+        "lock": {
+          "args": "0x",
+          "code_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "hash_type": "data"
+        },
+        "type": null
+      },
+      "source_capture_sha256": "889635c12b76b0e1e57cedfb5e71f936c4ed949f0f1c0e1c3125d64ecf5bc406",
+      "distribution": "crates.io ckb-system-scripts 0.5.4, independently identical to public genesis code-cell bytes"
+    },
+    "secp-dep-group": {
+      "file": "binaries/secp-dep-group",
+      "bytes": 76,
+      "sha256": "1947805d715c30189e6ef10076e387eef63086c39842a4fc6bac1149857a2bcc",
+      "ckb_blake2b256": "0xf66ca3517241864672b7f47d093aec4d6d4d07824068993eacd728eb9078e236",
+      "observed_output": {
+        "capacity": "0x2b95fd500",
+        "lock": {
+          "args": "0x",
+          "code_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "hash_type": "data"
+        },
+        "type": null
+      },
+      "source_capture_sha256": "a9268effe490d14809801cf84c7aa73e54f6ec5824e223aedf75e30a55999072"
+    }
+  },
+  "source_pins": {
+    "proxy": "2db0b21ff13d3cb0ab6d479593b5172dcbfaf239",
+    "xudt_reference": "26b0b4f15bb6eeb268b70d7ae006e244b7c06649",
+    "system_scripts_reference": "72eb92fca090700dcb398cd8cad8fbd8bad40355",
+    "ccc_descriptor_reference": "9ffef01a181751dacf1edde83ed43fcfb4646ded"
+  },
+  "verifier": {
+    "packages": {
+      "ckb-script": "1.0.0",
+      "ckb-verification": "1.0.0",
+      "ckb-types": "1.0.0",
+      "ckb-vm": "0.24.14"
+    },
+    "ckb_published_crate_vcs_reference": "b83d3a1ba76296ca67fed14faa33d6a09339f470",
+    "ckb_published_crate_vcs_dirty_flag": true,
+    "note": "Exact published crates and Cargo.lock checksums are authoritative; clean Git-tree equivalence is not claimed.",
+    "vm_vcs_reference": "610fb2992de1ff00cf9ad50e1e76da50d36bdcb7",
+    "hardforks": "HardForks::new_dev()",
+    "commit_epoch": "1000(0/1)",
+    "max_cycles": 70000000
+  }
+}

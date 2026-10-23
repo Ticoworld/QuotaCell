@@ -1,0 +1,30 @@
+{
+  "scope": "Historical source identities from the verified implementation; layout-only changes recorded separately by the publication review. No native policy change.",
+  "Q": {
+    "bytes": 22240,
+    "sha256": "e3774c9b295e71ea4b2990cd61fb445647992e0f21e4f2bc0432d0278241e406",
+    "ckb_data_hash": "0x4c02a05d3ec9723f742dbc1323efef3e094995f9e5ecb043243239d712a4d876",
+    "source_sha256": "a9e1fb941bb85f4bdb3c6090c60388be685b0a6321fd4972858aab04595dcf21",
+    "profile_sha256": "62a527839eac0bd0a8379f60adfe8cc9be295f8ed79b84d42f9ce2993b66350d"
+  },
+  "historical_sources": {
+    "c/allowance.c": "a9e1fb941bb85f4bdb3c6090c60388be685b0a6321fd4972858aab04595dcf21",
+    "c/profile.h": "62a527839eac0bd0a8379f60adfe8cc9be295f8ed79b84d42f9ce2993b66350d",
+    "harness/src/main.rs": "73fac16cc4351b4a67e1be361046eecc08659fc9bd459233547aa478e37363a1",
+    "harness/build.rs": "c2bbc3fd26287f7bd16940c969747a745455def9c5b89a924df993905ebef50a",
+    "harness/Cargo.toml": "bdcfd3a1792a2be7d84968e744a8359cf42a6a4a6e4ef80f8836c29963f0b9ca",
+    "harness/Cargo.lock": "2266142fb4ede3db158e6a3730993d673f5b42096d4f03efcefd66b5cb65deba",
+    "build_q.py": "5b92eb4251b4626f5917946dfd17e1deda9428b0f4f74c48929c20b3474f28c0",
+    "reproduce.py": "9246d573a6027d0dbad75df0e7834f3f36f0dfe678391ea096742e0d7dc69ab3",
+    "verify_artifacts.py": "8b8f08b5a006f59cf94a250d2150e510ce409590cab24569acbe2d6e334eefbb",
+    "demo.py": "cfdc32398bafb9f104ef616ee5c4d788a08439b3ca41b90d3120fde2c3dd9439",
+    "../wo03-f0/src/main.rs": "f0ff23cc38ffa81bedb02128fa18a79ad27526dc0218af9036bd4f5f566b1bfb",
+    "../wo03-f0/manifest.json": "5b2449939b3b0a6407f4e12a1d8e7662b5cb9b02fb875f8368b95e60ff785dc3"
+  },
+  "previous_Q_build": {
+    "date": "2026-10-23",
+    "scope": "Clean directory, same physical machine; not independent-person reproduction",
+    "byteIdentical": true,
+    "sha256": "e3774c9b295e71ea4b2990cd61fb445647992e0f21e4f2bc0432d0278241e406"
+  }
+}

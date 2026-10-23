@@ -1,0 +1,61 @@
+{
+  "Q": {
+    "bytes": 22240,
+    "sha256": "e3774c9b295e71ea4b2990cd61fb445647992e0f21e4f2bc0432d0278241e406",
+    "ckb_data_hash": "0x4c02a05d3ec9723f742dbc1323efef3e094995f9e5ecb043243239d712a4d876",
+    "source_sha256": "a9e1fb941bb85f4bdb3c6090c60388be685b0a6321fd4972858aab04595dcf21",
+    "profile_sha256": "62a527839eac0bd0a8379f60adfe8cc9be295f8ed79b84d42f9ce2993b66350d"
+  },
+  "source_sha256": {
+    "c/allowance.c": "a9e1fb941bb85f4bdb3c6090c60388be685b0a6321fd4972858aab04595dcf21",
+    "c/profile.h": "62a527839eac0bd0a8379f60adfe8cc9be295f8ed79b84d42f9ce2993b66350d",
+    "harness/src/main.rs": "62d88f4f1fafde20978d57de02677c6e2cdb32fc50489ef8bfeb8d6be115d7dd",
+    "harness/build.rs": "8d9ad9943132f1e2fecf92676db66391b98e213d103f1aefa66c165246d738f7",
+    "harness/Cargo.toml": "bdcfd3a1792a2be7d84968e744a8359cf42a6a4a6e4ef80f8836c29963f0b9ca",
+    "harness/Cargo.lock": "2266142fb4ede3db158e6a3730993d673f5b42096d4f03efcefd66b5cb65deba",
+    "build_q.py": "a00dd1764069a4547ab5b6094a8132fdb441cb17bae9f0164ce3390595bdedfc",
+    "reproduce.py": "dc27379d92c44f2b3aea516fd318778a92913d030b485ebc26da6dea0873ec03",
+    "verify_artifacts.py": "3f27d479f0a4fd5a0d8206e5600ce89946a68517d5319369fdcf433d38e55173",
+    "demo.py": "cfdc32398bafb9f104ef616ee5c4d788a08439b3ca41b90d3120fde2c3dd9439",
+    "../test-support/src/main.rs": "f0ff23cc38ffa81bedb02128fa18a79ad27526dc0218af9036bd4f5f566b1bfb",
+    "../test-support/manifest.json": "5e91303bbd68cd73831f2e9ed08c12e688c51e217d0aafd5454d7e1dfa01536e"
+  },
+  "upstream_source_pins": {
+    "proxy": "2db0b21ff13d3cb0ab6d479593b5172dcbfaf239",
+    "xudt_reference": "26b0b4f15bb6eeb268b70d7ae006e244b7c06649",
+    "system_scripts_reference": "72eb92fca090700dcb398cd8cad8fbd8bad40355",
+    "ccc_descriptor_reference": "9ffef01a181751dacf1edde83ed43fcfb4646ded"
+  },
+  "stdlib": {
+    "repository": "https://github.com/nervosnetwork/ckb-c-stdlib",
+    "revision": "6bf2bca668e0db5f9eb120eb78b31782899ef90d",
+    "archive_url": "https://codeload.github.com/nervosnetwork/ckb-c-stdlib/tar.gz/6bf2bca668e0db5f9eb120eb78b31782899ef90d",
+    "archive_sha256": "bc58e674d1c9c101dc3bb516cd7d91f4bc87a2e32a788ec1c96cd17ead7c0754"
+  },
+  "verifier": {
+    "packages": {
+      "ckb-script": "1.0.0",
+      "ckb-verification": "1.0.0",
+      "ckb-types": "1.0.0",
+      "ckb-vm": "0.24.14"
+    },
+    "ckb_published_crate_vcs_reference": "b83d3a1ba76296ca67fed14faa33d6a09339f470",
+    "ckb_published_crate_vcs_dirty_flag": true,
+    "note": "Exact published crates and Cargo.lock checksums are authoritative; clean Git-tree equivalence is not claimed.",
+    "vm_vcs_reference": "610fb2992de1ff00cf9ad50e1e76da50d36bdcb7",
+    "hardforks": "HardForks::new_dev()",
+    "commit_epoch": "1000(0/1)",
+    "max_cycles": 70000000
+  },
+  "results": {
+    "f0_binary_identities_checked": 6,
+    "stdlib_files_checked_against_pinned_archive": 52,
+    "fixtures": 89,
+    "accepted": 33,
+    "rejected": 56,
+    "policy_only_rejections": 55,
+    "positive_input_links_to_actual_previous_outputs_checked": 59
+  },
+  "publication_note": "Packaging paths updated; Q C/profile unchanged. Historical identity mapping is in evidence/source-identities.json.",
+  "scope": "Experimental synthetic-token policy; historical results, current packaging paths"
+}

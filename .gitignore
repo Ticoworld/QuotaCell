@@ -1,0 +1,17 @@
+# Local dependencies, disposable credentials and generated chain data
+node_modules/
+.local/
+.env
+.env.*
+!.env.example
+keys/
+*.pem
+*.key
+# Build products and machine-specific output
+__pycache__/
+*.pyc
+*.log
+target/
+policy/build/
+test-support/binaries/
+examples/local-chain/results/

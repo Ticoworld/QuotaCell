@@ -1,0 +1,10 @@
+{
+  "fixture": "100-changed-K-bytes-same-type.json",
+  "originalFixtureSHA256": "5e8b3467f3f48ddf623ac9b0cc04ec2fadb3dd6375014bf22fe4e0310c5dd821",
+  "externalizedFixtureSHA256": "ec99fe1873ff90d8583a3e52ea7f6b60bc75310d724570e3668341dd09b21d8e",
+  "binary": "secp-code-mutated",
+  "recipe": "secp-code followed by one 0x00 byte",
+  "bytes": 52049,
+  "sha256": "583be474933e3424bd4cc0ce32b8846b43984d28aa0e12db2b306c770d20a1e5",
+  "scope": "Storage-only externalization. Resolved executable data and expected q:12 rejection are unchanged."
+}

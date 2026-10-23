@@ -1,0 +1,35 @@
+{
+  "name": "01-deploy-dependencies",
+  "txHash": "0xdc96669febd9ea5c25430a8ea718642306bef5cbdb1c04ae08c23baf05588f90",
+  "bytes": 85299,
+  "feeShannon": "200000",
+  "dryRun": {
+    "cycles": "0x18805b"
+  },
+  "inclusion": {
+    "status": {
+      "block_hash": "0x07532433f38f85c35d1ba9ce4e742e5dcefeb09a245ad4f4aeb96ef6b1949a22",
+      "block_number": "0x4",
+      "reason": null,
+      "status": "committed",
+      "tx_index": "0x1"
+    },
+    "header": {
+      "compact_target": "0x20010000",
+      "dao": "0xdb85f6b24e410100ae1357a378a926008dac22cddf1200000098430067710000",
+      "epoch": "0xa0004000000",
+      "extra_hash": "0x108fe0792d247167421ed0f5168e0f5517a72905e52dbf0ecdaa24eb7ea4d399",
+      "hash": "0x07532433f38f85c35d1ba9ce4e742e5dcefeb09a245ad4f4aeb96ef6b1949a22",
+      "nonce": "0x0",
+      "number": "0x4",
+      "parent_hash": "0x8c87e6a0387f4c8b012e81c9e950a3f7082a03b693ca2558dde60e76596185e0",
+      "proposals_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "timestamp": "0x1a14673c7a9",
+      "transactions_root": "0x5864d1581a31458e7b8814b6c4ee250328fe75f8ed53fad08511d2dbe50cd4e6",
+      "version": "0x0"
+    },
+    "transactionIndex": 1
+  },
+  "scope": "Metadata-only derivative: raw transaction/serialized/nodeTransaction and outputs_data omitted because they embed uncleared F/A executables. Original stays private.",
+  "originalSHA256": "b3aacd04678e1ad52f732fa48bc9df7272e65a8433ee58732c9f677ec2a5acc5"
+}

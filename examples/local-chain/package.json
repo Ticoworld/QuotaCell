@@ -1,0 +1,9 @@
+{
+  "name": "quotacell-wo07-local-proof",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "dependencies": {
+    "@ckb-ccc/core": "1.23.0"
+  }
+}

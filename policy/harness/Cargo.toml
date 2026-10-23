@@ -1,0 +1,38 @@
+[package]
+name = "quotacell-p0"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Local QuotaCell P0 experimental allowance proof"
+
+[dependencies]
+ckb-chain-spec = "=1.0.0"
+ckb-hash = "=1.0.0"
+ckb-jsonrpc-types = "=1.0.0"
+ckb-script = { version = "=1.0.0", default-features = false }
+ckb-traits = "=1.0.0"
+ckb-types = "=1.0.0"
+ckb-verification = "=1.0.0"
+# Keep the CKB 1.0.0 family coherent; newer compatible-range releases changed
+# the schema trait generation. Cargo.lock pins the complete resolved tree.
+ckb-constant = "=1.0.0"
+ckb-crypto = "=1.0.0"
+ckb-dao-utils = "=1.0.0"
+ckb-error = "=1.0.0"
+ckb-fixed-hash = "=1.0.0"
+ckb-fixed-hash-core = "=1.0.0"
+ckb-fixed-hash-macros = "=1.0.0"
+ckb-gen-types = "=1.0.0"
+ckb-logger = "=1.0.0"
+ckb-occupied-capacity = "=1.0.0"
+ckb-occupied-capacity-core = "=1.0.0"
+ckb-occupied-capacity-macros = "=1.0.0"
+ckb-pow = "=1.0.0"
+ckb-rational = "=1.0.0"
+ckb-resource = "=1.0.0"
+ckb-systemtime = "=1.0.0"
+ckb-verification-traits = "=1.0.0"
+hex = "=0.4.3"
+secp256k1 = { version = "=0.30.0", features = ["recovery"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.151"

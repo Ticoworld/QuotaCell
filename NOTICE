@@ -1,0 +1,10 @@
+QuotaCell
+Copyright 2026 Ticoworld
+
+Original QuotaCell source, harness/support utilities, builders, packaging scripts,
+and documentation are licensed under Apache-2.0. This does not relicense third-party
+material. See THIRD_PARTY_NOTICES.md and policy/deps/ckb-c-stdlib/LICENSE.
+
+The Q executable includes MIT-licensed ckb-c-stdlib code. Its existing copyright
+and license notice is retained at that path. Historical evidence describes
+third-party scripts without granting redistribution rights to those scripts.
