@@ -1,0 +1,125 @@
+{
+  "summary": {
+    "verdict": "NEW OWNER-CONTROL PROOF PASSED",
+    "revocation": {
+      "maskBefore": 3,
+      "maskAfter": 2,
+      "txHash": "0x6873bd5b08c46852a1460684afe4fb2709d771b4337b5336c334a9355b2e2cf9"
+    },
+    "disabledPayment": {
+      "txHash": "0xe96c41e198ff8937c06ea90290db0c4f0f2a0fd2d496a0b787cfd5b26503bd73",
+      "error": 17,
+      "latestPolicyInput": true,
+      "submitted": true,
+      "feeCharged": 0
+    },
+    "closure": {
+      "tokensReturned": "200",
+      "capacityReturnedShannons": "15400000000",
+      "txHash": "0x236bec1caba2efc0ed8c881c85b1534dccc50d534c9e88a651ba259aa8c838d7"
+    },
+    "lateDeposit": {
+      "tokens": 50,
+      "capacityShannons": "15400000000",
+      "source": "50 of the recovered 200 tokens, not newly minted value",
+      "txHash": "0xb5b3e804d93d3ed4aea161919fdc6d78143d290da2fce468469f8caffb1e6407"
+    },
+    "closedSweep": {
+      "tokensReturned": "50",
+      "capacityReturnedShannons": "15400000000",
+      "txHash": "0x398b898d68f55633c52adc4a6087c9eca63ce8ab82f0afff9a238fd30f0c97cc"
+    },
+    "final": {
+      "ownerTokens": 200,
+      "ownerTokenCellCapacityShannons": "29600000000",
+      "protectedTokens": 0,
+      "phase": 1,
+      "mask": 0,
+      "used": 0,
+      "retainedPolicyCapacityShannons": "60000000000",
+      "occupiedPolicyCapacityShannons": "57200000000",
+      "unreclaimablePolicySlackShannons": "2800000000"
+    },
+    "fees": [
+      {
+        "name": "05-owner-revoke",
+        "shannons": "2000",
+        "bytes": 1204,
+        "cycles": "0x1bcfc1"
+      },
+      {
+        "name": "09-owner-close-recover",
+        "shannons": "2000",
+        "bytes": 1465,
+        "cycles": "0x1c7044"
+      },
+      {
+        "name": "11-late-deposit",
+        "shannons": "2000",
+        "bytes": 872,
+        "cycles": "0x197856"
+      },
+      {
+        "name": "13-owner-closed-sweep",
+        "shannons": "2000",
+        "bytes": 1465,
+        "cycles": "0x1c9246"
+      }
+    ],
+    "ownerOperationFeesShannons": "8000",
+    "caveat": "Returned treasury capacity stays in owner-controlled token Cells; this is custody recovery, not a transfer to freely spendable untyped CKB. The whole 600-CKB CLOSED policy remains retained."
+  },
+  "committed_transactions": [
+    {
+      "name": "01-deploy-dependencies",
+      "feeShannon": "200000",
+      "bytes": 85299,
+      "cycles": 1629371,
+      "block": 4
+    },
+    {
+      "name": "02-policy-genesis",
+      "feeShannon": "2000",
+      "bytes": 1151,
+      "cycles": 1743549,
+      "block": 8
+    },
+    {
+      "name": "03-fund-protected-treasury",
+      "feeShannon": "5000",
+      "bytes": 662,
+      "cycles": 1651960,
+      "block": 11
+    },
+    {
+      "name": "05-owner-revoke",
+      "feeShannon": "2000",
+      "bytes": 1204,
+      "cycles": 1822657,
+      "block": 15
+    },
+    {
+      "name": "09-owner-close-recover",
+      "feeShannon": "2000",
+      "bytes": 1465,
+      "cycles": 1863748,
+      "block": 18
+    },
+    {
+      "name": "11-late-deposit",
+      "feeShannon": "2000",
+      "bytes": 872,
+      "cycles": 1669206,
+      "block": 22
+    },
+    {
+      "name": "13-owner-closed-sweep",
+      "feeShannon": "2000",
+      "bytes": 1465,
+      "cycles": 1872454,
+      "block": 26
+    }
+  ],
+  "all_committed_fees_shannons": 215000,
+  "double_count_warning": "Close returns 200, late deposit returns 50 of those same tokens, sweep recovers those 50. Net final owner tokens 200, not 250. Final owner token capacity296 includes142 supplied again from external fee capacity during late deposit."
+}

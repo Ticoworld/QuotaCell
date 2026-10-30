@@ -1,0 +1,122 @@
+{
+  "accounting.json": {
+    "bytes": 3690,
+    "sha256": "6a837daa792b8952647c9b0888a19a29927ae50eafa71a2d96fdb049fae0881b"
+  },
+  "deployment-metadata.json": {
+    "bytes": 1306,
+    "sha256": "99c2936ef39064f41f3d8ea8c3d5ed66eb0ea43f0ac4cc9d525b1e935220cd95"
+  },
+  "environment.json": {
+    "bytes": 796,
+    "sha256": "79947fc427693ebbf987cf7dd9fd3e9f4bd6788f7fb5212e5c37cb28c9efdc52"
+  },
+  "evidence/02-policy-genesis.json": {
+    "bytes": 13597,
+    "sha256": "419c006e9081ff258b7ddf6f161c3963dc9f8d96028f84157413b48b10120ef4"
+  },
+  "evidence/03-fund-protected-treasury.json": {
+    "bytes": 11007,
+    "sha256": "ad375d0e86f3d4131f5052935ff48e2a84f97f8d597b88ac31e2be7715700f3f"
+  },
+  "evidence/04-before-revoke.json": {
+    "bytes": 7656,
+    "sha256": "4327b8b22af5684c91c845e9730ce8a18ba72db512fb83efcbd879f18bfb9816"
+  },
+  "evidence/05-owner-revoke.json": {
+    "bytes": 16011,
+    "sha256": "a197549fb19e355e47d88b9479e649ff5df93ae77f59119dd11122dc6ed3bc24"
+  },
+  "evidence/06-after-revoke.json": {
+    "bytes": 7898,
+    "sha256": "bd4e4a59939a65ac0224e84b5d2182cf1debf43c71c00c1c9ac2ac6f0c1d6446"
+  },
+  "evidence/07-disabled-delegate-rejected.json": {
+    "bytes": 18190,
+    "sha256": "dd1beedba3b20457d0773797d4d7d5face88d2265556a133e4a4e08485f54056"
+  },
+  "evidence/08-enabled-delegate-dry-run.json": {
+    "bytes": 13978,
+    "sha256": "e996848464246f388738d7295fbcb6d2b692b08276ff24eb9b8fbed24384c167"
+  },
+  "evidence/09-owner-close-recover.json": {
+    "bytes": 19165,
+    "sha256": "2f11f099a45c7e1785c26abc522322c285c7e7975eac3cf6ee57286e65881932"
+  },
+  "evidence/10-after-close.json": {
+    "bytes": 8747,
+    "sha256": "2b45d3d6af280ea56e432200ae9407164f2acb69df0bce6937e770ba9a643bc1"
+  },
+  "evidence/11-late-deposit.json": {
+    "bytes": 12735,
+    "sha256": "20e3dc501fd0d6a50c69c5bfa767b950cfc8c27737aff86143d4d07852ba004e"
+  },
+  "evidence/12-after-late-deposit.json": {
+    "bytes": 2935,
+    "sha256": "4f9e1bffbd526305ba995120e01d977254db9b232a64c1ec1626f8a28a1cabb6"
+  },
+  "evidence/13-owner-closed-sweep.json": {
+    "bytes": 19238,
+    "sha256": "168e272d3be33d6040ca105cadec85871aede81fe6afd164757b3b22be5d5206"
+  },
+  "evidence/14-final-node-state.json": {
+    "bytes": 11358,
+    "sha256": "801a9ac1b096d66efc5aa47c009af8399c3585c5acd21ae74116610d7656b93d"
+  },
+  "evidence/actors.json": {
+    "bytes": 1517,
+    "sha256": "db7ab1efab3a41bfa1791bddf8834b4567f7c4abd79ee6341e1efece818c87c1"
+  },
+  "evidence/node-profile.json": {
+    "bytes": 12002,
+    "sha256": "1036b0f820f7770b435321f522d020501e754abfe9cfa7e1ce7608782b159dd2"
+  },
+  "evidence/owner-proof-summary.json": {
+    "bytes": 2076,
+    "sha256": "6e28f564097e9eb8b4638cc8851d67fb1b12b34d921ecc13d1023a9a3b39a73e"
+  },
+  "evidence/setup-context.json": {
+    "bytes": 2727,
+    "sha256": "640cffbb59d0a42a96933408570577d39d075e814503ccfc2a8e2bacff562ad5"
+  },
+  "evidence/verdict.json": {
+    "bytes": 134,
+    "sha256": "afdfb941fd5b3925df60c93d5242bdd5d11c40f415fd076dd3fa5c6299ab2c13"
+  },
+  "owner_actions.mjs": {
+    "bytes": 9596,
+    "sha256": "f878b30ec7368b98f972f21087b9054d7badd692d6ede4edc50c5e997385fa8a"
+  },
+  "README.md": {
+    "bytes": 2628,
+    "sha256": "fcadceee0b9d63a385fbb8702440ca9ea4428b893caa88347d30cd82f9ae39fe"
+  },
+  "REPRODUCE.md": {
+    "bytes": 4329,
+    "sha256": "1d72673e6d3fc8167446f096a5f27fd0b4d8b4d4be2e34f415bc13085f7dbf84"
+  },
+  "reproduce.py": {
+    "bytes": 2690,
+    "sha256": "5c7954e193aabb0e526bc7eb250baeb4499c90cbac4dffce771e2acf9047fed8"
+  },
+  "SECURITY_AND_RESULTS.md": {
+    "bytes": 6557,
+    "sha256": "4244aa21fb7e793071674d1b6dd5e175bfc524c2331841790d754625c2f318d5"
+  },
+  "signature-check.json": {
+    "bytes": 2256,
+    "sha256": "cea165a5fa917a352b3852d26b20a393c3be70154746e6b98956df5f43835dfd"
+  },
+  "source-identities.json": {
+    "bytes": 995,
+    "sha256": "edf2dc66016229bb7793a23699e973124eb9304200c195dacc8c5d0816c10d5e"
+  },
+  "verify_accounting.py": {
+    "bytes": 6441,
+    "sha256": "bab16d8fe40780792c6c53b817095a468e8bcd12513f1a9e373ba838f17261d7"
+  },
+  "verify_records.mjs": {
+    "bytes": 3391,
+    "sha256": "4f8d712ca18c29f7fac1a4c280f9c269b58ad703ddf6edbccb3dc27615bede0d"
+  }
+}

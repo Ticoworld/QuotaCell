@@ -1,0 +1,68 @@
+{
+  "scope": "Offline exact reconstruction of fresh signed transaction evidence; no new node execution",
+  "entries": [
+    {
+      "file": "01-deploy-dependencies.json",
+      "txHash": "0x4c56f2e465e41b3ac62dd4a36bd61ee37e44c02ce1888c7b641a9dfaf9dde5b6",
+      "signature": "owner",
+      "feeShannons": "200000",
+      "status": "committed"
+    },
+    {
+      "file": "02-policy-genesis.json",
+      "txHash": "0x5bce126722a83ecda19a5a1f52328bde22a9e76e76f7c36f35111bcc1b2a312b",
+      "signature": "owner",
+      "feeShannons": "2000",
+      "status": "committed"
+    },
+    {
+      "file": "03-fund-protected-treasury.json",
+      "txHash": "0x056649be5d29af297c4aaf8e0f8dd85d6074cb0e22ffea051bc9d18b3c18eb7a",
+      "signature": "owner",
+      "feeShannons": "5000",
+      "status": "committed"
+    },
+    {
+      "file": "05-owner-revoke.json",
+      "txHash": "0x6873bd5b08c46852a1460684afe4fb2709d771b4337b5336c334a9355b2e2cf9",
+      "signature": "owner",
+      "feeShannons": "2000",
+      "status": "committed"
+    },
+    {
+      "file": "07-disabled-delegate-rejected.json",
+      "txHash": "0xe96c41e198ff8937c06ea90290db0c4f0f2a0fd2d496a0b787cfd5b26503bd73",
+      "signature": "alice",
+      "feeShannons": "2000",
+      "status": "Q17 rejected"
+    },
+    {
+      "file": "08-enabled-delegate-dry-run.json",
+      "txHash": "0x5aac3057c86b97c73592f4fc3ce7d387d3ebaff5d95f08b07b6389bc99998e96",
+      "signature": "ben",
+      "feeShannons": "2000",
+      "status": "dry-run only"
+    },
+    {
+      "file": "09-owner-close-recover.json",
+      "txHash": "0x236bec1caba2efc0ed8c881c85b1534dccc50d534c9e88a651ba259aa8c838d7",
+      "signature": "owner",
+      "feeShannons": "2000",
+      "status": "committed"
+    },
+    {
+      "file": "11-late-deposit.json",
+      "txHash": "0xb5b3e804d93d3ed4aea161919fdc6d78143d290da2fce468469f8caffb1e6407",
+      "signature": "owner",
+      "feeShannons": "2000",
+      "status": "committed"
+    },
+    {
+      "file": "13-owner-closed-sweep.json",
+      "txHash": "0x398b898d68f55633c52adc4a6087c9eca63ce8ab82f0afff9a238fd30f0c97cc",
+      "signature": "owner",
+      "feeShannons": "2000",
+      "status": "committed"
+    }
+  ]
+}

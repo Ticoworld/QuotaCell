@@ -1,0 +1,42 @@
+{
+  "owner": {
+    "publicKey": "0x034ff27b953a1d3b2c72a49c4efa3495b9a8c2a9e033e21021c6716a5e4bb514cf",
+    "lock": {
+      "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+      "hashType": "type",
+      "args": "0xf3ff9d971164686df351b434bc045e122d4245ae"
+    }
+  },
+  "alice": {
+    "publicKey": "0x02437df09e726407dc5f553a4bfcc9b68eb8916b799c55598616461fbc2bdde0ac",
+    "lock": {
+      "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+      "hashType": "type",
+      "args": "0x268dcfcdd009352eea423d3f4ad75da837cb8d37"
+    }
+  },
+  "ben": {
+    "publicKey": "0x02bfffce978ac97b60ffb99714a4555504947335f18b00ccda8d1996ca6692b542",
+    "lock": {
+      "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+      "hashType": "type",
+      "args": "0xfbd0b24770fc22eed56a075793ef41ae316589d2"
+    }
+  },
+  "aliceRecipient": {
+    "publicKey": "0x021ae30cb9130a7091086640b58e668a0388236053bb9723e3eb63be70ae174e85",
+    "lock": {
+      "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+      "hashType": "type",
+      "args": "0xb1dae9133a24f845adb86ecb9566652f1db56258"
+    }
+  },
+  "benRecipient": {
+    "publicKey": "0x03e99813f77e4c87001ff2a92658d0de86179193241d0dd6b772df3463b50dec18",
+    "lock": {
+      "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+      "hashType": "type",
+      "args": "0xfd2d0ce952eca6a798851955fcc714ceb70aa143"
+    }
+  }
+}

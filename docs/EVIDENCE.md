@@ -1,5 +1,12 @@
 # Evidence and verification scope
 
+**October 30 addition:** [owner-control evidence](../evidence/owner-control-2026-10-30/README.md)
+contains a separate actual signed local-node revocation, disabled-delegate
+rejection, closure/recovery and late sweep. Its [reproduction guide](../evidence/owner-control-2026-10-30/REPRODUCE.md)
+includes offline record checks. The original October 16/23 history below stays
+unchanged; its verifier-only owner-operation boundary is superseded for those
+specific newly executed operations, but not renewal or independent recovery.
+
 The original isolated-node run was recorded October 16, 2026. [local-node/](../evidence/local-node) contains the policy genesis, treasury funding, Alice60, signed Ben50 rejection, Ben40, final live-state response and metadata-only dependency-deployment summary. All are first-party historical records, not independent attestation. Local hashes cannot be checked in a public explorer.
 
 Alice60 committed in block 15; Ben50 submission returned RPC -302 at `Inputs[0].Type`, native Q error 20; Ben40 committed in block 19. Final used 100 consists of Alice60 and Ben40, with 100 tokens protected. The offline checker reconstructs exact transaction serialization, signing preimages and signatures from the five full records.

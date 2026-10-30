@@ -1,0 +1,3 @@
+# Reproduction manifests hash exact committed bytes, including mixed upstream
+# line endings. Do not normalize files on checkout or staging.
+* -text

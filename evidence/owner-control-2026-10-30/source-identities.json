@@ -1,0 +1,16 @@
+{
+  "baseline_commit": "f34c10b933f19ca347a22189e625cf688e65e543",
+  "unchanged": {
+    "policy/c/allowance.c": "a9e1fb941bb85f4bdb3c6090c60388be685b0a6321fd4972858aab04595dcf21",
+    "policy/c/profile.h": "62a527839eac0bd0a8379f60adfe8cc9be295f8ed79b84d42f9ce2993b66350d",
+    "examples/local-chain/proof.mjs": "07d9439f1574a171f1649146dd7949ec7319d14c7fdb633a376a0ed9bb76b6c7",
+    "examples/local-chain/reproduce.py": "060e4fd54744b1a83f68a954ac2479e157f0ea4315dbb8fa8a77fc96111b05d3",
+    "examples/local-chain/package-lock.json": "bed74c9aee8543f85c531a2abf72346b6321c4277f223cd829508203769086fb"
+  },
+  "Q": "e3774c9b295e71ea4b2990cd61fb445647992e0f21e4f2bc0432d0278241e406",
+  "extension": {
+    "reproduce.py": "5c7954e193aabb0e526bc7eb250baeb4499c90cbac4dffce771e2acf9047fed8",
+    "owner_actions.mjs": "f878b30ec7368b98f972f21087b9054d7badd692d6ede4edc50c5e997385fa8a",
+    "verify_records.mjs": "4f8d712ca18c29f7fac1a4c280f9c269b58ad703ddf6edbccb3dc27615bede0d"
+  }
+}

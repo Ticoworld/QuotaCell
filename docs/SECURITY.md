@@ -2,6 +2,13 @@
 
 This is an unaudited experiment. Do not use it to secure real assets.
 
+**October 30 evidence update:** [owner-control node records](../evidence/owner-control-2026-10-30/README.md)
+now demonstrate revocation, latest-state Q17 rejection, close/recovery and one
+late sweep. Renewal remains verifier-only. The table below preserves the
+earlier baseline assessment; its absence-of-node-evidence statements for
+close/sweep are superseded only by this bounded local-node result. Recovery
+returns owner-controlled typed capacity; all 600 CKB of policy remain retained.
+
 Q relies on CKB consensus, Type ID lineage, exact admitted proxy/token/authentication bytes, correct signing keys and its own validation logic. The policy Cell's always-success lock relies on the mandatory type-validator successor rules; it is not an independent authorization mechanism. The full supported transaction layout is in [ABI.md](ABI.md).
 
 The current profile has two fixed delegate keys, distinct approved recipients and fixed per-payment ceilings. The shared allowance is gross lifetime spending: refunds/deposits do not renew authority. Owner renewal increases limits without clearing used counters; revocation disables grants. Owner close and closed sweeps recover selected admitted fund Cells, but cannot bypass a Q/T defect or lost owner key.

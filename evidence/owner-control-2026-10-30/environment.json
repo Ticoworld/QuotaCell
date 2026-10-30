@@ -1,0 +1,14 @@
+{
+  "startedUTC": "2026-10-30T15:18:13.627987+00:00",
+  "ckbVersion": "ckb 0.210.0 (2592ddf 2026-09-17)",
+  "ckbExeSHA256": "77ff953e9dc3a03b36e38a3cab2b9b06f17be8254a15a23afa826c2d4aea98b0",
+  "ckbTag": "v0.210.0",
+  "archiveURL": "https://github.com/nervosnetwork/ckb/releases/download/v0.210.0/ckb_v0.210.0_x86_64-pc-windows-msvc.zip",
+  "archiveSHA256": "a4f7300e5ed1753ab38fc9a9c234a3134589dc18ea66716acdd2b1d0474c7b83",
+  "nodeVersion": "v22.14.0",
+  "npmVersion": "11.7.0",
+  "rpcURL": "http://127.0.0.1:55122",
+  "p2pPort": 55123,
+  "normalSubmission": "send_transaction passthrough; script verification remains enabled",
+  "blockProduction": "IntegrationTest.generate_block; normal block processing/verification; no process_block_without_verify or send_test_transaction"
+}

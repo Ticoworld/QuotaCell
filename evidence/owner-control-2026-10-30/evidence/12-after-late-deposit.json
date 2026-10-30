@@ -1,0 +1,60 @@
+{
+  "policyOutPoint": {
+    "txHash": "0x236bec1caba2efc0ed8c881c85b1534dccc50d534c9e88a651ba259aa8c838d7",
+    "index": 0
+  },
+  "policy": {
+    "block_hash": "0x43ca8b985ee5e908f1bec1153a3a64f4d8596fbbc6fd3cd47e8ce72d9e8e2d16",
+    "cell": {
+      "data": {
+        "content": "0x514350310100010064000000000000000000000000000000000000000000000000000000000000005500000010000000300000003100000050bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95022000000059297894bff4b8f7e1427bf4943b467ba168565d25fe75de207c146debaec14b034ff27b953a1d3b2c72a49c4efa3495b9a8c2a9e033e21021c6716a5e4bb514cf02437df09e726407dc5f553a4bfcc9b68eb8916b799c55598616461fbc2bdde0ac490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce80114000000b1dae9133a24f845adb86ecb9566652f1db5625846000000000000000000000000000000000000000000000000000000000000003c00000000000000000000000000000002bfffce978ac97b60ffb99714a4555504947335f18b00ccda8d1996ca6692b542490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce80114000000fd2d0ce952eca6a798851955fcc714ceb70aa143320000000000000000000000000000000000000000000000000000000000000032000000000000000000000000000000",
+        "hash": "0xa1df1aae6e00ce14c5de73c5ae6944a4af3ea08fff2a7c3c02fadc7ecabc2ca3"
+      },
+      "output": {
+        "capacity": "0xdf8475800",
+        "lock": {
+          "args": "0x",
+          "code_hash": "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1",
+          "hash_type": "data1"
+        },
+        "type": {
+          "args": "0xe840e0d59c49336dfedb27b7b51a7fda0408f71341acb8e2504cc67cf1d92ae0",
+          "code_hash": "0x4c02a05d3ec9723f742dbc1323efef3e094995f9e5ecb043243239d712a4d876",
+          "hash_type": "data2"
+        }
+      }
+    },
+    "status": "live",
+    "outPoint": {
+      "txHash": "0x236bec1caba2efc0ed8c881c85b1534dccc50d534c9e88a651ba259aa8c838d7",
+      "index": 0
+    }
+  },
+  "fund": {
+    "block_hash": "0x647748aecdbdecc74c44a2ab890dfbad7c7585050cec8ba6ded6f31023dba193",
+    "cell": {
+      "data": {
+        "content": "0x32000000000000000000000000000000",
+        "hash": "0x3aa4ff8ef44da77dc9e175070195618048f6cca5713df79c5d9cd1898795ee09"
+      },
+      "output": {
+        "capacity": "0x395e95a00",
+        "lock": {
+          "args": "0xf674cdbbd6740cca19a8df80454d630b43f206405cf01224778c19b3695db36a",
+          "code_hash": "0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a",
+          "hash_type": "data1"
+        },
+        "type": {
+          "args": "0x59297894bff4b8f7e1427bf4943b467ba168565d25fe75de207c146debaec14b",
+          "code_hash": "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95",
+          "hash_type": "data1"
+        }
+      }
+    },
+    "status": "live",
+    "outPoint": {
+      "txHash": "0xb5b3e804d93d3ed4aea161919fdc6d78143d290da2fce468469f8caffb1e6407",
+      "index": 0
+    }
+  }
+}

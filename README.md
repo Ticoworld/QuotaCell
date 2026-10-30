@@ -31,6 +31,18 @@ That means the restrictions also apply to a transaction built outside an applica
 
 The node proof was recorded on an isolated dev chain on October 16, 2026. Its hashes have no public explorer records. Later offline checks verify preserved bytes and signatures; they do not create new node or VM results. A source rebuild on the same machine produced the identical Q binary. There is no independent audit or second-machine reproduction claim.
 
+## Owner control milestone
+
+The October 30 [owner-control node proof](evidence/owner-control-2026-10-30/README.md)
+committed revocation, rejected a freshly signed latest-state payment at Q17,
+closed and recovered 200 synthetic tokens with 154 CKB into an owner-controlled
+typed Cell, and swept a late deposit. The final owner balance remained 200;
+all 600 CKB of CLOSED policy capacity remain retained (572 CKB occupied minimum).
+See [exact reproduction commands](evidence/owner-control-2026-10-30/REPRODUCE.md)
+and [accounting/limitations](evidence/owner-control-2026-10-30/SECURITY_AND_RESULTS.md).
+This is same-machine isolated-node evidence, not public-testnet or independent
+security qualification. The original evidence and contract remain unchanged.
+
 ## Run the available checks
 
 With Python 3, from the repository root:
@@ -55,7 +67,7 @@ See [building and testing](docs/BUILD_AND_TEST.md) for Q compilation and the ori
 
 ## Experimental scope
 
-Only the exact synthetic plain xUDT profile is supported. Native CKB payments and real assets are not qualified. Delegates supply CKB capacity for recipient Cells; closing leaves the 600-CKB policy Cell occupied. Owner renewal, revocation, close/recovery and late sweeps have local verifier evidence, not node transaction evidence. There is no finished UI, independent recovery tool or tested conflict/retry flow. Do not use this experiment to secure real value.
+Only the exact synthetic plain xUDT profile is supported. Native CKB payments and real assets are not qualified. Delegates supply CKB capacity for recipient Cells; closing retains the entire 600-CKB policy Cell. Owner revocation, close/recovery and one late sweep now have isolated-node evidence; renewal remains verifier-only. There is no finished UI, independent recovery tool or tested conflict/retry flow. Do not use this experiment to secure real value.
 
 ## License
 
