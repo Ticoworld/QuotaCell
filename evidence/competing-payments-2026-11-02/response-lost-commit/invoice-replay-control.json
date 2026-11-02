@@ -1,0 +1,13 @@
+{
+  "invoiceId": "race-invoice-alice",
+  "firstPaymentHash": "0xcf128d897ae97af184c6778c183ee4923fe95b01a6f8cacbc04a60f216a25551",
+  "recoveredState": "committed; durable journal refused reservation with exit 3",
+  "secondFreshTransactionHash": "0x780a411b0677d2f2a3231f3b3bf9096ccb290ee9c4df727b944791e0296938fe",
+  "secondStatus": "committed",
+  "sameRecipient": {
+    "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+    "hash_type": "type",
+    "args": "0xa7ade66f0337692f070085f7aecf71115dd21949"
+  },
+  "meaning": "Q accepted a second payment to the same recipient from refreshed state when the local idempotency journal was deliberately bypassed. Invoice identifiers are not committed to the current ABI."
+}

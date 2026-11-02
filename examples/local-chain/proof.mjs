@@ -169,10 +169,49 @@ async function spend(){
  const e=await commit(name,tx,signed.signing);context.policy=point(e.txHash,0);context.fund=point(e.txHash,1);context.seeds[role]=point(e.txHash,3);
  await fs.writeFile(path.join(run,'context.json'),json(context));const actual=await live(context.policy);const decoded=decode(actual.cell.data.content);await save(name+'-state',{outPoint:context.policy,nodeLiveCell:actual,decoded});console.log('Node state',json(decoded));
 }
+async function buildRace(){
+ const [role,quantity,name]=args;assert(['alice','ben'].includes(role));
+ const context=await load('context'),actors=await load('actors');
+ const P=await live(context.policy),fund=await live(context.fund),actor=await live(context.seeds[role]);
+ const old=bytes(P.cell.data.content),next=Buffer.from(old),q=BigInt(quantity),slot=role==='alice'?0:1;
+ const total=read128(bytes(fund.cell.data.content),0);assert(q>0&&q<=total);
+ le128(read128(old,24)+q).copy(next,24);le128(read128(old,280+154*slot)+q).copy(next,280+154*slot);
+ const tx=makeTx([context.policy,context.seeds[role],context.fund],[{...fromRawOutput(P.cell.output)},{...fromRawOutput(fund.cell.output)},{capacity:142n*CKB,lock:actors[role+'Recipient'].lock,type:T},{capacity:BigInt(actor.cell.output.capacity)-142n*CKB-FEE,lock:actors[role].lock}],[hex(next),hex(le128(total-q)),hex(le128(q)),'0x'],context.allDeps,hex(Buffer.from([81,67,65,49,1,slot,0,0])),1);
+ const signed=await sign(tx,role,1,context.kdep),e=await record(name,signed.tx,signed.signing);
+ await fs.writeFile(path.join(run,name+'-signed.json'),json({hash:signed.tx.hash(),transaction:e.transaction,signing:signed.signing}));
+ console.log('Built from policy',context.policy.txHash,'as',process.pid,name,signed.tx.hash());
+}
+async function submitRace(){
+ const [name,crash='no']=args;const saved=await load(name+'-signed');
+ const release=path.join(run,'race-release');
+ for(let i=0;i<600&&!await fs.stat(release).then(()=>true,()=>false);i++)await sleep(50);
+ assert(await fs.stat(release).then(()=>true,()=>false),'race barrier timeout');
+ const response={name,processId:process.pid,txHash:saved.hash,startedUTC:new Date().toISOString()};
+ try{response.rpcResult=await rpc('send_transaction',[saved.transaction,'passthrough']);}
+ catch(error){response.rpcError=error.rpc??{message:error.message};}
+ response.finishedUTC=new Date().toISOString();
+ if(crash==='on-rpc-error'&&response.rpcError){console.log('Simulated process death after RPC response loss, before receipt persistence',name,saved.hash);process.exit(74);}
+ if(crash==='after-rpc-success'&&response.rpcResult){console.log('Simulated process death after RPC success before receipt persistence',name,saved.hash);process.exit(73);}
+ await fs.writeFile(path.join(result,name+'-submit.json'),json(response));console.log('Submission outcome',json(response));
+}
+async function reconcileRace(){
+ const name=args[0],saved=await load(name+'-signed');let transaction;
+ try{transaction=await rpc('get_transaction',[saved.hash]);}catch(e){transaction={rpcError:e.rpc??e.message};}
+ const points=saved.transaction.inputs.map(i=>i.previous_output);
+ const liveInputs=[];for(const p of points)liveInputs.push(await rpc('get_live_cell',[p,true]));
+ const entry={name,processId:process.pid,txHash:saved.hash,transaction,inputs:liveInputs,tip:await rpc('get_tip_header')};
+ await fs.writeFile(path.join(result,name+'-reconciled.json'),json(entry));console.log('Reconciled',name,transaction?.tx_status?.status??'unknown',saved.hash);
+}
+async function staleResubmit(){
+ const name=args[0],saved=await load(name+'-signed'),entry={name,processId:process.pid,txHash:saved.hash,attemptedUTC:new Date().toISOString()};
+ try{entry.result=await rpc('send_transaction',[saved.transaction,'passthrough']);}
+ catch(error){entry.error=error.rpc??{message:error.message};}
+ entry.finishedUTC=new Date().toISOString();await fs.writeFile(path.join(result,name+'-stale-resubmit.json'),json(entry));console.log('Stale transaction resubmission',json(entry));
+}
 async function finish(){
  const context=await load('context');const p=await live(context.policy),f=await live(context.fund);const decoded=decode(p.cell.data.content);assert.equal(decoded.used,100n);assert.equal(decoded.aliceUsed,60n);assert.equal(decoded.benUsed,40n);assert.equal(read128(bytes(f.cell.data.content),0),100n);
  const tx=await rpc('get_transaction',[context.policy.txHash]);assert.equal(tx.tx_status.status,'committed');const header=await rpc('get_header',[tx.tx_status.block_hash]);assert.equal(await rpc('get_block_hash',[header.number]),header.hash);
  await save('final-chain-state',{policyOutPoint:context.policy,policyCell:p,decoded,protectedFundOutPoint:context.fund,protectedFund:f,remainingTokens:100,tip:await rpc('get_tip_header'),canonicalInclusion:{transactionStatus:tx.tx_status,header},peers:await rpc('get_peers')});console.log('PASS: Alice60 committed; Ben50 Q-rejected; Ben40 committed; canonical U100/A60/B40.');
 }
 await fs.mkdir(result,{recursive:true});
-try{if(mode==='keys')await keys();else if(mode==='setup')await setup();else if(mode==='spend')await spend();else if(mode==='finish')await finish();else throw new Error('Unknown mode');}catch(e){console.error(e.stack??String(e));process.exitCode=1;}
+try{if(mode==='keys')await keys();else if(mode==='setup')await setup();else if(mode==='spend')await spend();else if(mode==='race-build')await buildRace();else if(mode==='race-submit')await submitRace();else if(mode==='race-reconcile')await reconcileRace();else if(mode==='race-stale-resubmit')await staleResubmit();else if(mode==='finish')await finish();else throw new Error('Unknown mode');}catch(e){console.error(e.stack??String(e));process.exitCode=1;}

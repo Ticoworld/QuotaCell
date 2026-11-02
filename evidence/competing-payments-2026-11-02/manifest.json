@@ -1,0 +1,120 @@
+﻿{
+    "scope":  "Selected signed local-node records; private keys, raw executable deployment, and node database excluded",
+    "files":  [
+                  {
+                      "path":  "README.md",
+                      "bytes":  1466,
+                      "sha256":  "e90d11476f5b3ecf57a0a437341d65d5fde5523bbbf8c194ae739d7766f2db35"
+                  },
+                  {
+                      "path":  "response-lost-commit/environment.json",
+                      "bytes":  796,
+                      "sha256":  "a7d6397d30584e6436af87b3eecd0aa439d77c9ffc2f27e6f291a5256fb9896f"
+                  },
+                  {
+                      "path":  "response-lost-commit/intent-reservation.json",
+                      "bytes":  204,
+                      "sha256":  "4ccb61388c737a3685cb4e14bf9a24bf2a19d16ce7e701b13ebf296a744198b8"
+                  },
+                  {
+                      "path":  "response-lost-commit/invoice-replay-control.json",
+                      "bytes":  762,
+                      "sha256":  "49d4070181569d9e114b8a3dda81f012ce2b9ba0c0a4ee8edd4dc4fb52d28c65"
+                  },
+                  {
+                      "path":  "response-lost-commit/lost-rpc-response.json",
+                      "bytes":  410,
+                      "sha256":  "03e28d130adcc5eb75787db4449291ef21836143d97edb4681c68252b8b7a89e"
+                  },
+                  {
+                      "path":  "response-lost-commit/race-alice.json",
+                      "bytes":  13895,
+                      "sha256":  "f427aa153049002c6b0598528855f653562e629b35bb7da04ffa515c0eb783f7"
+                  },
+                  {
+                      "path":  "response-lost-commit/race-alice-reconciled.json",
+                      "bytes":  6618,
+                      "sha256":  "077aa36bf92f3cebbeb3f07e2f39629de2c06d8ab2f8c278ceac032d1bb8fcca"
+                  },
+                  {
+                      "path":  "response-lost-commit/race-ben.json",
+                      "bytes":  13891,
+                      "sha256":  "434624acb9296d32b9b6616bdedaa69735acbb91505e400d9bbe69b8e465d962"
+                  },
+                  {
+                      "path":  "response-lost-commit/race-ben-reconciled.json",
+                      "bytes":  2056,
+                      "sha256":  "01d4864b7c8a7c15f7bd02cd5e428a154ca28e6cb847a328f2c2f5b49e180f28"
+                  },
+                  {
+                      "path":  "response-lost-commit/race-ben-submit.json",
+                      "bytes":  470,
+                      "sha256":  "1501210e03b30fe4b9cd33fe7562b908b8a7062e9c2d9ae681813b6fe3c3a2ad"
+                  },
+                  {
+                      "path":  "response-lost-commit/race-outcome.json",
+                      "bytes":  8122,
+                      "sha256":  "bd2ccb8d0b00e9225e66d192461101d841d09d26b8f81bd2967752e306960303"
+                  },
+                  {
+                      "path":  "response-lost-commit/same-invoice-rebuild.json",
+                      "bytes":  13905,
+                      "sha256":  "507717b5c37c56ca575ed0ea36a97b79ac49af41574c2831bf3bb7d396cf3bf1"
+                  },
+                  {
+                      "path":  "response-lost-commit/same-invoice-rebuild-submit.json",
+                      "bytes":  315,
+                      "sha256":  "bd5aa0cbad582f5cd5e40c001c8ae272564cf6c18e0bb43ef1e31126b1d6466f"
+                  },
+                  {
+                      "path":  "response-lost-rejected/environment.json",
+                      "bytes":  796,
+                      "sha256":  "c4405f1c79fb60c319d5d000494fbaabbbfe5b6c6703b79ee65505a5a1d71556"
+                  },
+                  {
+                      "path":  "response-lost-rejected/intent-reservation.json",
+                      "bytes":  204,
+                      "sha256":  "66178a99fe1354204b8af5cd6a21486f06b56050a2bfba534c44f15948ea4b44"
+                  },
+                  {
+                      "path":  "response-lost-rejected/lost-rpc-response.json",
+                      "bytes":  410,
+                      "sha256":  "cd9c6549070dd4ea92c07d592961e87cc5f4ca6f46008773dba2c5c71c868de5"
+                  },
+                  {
+                      "path":  "response-lost-rejected/race-alice.json",
+                      "bytes":  13895,
+                      "sha256":  "53d8e2b7cc9eff4a761bce32b3bda87caafe4de485712d33184001558d9eab3f"
+                  },
+                  {
+                      "path":  "response-lost-rejected/race-alice-reconciled.json",
+                      "bytes":  2083,
+                      "sha256":  "8cc1486920d4cd75fb10b56297b3d08e9053c4086c6abac370d65379094e77db"
+                  },
+                  {
+                      "path":  "response-lost-rejected/race-alice-stale-resubmit.json",
+                      "bytes":  530,
+                      "sha256":  "5812b656dfe19da133a207f6b52d612dffc0d7feb3903d9afcc4cd606da6f414"
+                  },
+                  {
+                      "path":  "response-lost-rejected/race-ben.json",
+                      "bytes":  13891,
+                      "sha256":  "847b7c750f3a84c9bc8a0f3879aeb080586b9453b3743db49f80dce6a5a5e7f0"
+                  },
+                  {
+                      "path":  "response-lost-rejected/race-ben-reconciled.json",
+                      "bytes":  6615,
+                      "sha256":  "6790729a5103fc76fd62d2201d75ed264a92461c11f7d268c365c64f08b75a6a"
+                  },
+                  {
+                      "path":  "response-lost-rejected/race-ben-submit.json",
+                      "bytes":  302,
+                      "sha256":  "6c9edcc6bbbb16b4538184e1b2791253efd4c5de77d1c9e609eae22b6a395b1b"
+                  },
+                  {
+                      "path":  "response-lost-rejected/race-outcome.json",
+                      "bytes":  7932,
+                      "sha256":  "fad0715733dd390faa3c560a52a186d2cbd94ebfab3f60fe7f5211d6bf3c3618"
+                  }
+              ]
+}

@@ -1,0 +1,8 @@
+{
+  "invoice": "recovery-invoice-1",
+  "independentProcessExitCodes": [
+    3,
+    0
+  ],
+  "meaning": "One durable SQLite reservation succeeded; the other process was refused before building."
+}

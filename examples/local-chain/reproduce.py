@@ -1,6 +1,7 @@
 """WO-07 disposable Windows dev chain. Never connects to a public CKB node."""
 from pathlib import Path
-import argparse, datetime, hashlib, json, os, re, shutil, socket, subprocess
+import argparse, datetime, hashlib, json, os, re, shutil, socket, subprocess, threading, urllib.error, urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import time, urllib.request, zipfile
 
 HERE=Path(__file__).resolve().parent
@@ -22,8 +23,32 @@ def rpc(url,method,params=None):
     r=json.load(urllib.request.urlopen(req,timeout=15))
     if 'error' in r: raise RuntimeError(r['error'])
     return r['result']
+def lost_response_proxy(target_url,target_transaction):
+    target=json.dumps(target_transaction,sort_keys=True,separators=(',',':'))
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version='HTTP/1.1'
+        def do_POST(self):
+            body=self.rfile.read(int(self.headers.get('Content-Length','0')))
+            request=json.loads(body)
+            upstream=urllib.request.Request(target_url,body,{'Content-Type':'application/json'})
+            try:
+                with urllib.request.urlopen(upstream,timeout=20) as response: result=response.read()
+            except Exception as error:
+                result=json.dumps({'jsonrpc':'2.0','id':request.get('id'),'error':{'code':-32000,'message':str(error)}}).encode()
+            matching=(request.get('method')=='send_transaction' and json.dumps(request.get('params',[{}])[0],sort_keys=True,separators=(',',':'))==target)
+            if matching:
+                self.server.lost.append({'method':'send_transaction','action':'forwarded to CKB, RPC response intentionally dropped'})
+                self.close_connection=True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                self.connection.close()
+                return
+            self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(result)));self.end_headers();self.wfile.write(result)
+        def log_message(self,*_): pass
+    server=ThreadingHTTPServer(('127.0.0.1',0),Handler);server.lost=[]
+    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    return server,thread,f'http://127.0.0.1:{server.server_port}'
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--ckb',type=Path);ap.add_argument('--run-dir',type=Path)
+    ap=argparse.ArgumentParser();ap.add_argument('--ckb',type=Path);ap.add_argument('--run-dir',type=Path);ap.add_argument('--scenario',choices=['historical','race'],default='historical')
     opts=ap.parse_args();assert os.name=='nt','Only this Windows reproduction path has been qualified'
     started=datetime.datetime.now(datetime.timezone.utc).isoformat()
     cache=Path(os.environ['TEMP'])/'quotacell-wo07-tools';cache.mkdir(exist_ok=True)
@@ -105,6 +130,81 @@ type.args = "0x59297894bff4b8f7e1427bf4943b467ba168565d25fe75de207c146debaec14b"
         # Disable network activity in addition to loopback binding/no bootnodes.
         rpc(endpoint,'set_network_active',[False])
         command(['node',HERE/'proof.mjs','setup',run])
+        if opts.scenario=='race':
+            builders=[]
+            for role,quantity,name in [('alice','20','race-alice'),('ben','20','race-ben')]:
+                builders.append(subprocess.Popen(['node',str(HERE/'proof.mjs'),'race-build',str(run),role,quantity,name],cwd=HERE,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True))
+            for p in builders:
+                out,_=p.communicate(timeout=120);log.write(out);log.flush();print(out,flush=True)
+                if p.returncode: raise RuntimeError('Independent race builder failed')
+            signed=[json.loads((run/(name+'-signed.json')).read_text()) for name in ['race-alice','race-ben']]
+            assert signed[0]['transaction']['inputs'][0]['previous_output']==signed[1]['transaction']['inputs'][0]['previous_output']
+            assert signed[0]['transaction']['inputs'][2]['previous_output']==signed[1]['transaction']['inputs'][2]['previous_output']
+            journal=run/'payment-intents.sqlite'
+            for invoice in ['race-invoice-alice','race-invoice-ben']:
+                command(['python',HERE/'payment_intents.py',journal,'reserve',invoice])
+            for invoice,name in [('race-invoice-alice','race-alice'),('race-invoice-ben','race-ben')]:
+                command(['python',HERE/'payment_intents.py',journal,'record',invoice,run/(name+'-signed.json')])
+            # A competing process cannot reserve the same invoice after recovery.
+            dup=[subprocess.Popen(['python',str(HERE/'payment_intents.py'),str(journal),'reserve','recovery-invoice-1'],cwd=HERE,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True) for _ in range(2)]
+            dup_results=[]
+            for p in dup:
+                out,_=p.communicate(timeout=30);dup_results.append(p.returncode);log.write(out);log.flush();print(out,flush=True)
+            assert sorted(dup_results)==[0,3],f'Expected one invoice reservation winner: {dup_results}'
+            write(evidence/'intent-reservation.json',{'invoice':'recovery-invoice-1','independentProcessExitCodes':dup_results,'meaning':'One durable SQLite reservation succeeded; the other process was refused before building.'})
+            with (run/'runtime.json').open() as f: runtime=json.load(f)
+            proxy,proxy_thread,proxy_url=lost_response_proxy(endpoint,signed[0]['transaction'])
+            runtime['url']=proxy_url;write(run/'runtime.json',runtime)
+            submitters=[subprocess.Popen(['node',str(HERE/'proof.mjs'),'race-submit',str(run),name,'on-rpc-error' if name=='race-alice' else 'no'],cwd=HERE,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True) for name in ['race-alice','race-ben']]
+            time.sleep(.5);(run/'race-release').write_text('release\n')
+            submit_codes=[]
+            for p in submitters:
+                out,_=p.communicate(timeout=60);log.write(out);log.flush();print(out,flush=True)
+                submit_codes.append(p.returncode)
+            proxy.shutdown();proxy.server_close();proxy_thread.join(timeout=5)
+            runtime['url']=endpoint;write(run/'runtime.json',runtime)
+            assert submit_codes[0]==74 and submit_codes[1]==0, f'Expected dropped Alice response/process death and normal Ben receipt: {submit_codes}'
+            write(evidence/'lost-rpc-response.json',{'transactionHash':signed[0]['hash'],'proxy':proxy.lost,'builderExitCode':submit_codes[0],'receiptPersisted':(run/'evidence'/'race-alice-submit.json').exists(),'recovery':'Fresh process queries exact pinned hash and all original input outpoints; no automatic rebuild.'})
+            generated=[]
+            for _ in range(20):
+                generated.append(rpc(endpoint,'generate_block'))
+                statuses=[rpc(endpoint,'get_transaction',[item['hash']]) for item in signed]
+                if any(t and t.get('tx_status',{}).get('status')=='committed' for t in statuses): break
+            final={name:rpc(endpoint,'get_transaction',[item['hash']]) for name,item in zip(['race-alice','race-ben'],signed)}
+            loser='race-ben' if final['race-alice']['tx_status']['status']=='committed' else 'race-alice'
+            command(['node',HERE/'proof.mjs','race-stale-resubmit',run,loser])
+            for name in ['race-alice','race-ben']:
+                command(['node',HERE/'proof.mjs','race-reconcile',run,name])
+            for invoice in ['race-invoice-alice','race-invoice-ben']:
+                command(['python',HERE/'payment_intents.py',journal,'reconcile',invoice,endpoint])
+            state=rpc(endpoint,'get_live_cell',[{'tx_hash':signed[0]['transaction']['inputs'][0]['previous_output']['tx_hash'],'index':signed[0]['transaction']['inputs'][0]['previous_output']['index']},True])
+            winner='race-alice' if final['race-alice']['tx_status']['status']=='committed' else 'race-ben'
+            winner_signed=next(item for name,item in zip(['race-alice','race-ben'],signed) if name==winner)
+            winner_role='alice' if winner.endswith('alice') else 'ben'
+            invoice='race-invoice-'+winner_role
+            duplicate=subprocess.run(['python',HERE/'payment_intents.py',journal,'reserve',invoice],cwd=HERE,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+            assert duplicate.returncode==3,'Committed invoice was not durably reserved'
+            log.write(duplicate.stdout);log.flush();print(duplicate.stdout,flush=True)
+            context=json.loads((run/'context.json').read_text());context['policy']={'txHash':winner_signed['hash'],'index':0};context['fund']={'txHash':winner_signed['hash'],'index':1};context['seeds'][winner_role]={'txHash':winner_signed['hash'],'index':3};write(run/'context.json',context)
+            command(['node',HERE/'proof.mjs','race-build',run,winner_role,'20','same-invoice-rebuild'])
+            replay=json.loads((run/'same-invoice-rebuild-signed.json').read_text())
+            command(['node',HERE/'proof.mjs','race-submit',run,'same-invoice-rebuild'])
+            replay_status=None
+            for _ in range(20):
+                rpc(endpoint,'generate_block');replay_status=rpc(endpoint,'get_transaction',[replay['hash']])
+                if replay_status and replay_status['tx_status']['status']=='committed':break
+            assert replay_status and replay_status['tx_status']['status']=='committed','Intent-bypassing duplicate control did not commit'
+            first_recipient=winner_signed['transaction']['outputs'][2]['lock']
+            replay_recipient=replay['transaction']['outputs'][2]['lock']
+            assert first_recipient==replay_recipient
+            write(evidence/'invoice-replay-control.json',{'invoiceId':invoice,'firstPaymentHash':winner_signed['hash'],'recoveredState':'committed; durable journal refused reservation with exit 3','secondFreshTransactionHash':replay['hash'],'secondStatus':replay_status['tx_status']['status'],'sameRecipient':first_recipient,'meaning':'Q accepted a second payment to the same recipient from refreshed state when the local idempotency journal was deliberately bypassed. Invoice identifiers are not committed to the current ABI.'})
+            responses={}
+            for name in ['race-alice','race-ben']:
+                receipt=run/'evidence'/(name+'-submit.json')
+                responses[name]=(json.loads(receipt.read_text()) if receipt.exists() else {'txHash':next(x['hash'] for n,x in zip(['race-alice','race-ben'],signed) if n==name),'rpcResponse':'intentionally dropped by local proxy','receiptPersisted':False})
+            write(evidence/'race-outcome.json',{'scenario':'two independent builders from identical policy and fund outpoints','transactions':{name:item['hash'] for name,item in zip(['race-alice','race-ben'],signed)},'submitResponses':responses,'transactionStatus':final,'generatedBlocks':generated,'predecessorPolicyLiveCell':state,'policyOutpoint':signed[0]['transaction']['inputs'][0]['previous_output'],'winner':winner,'conclusion':'Only node-reported statuses are claimed; invoice identity is not present in the ABI.'})
+            write(evidence/'verdict.json',{'verdict':'RACE_RECORDED','startedUTC':started,'finishedUTC':datetime.datetime.now(datetime.timezone.utc).isoformat()})
+            return
         command(['node',HERE/'proof.mjs','spend',run,'alice','60','accept','04-alice60'])
         write(evidence/'gate1.json',{'passed':True,'meaning':'Unchanged Q and exact dependencies on dev node; CCC-built and K-signed Alice60 committed'})
         command(['node',HERE/'proof.mjs','spend',run,'ben','50','shared-reject','05-ben50-rejected'])

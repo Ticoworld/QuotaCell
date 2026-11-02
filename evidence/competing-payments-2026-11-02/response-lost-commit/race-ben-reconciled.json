@@ -1,0 +1,64 @@
+{
+  "name": "race-ben",
+  "processId": 17036,
+  "txHash": "0xd86e1a32966b33a7a1fde991d8e81d4f0cc8504ae8cbb9ac2af3e7c77ddb4701",
+  "transaction": {
+    "cycles": null,
+    "fee": null,
+    "min_replace_fee": null,
+    "time_added_to_pool": null,
+    "transaction": null,
+    "tx_status": {
+      "block_hash": null,
+      "block_number": null,
+      "reason": "{\"type\":\"RBFRejected\",\"description\":\"RBF rejected: Tx's current fee is 2000, expect it to >= 4536 to replace old txs\"}",
+      "status": "rejected",
+      "tx_index": null
+    }
+  },
+  "inputs": [
+    {
+      "block_hash": null,
+      "cell": null,
+      "status": "unknown"
+    },
+    {
+      "block_hash": "0xd1aac58a727b389ed2bb65b878c8900128be2f4e304f98be83892c16ada0433d",
+      "cell": {
+        "data": {
+          "content": "0x",
+          "hash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "output": {
+          "capacity": "0x174876e800",
+          "lock": {
+            "args": "0xa872cea72e25810b45a05c8778b377a77cef8ceb",
+            "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hash_type": "type"
+          },
+          "type": null
+        }
+      },
+      "status": "live"
+    },
+    {
+      "block_hash": null,
+      "cell": null,
+      "status": "unknown"
+    }
+  ],
+  "tip": {
+    "compact_target": "0x20010000",
+    "dao": "0x2eaef2cf8510020053141606c3bb2b00be8378490737000000e8bcbe7a710000",
+    "epoch": "0xa0003000001",
+    "extra_hash": "0xca3950c3ca3505bd30c9b8c0576623cae0e339931362d75d5116dfda7ea1fa31",
+    "hash": "0xd259cad7428d9bb8bb662ffdb677f9ba0d04b5067e7d388cce7fa0c262b2a986",
+    "nonce": "0x0",
+    "number": "0xd",
+    "parent_hash": "0x20ea676b7c58ce599631dac2b497ae2397bc198c87071e0254e9c507c96dfc9f",
+    "proposals_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "timestamp": "0x1a19bb5d97c",
+    "transactions_root": "0x4a3a988cc99374260352525c9de097a8046c76825ba350a56816c807b3bfd351",
+    "version": "0x0"
+  }
+}

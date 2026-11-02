@@ -1,0 +1,12 @@
+{
+  "name": "race-ben",
+  "processId": 27432,
+  "txHash": "0xd86e1a32966b33a7a1fde991d8e81d4f0cc8504ae8cbb9ac2af3e7c77ddb4701",
+  "startedUTC": "2026-11-02T10:02:28.054Z",
+  "rpcError": {
+    "code": -1111,
+    "message": "PoolRejectedRBF: RBF rejected: Tx's current fee is 2000, expect it to >= 4536 to replace old txs",
+    "data": "RBFRejected(\"Tx's current fee is 2000, expect it to >= 4536 to replace old txs\")"
+  },
+  "finishedUTC": "2026-11-02T10:02:28.127Z"
+}

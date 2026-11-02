@@ -1,0 +1,12 @@
+{
+  "transactionHash": "0xcf128d897ae97af184c6778c183ee4923fe95b01a6f8cacbc04a60f216a25551",
+  "proxy": [
+    {
+      "method": "send_transaction",
+      "action": "forwarded to CKB, RPC response intentionally dropped"
+    }
+  ],
+  "builderExitCode": 74,
+  "receiptPersisted": false,
+  "recovery": "Fresh process queries exact pinned hash and all original input outpoints; no automatic rebuild."
+}

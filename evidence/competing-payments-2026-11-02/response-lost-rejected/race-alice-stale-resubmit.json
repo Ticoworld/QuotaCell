@@ -1,0 +1,12 @@
+{
+  "name": "race-alice",
+  "processId": 22464,
+  "txHash": "0x3b669d873c94ccb8dacaac72aa607f0ac41f349e183bfb598b1decb48968fd7d",
+  "attemptedUTC": "2026-11-02T10:07:17.786Z",
+  "error": {
+    "code": -301,
+    "message": "TransactionFailedToResolve: Resolve failed Unknown(OutPoint(0xb103746a63e1c29d5a7ee5215ab519028b522f216e9cd60531e4cd08e70ede1200000000))",
+    "data": "Resolve(Unknown(OutPoint(0xb103746a63e1c29d5a7ee5215ab519028b522f216e9cd60531e4cd08e70ede1200000000)))"
+  },
+  "finishedUTC": "2026-11-02T10:07:17.811Z"
+}
