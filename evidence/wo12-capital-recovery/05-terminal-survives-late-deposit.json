@@ -1,0 +1,57 @@
+{
+  "terminalPolicy": {
+    "block_hash": "0xdd056a94e5bce4a9d514d2183633bfc87be7f31875fe54e4f56b11c06aa68e68",
+    "cell": {
+      "data": {
+        "content": "0x51435432020001003aca79af2b92e6d07194a9544b4d55960fd9be1e",
+        "hash": "0xc10968cd81a2360a2d16310da920c232bd7fc3472e79ce42cf588dfc84ef47a8"
+      },
+      "output": {
+        "capacity": "0x31eb3c600",
+        "lock": {
+          "args": "0x",
+          "code_hash": "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1",
+          "hash_type": "data1"
+        },
+        "type": {
+          "args": "0xe0589c64c3c363bf121ff80ba0cf660a56392a3caf3dafaa8f1a731b4ae26546",
+          "code_hash": "0xc224bed30f3b40e9a1c14640ea503d95aab00700364d1237e5e16bc8cda5e04f",
+          "hash_type": "data2"
+        }
+      }
+    },
+    "status": "live",
+    "outPoint": {
+      "txHash": "0x2cc29de92a37c02015e7205395731cb811a5f97e87ba14dbe30fe46082b3d6ad",
+      "index": 0
+    }
+  },
+  "lateFund": {
+    "block_hash": "0x07ca6649d2442d50e6da6877a5672af055d6bc6ac64686881f8d12ddaa98da7b",
+    "cell": {
+      "data": {
+        "content": "0x32000000000000000000000000000000",
+        "hash": "0x3aa4ff8ef44da77dc9e175070195618048f6cca5713df79c5d9cd1898795ee09"
+      },
+      "output": {
+        "capacity": "0x395e95a00",
+        "lock": {
+          "args": "0x21a2342e424d734f2b10e5daff05c0ebe5c6ca5eda179d3f1ed9ea356130a1f4",
+          "code_hash": "0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a",
+          "hash_type": "data1"
+        },
+        "type": {
+          "args": "0x59297894bff4b8f7e1427bf4943b467ba168565d25fe75de207c146debaec14b",
+          "code_hash": "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95",
+          "hash_type": "data1"
+        }
+      }
+    },
+    "status": "live",
+    "outPoint": {
+      "txHash": "0x8f07ae9dfb423dc72cde44e58ae34913ba99b4a734e686eff4132be211646846",
+      "index": 0
+    }
+  },
+  "lateTokenAmount": 50
+}

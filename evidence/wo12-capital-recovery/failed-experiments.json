@@ -1,0 +1,26 @@
+{
+  "attempts": [
+    {
+      "attempt": "Initial harness lifecycle",
+      "result": "Stopped before transaction construction",
+      "cause": "The harness retained an owner fee-cell outpoint that the funding transaction had already consumed.",
+      "correction": "Use the funding transaction's live owner-change output as the fee cell.",
+      "contractFinding": false
+    },
+    {
+      "attempt": "Compact close followed by late-deposit sweep",
+      "transactionRecord": "failed-closed-sweep-error13.json",
+      "txHash": "0x0cd28634ac75867d9497046fd78966e42e38e2d8d9e6e53c752f9972106a2df2",
+      "closeTxHash": "0xafe8265a4b7695ed73c31de63733a7b89459da76644292999f49742dfef8053d",
+      "nodeResponse": {
+        "code": -302,
+        "scriptSource": "Inputs[0].Type",
+        "qDataHash": "0x4b489cc79c3d486d08a39cada890e69cf71128cf19fb372025476453ac812552",
+        "validationCode": 13
+      },
+      "cause": "The terminal sweep validated an optional owner change output by deriving the K lock from a missing full public key. The compact state intentionally retains only the 20-byte K args.",
+      "correction": "For terminal-state recovery, validate the canonical K template and exact stored lock args directly. The selected successful retry uses the same layout and passes on a fresh node.",
+      "contractFinding": "A terminal-sweep output-layout check defect in the experimental implementation; corrected before the selected passing run."
+    }
+  ]
+}

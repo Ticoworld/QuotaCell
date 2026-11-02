@@ -1,0 +1,45 @@
+{
+  "node": {
+    "version": "0.210.0",
+    "binarySha256": "77ff953e9dc3a03b36e38a3cab2b9b06f17be8254a15a23afa826c2d4aea98b0",
+    "releaseArchiveSha256": "a4f7300e5ed1753ab38fc9a9c234a3134589dc18ea66716acdd2b1d0474c7b83",
+    "normalVerification": true,
+    "loopbackOnly": true,
+    "networkDisabled": true
+  },
+  "policyV2": {
+    "source": "policy/c/allowance_v2.c",
+    "sourceSha256": "d1bf55afdc173acb7fd5c0b0f1ff6c520cbb5f869fc09a2b9d6e9b4db5b4dfe3",
+    "profileSha256": "62a527839eac0bd0a8379f60adfe8cc9be295f8ed79b84d42f9ce2993b66350d",
+    "binaryBytes": 24328,
+    "binarySha256": "52981d27e8b8bb967ca8c68bb6416bebdb7df03ba1d634a9fbaee731eef71af3",
+    "ckbDataHash": "0xc224bed30f3b40e9a1c14640ea503d95aab00700364d1237e5e16bc8cda5e04f"
+  },
+  "reproductionSources": {
+    "policy/build_q_v2.py": "4500b454ba2a873bff558a7565fea6e92037296debf52637b508431568057174",
+    "examples/local-chain/wo12-proof.mjs": "1119c3d77a9f763654ded533f5cbc0faed94827a8fd0869ff10c8b011a3c0b33",
+    "examples/local-chain/wo12_reproduce.py": "fb6882567f8b484fc68075c0952fba19fd7b954cdf8174b06a5a753bd027c0e9"
+  },
+  "selectedEvidenceSha256": {
+    "01-authorized-v2-payment.json": "d83240bcecebdc4af8d0b5baed2e6c6ac873e092d79d88fb9820ebd10052500f",
+    "01-authorized-v2-state.json": "9b64466ac1f3bf33b2c26d08882a5186de249c6f0d48f41128493d9bc3881607",
+    "01-reject-v2-over-limit-payment.json": "c64e17c4dd29bbaac8d8e5bd4424be97383945baebea7ffd233571ea17a79254",
+    "02-owner-close-compact.json": "7a18c58cefef11023711134d3ad36479812ce8aa77c108275c97b572220a7741",
+    "02-reject-forged-terminal-from-active.json": "26b9de4d204884294bf6613da08efc7c92b4f18316c91056348afb7656842c67",
+    "02-reject-wrong-terminal-owner.json": "cd0a435bae0ff6fe7a07ee8a1b49751298745a45a97b6cf2bf8d1a3e186976b0",
+    "03-compact-closed-live.json": "01018e5b0c416ebffcc259dfb4de7ce7ed66eaf77d9177afbfa16e343456623e",
+    "03-reject-reenable-after-close.json": "9db4846c56ad3162e17286f7cb292897aaeed90bd7c6cf37639b5a742a4c197f",
+    "04-late-deposit-after-close.json": "cbd50fee5f0cc1ed7dae006524c7142fcd12c771b79b0e4b52487dc7fbfe8ffd",
+    "05-terminal-survives-late-deposit.json": "7e54b272f1e7c55a2d360e8c2902994827439a05ed58af251aa258f6a1864f16",
+    "06-reject-delegate-after-close.json": "5c994dcf14fad5c8a9dd88ee572d7ae8a8031105fd3e037d0e39315a558f95ca",
+    "07-owner-sweeps-late-deposit.json": "f8fc134aa785342b3fcc6636ab3beb8cf3d48bf9466d9b7b761f3cd0bb4ebda6",
+    "08-final-capital-state.json": "324ac9811068de06dbb3b6704db297579723248c9d97c161c690b0be3192be2f",
+    "09-reject-terminal-deletion.json": "706a80285ddd609661e72c22a49afcd9a6ca3c9a5ecaf6bd035a7a55c33eb581",
+    "failed-closed-sweep-error13.json": "7f601e493a44046eec33a74385bd3e5fa89aa31843c4c4052e87376a4bf8eb01",
+    "failed-experiments.json": "d9c924f1ccf22dfe8a24d431d53ae0497b5e57cbaee7f0512f53e27172e1de68",
+    "environment.json": "1f45cac450e1951f671c92a9cc8f609772e4802e43ae090eadcbd373993bbd95",
+    "node-profile.json": "0ae43900c44f5c2e80c10b25ec5796b1ded4348f597987cdd0fc13a14f9a6c81",
+    "verdict.json": "1aed82d6c342e3bd9995dced44b9fb6de1ab376ec6b18200d33b574ff8f65165"
+  },
+  "claims": "Synthetic isolated-node evidence only. No audit, reorg resistance, public deployment, real asset, or production qualification."
+}
