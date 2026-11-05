@@ -1,0 +1,35 @@
+{
+  "policy": {
+    "block_hash": "0xe3def815d856bc7a26210add645f6168bc0e72cddf088993a81516b22ffefd4d",
+    "cell": {
+      "data": {
+        "content": "0x5143543404000100afbb6ba7081d601f801cfd9c902ef8eb143c2da2",
+        "hash": "0xbb6891953ce7e9c2ae0043d490d7cd8a5f7526013ff72d42b8acbcd18ae8e1c0"
+      },
+      "output": {
+        "capacity": "0x31eb3c600",
+        "lock": {
+          "args": "0x",
+          "code_hash": "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1",
+          "hash_type": "data1"
+        },
+        "type": {
+          "args": "0x6ebcc49d5a575553d99061359dcff320d8c8cedcc0349df4fa2a966e09d42b7a",
+          "code_hash": "0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e",
+          "hash_type": "data2"
+        }
+      }
+    },
+    "status": "live",
+    "outPoint": {
+      "txHash": "0x5c3fbb8022040af5368bf95b5dba4ec9f5fddb165a564cfb6c91f4d012fff104",
+      "index": 0
+    }
+  },
+  "initialFundCKB": 1200,
+  "paidCKB": 200,
+  "recoveredFundCKB": 1000,
+  "lateRecoveredCKB": 200,
+  "policyReleasedCKB": 466,
+  "terminalCKB": 134
+}

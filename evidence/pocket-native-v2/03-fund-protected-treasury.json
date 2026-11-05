@@ -1,0 +1,215 @@
+{
+  "name": "03-fund-protected-treasury",
+  "txHash": "0xd15972564fcfffc5459a1c768fcfd6db894f45f05a311c671ee94427a4c05391",
+  "transaction": {
+    "version": "0x0",
+    "cell_deps": [
+      {
+        "out_point": {
+          "tx_hash": "0x72d903b13821afca80416d869bfced0729773f8f6734784cef47d8b919b1e5b7",
+          "index": "0x0"
+        },
+        "dep_type": "dep_group"
+      }
+    ],
+    "header_deps": [],
+    "inputs": [
+      {
+        "since": "0x0",
+        "previous_output": {
+          "tx_hash": "0x800302e6fbddd35edf618b61746781a3aa010884e2a9091cdf7efe1bc09d42e3",
+          "index": "0x1"
+        }
+      }
+    ],
+    "outputs": [
+      {
+        "capacity": "0x174876e800",
+        "lock": {
+          "code_hash": "0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a",
+          "hash_type": "data1",
+          "args": "0x2b977a6dd1e5e3e67adac49bbd1599e41f7da9c5d62b38590bc055d6741cadd8"
+        },
+        "type": null
+      },
+      {
+        "capacity": "0x560abbc33c20",
+        "lock": {
+          "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+          "hash_type": "type",
+          "args": "0xafbb6ba7081d601f801cfd9c902ef8eb143c2da2"
+        },
+        "type": null
+      }
+    ],
+    "outputs_data": [
+      "0x",
+      "0x"
+    ],
+    "witnesses": [
+      "0x55000000100000005500000055000000410000005b8689316591de9dfb3800abca3a3b753adebe2f518e08c0336084fedae26ed454bf8bad53da49705f070494bde57ca1d368d5384607c25a1ccb5a58e244042000"
+    ]
+  },
+  "serialized": "0xd80100000c000000770100006b0100001c00000020000000490000004d0000007d00000057010000000000000100000072d903b13821afca80416d869bfced0729773f8f6734784cef47d8b919b1e5b7000000000100000000010000000000000000000000800302e6fbddd35edf618b61746781a3aa010884e2a9091cdf7efe1bc09d42e301000000da0000000c000000790000006d00000010000000180000006d00000000e8764817000000550000001000000030000000310000005123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a02200000002b977a6dd1e5e3e67adac49bbd1599e41f7da9c5d62b38590bc055d6741cadd861000000100000001800000061000000203cc3bb0a560000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce80114000000afbb6ba7081d601f801cfd9c902ef8eb143c2da2140000000c00000010000000000000000000000061000000080000005500000055000000100000005500000055000000410000005b8689316591de9dfb3800abca3a3b753adebe2f518e08c0336084fedae26ed454bf8bad53da49705f070494bde57ca1d368d5384607c25a1ccb5a58e244042000",
+  "bytes": 472,
+  "feeShannon": "2000",
+  "outputs": [
+    {
+      "index": 0,
+      "capacityShannon": "100000000000",
+      "occupiedShannon": "7300000000"
+    },
+    {
+      "index": 1,
+      "capacityShannon": "94604099796000",
+      "occupiedShannon": "6100000000"
+    }
+  ],
+  "resolvedInputs": [
+    {
+      "block_hash": "0x4cf1ee3c31c108ceb26cfd089dfbfa3b3f2fbd87c91786da1874f74ab24f8877",
+      "cell": {
+        "data": {
+          "content": "0x",
+          "hash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "output": {
+          "capacity": "0x5622043a2bf0",
+          "lock": {
+            "args": "0xafbb6ba7081d601f801cfd9c902ef8eb143c2da2",
+            "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hash_type": "type"
+          },
+          "type": null
+        }
+      },
+      "status": "live",
+      "outPoint": {
+        "txHash": "0x800302e6fbddd35edf618b61746781a3aa010884e2a9091cdf7efe1bc09d42e3",
+        "index": "1"
+      }
+    }
+  ],
+  "signing": {
+    "role": "owner",
+    "position": 0,
+    "publicKey": "0x034c0b51e7379071f575a35e56fedec4d149f31bea5f7764937e2fb75c5d9c16ae",
+    "actorLock": {
+      "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+      "hash_type": "type",
+      "args": "0xafbb6ba7081d601f801cfd9c902ef8eb143c2da2"
+    },
+    "message": "0x53a3a9913c0e8768fa24df34f675f3c8e2475c28846d7b76fa2108357ea34b2c",
+    "digestPreimage": "0xd15972564fcfffc5459a1c768fcfd6db894f45f05a311c671ee94427a4c05391550000000000000055000000100000005500000055000000410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "signedWitnessIndexes": [
+      0
+    ],
+    "signature": "0x5b8689316591de9dfb3800abca3a3b753adebe2f518e08c0336084fedae26ed454bf8bad53da49705f070494bde57ca1d368d5384607c25a1ccb5a58e244042000",
+    "signatureVerified": true,
+    "recoveredPublicKey": "0x034c0b51e7379071f575a35e56fedec4d149f31bea5f7764937e2fb75c5d9c16ae",
+    "actionPreserved": true,
+    "onlyLockFieldChanged": true,
+    "placeholderWitness": "0x55000000100000005500000055000000410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "dryRun": {
+    "cycles": "0x1900c7"
+  },
+  "submit": {
+    "method": "send_transaction",
+    "outputsValidator": "passthrough",
+    "result": "0xd15972564fcfffc5459a1c768fcfd6db894f45f05a311c671ee94427a4c05391"
+  },
+  "generatedBlocks": [
+    "0x7353b6e622d63dbbba6166fd11f8e50abff13acaf765222d11388e89894b5718",
+    "0x1aa367759efac24cdffcf8bd6da946c77fd61877c8a5687341a1cff4842a11d7",
+    "0x5ffcf76dc08eb471d93c2e84ffb9030118166ce65dde847680803dd54f215d25",
+    "0x5fa0aa239cd100fb3314350f7d2b1c0ac9a352fcf4b14610102a24246aecb7ea"
+  ],
+  "inclusion": {
+    "status": {
+      "block_hash": "0x5fa0aa239cd100fb3314350f7d2b1c0ac9a352fcf4b14610102a24246aecb7ea",
+      "block_number": "0xc",
+      "reason": null,
+      "status": "committed",
+      "tx_index": "0x1"
+    },
+    "header": {
+      "compact_target": "0x20010000",
+      "dao": "0xcf7048b07ff9010078fa63e97d412b00c010879e08330000002d2f23856e0000",
+      "epoch": "0xa0002000001",
+      "extra_hash": "0x64ca05fc53f5cdb4f44cb40806a8dbdd708efced93eff5757d31dbeced3a95dd",
+      "hash": "0x5fa0aa239cd100fb3314350f7d2b1c0ac9a352fcf4b14610102a24246aecb7ea",
+      "nonce": "0x0",
+      "number": "0xc",
+      "parent_hash": "0x5ffcf76dc08eb471d93c2e84ffb9030118166ce65dde847680803dd54f215d25",
+      "proposals_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "timestamp": "0x1a1ab1059ed",
+      "transactions_root": "0x6437fbbd47a185868c8b1e6aa0fb134a49b5435f7e4d8f2ca1f521a9266e727e",
+      "version": "0x0"
+    },
+    "transactionIndex": 1
+  },
+  "nodeTransaction": {
+    "cycles": "0x1900c7",
+    "fee": null,
+    "min_replace_fee": null,
+    "time_added_to_pool": null,
+    "transaction": {
+      "cell_deps": [
+        {
+          "dep_type": "dep_group",
+          "out_point": {
+            "index": "0x0",
+            "tx_hash": "0x72d903b13821afca80416d869bfced0729773f8f6734784cef47d8b919b1e5b7"
+          }
+        }
+      ],
+      "hash": "0xd15972564fcfffc5459a1c768fcfd6db894f45f05a311c671ee94427a4c05391",
+      "header_deps": [],
+      "inputs": [
+        {
+          "previous_output": {
+            "index": "0x1",
+            "tx_hash": "0x800302e6fbddd35edf618b61746781a3aa010884e2a9091cdf7efe1bc09d42e3"
+          },
+          "since": "0x0"
+        }
+      ],
+      "outputs": [
+        {
+          "capacity": "0x174876e800",
+          "lock": {
+            "args": "0x2b977a6dd1e5e3e67adac49bbd1599e41f7da9c5d62b38590bc055d6741cadd8",
+            "code_hash": "0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a",
+            "hash_type": "data1"
+          },
+          "type": null
+        },
+        {
+          "capacity": "0x560abbc33c20",
+          "lock": {
+            "args": "0xafbb6ba7081d601f801cfd9c902ef8eb143c2da2",
+            "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hash_type": "type"
+          },
+          "type": null
+        }
+      ],
+      "outputs_data": [
+        "0x",
+        "0x"
+      ],
+      "version": "0x0",
+      "witnesses": [
+        "0x55000000100000005500000055000000410000005b8689316591de9dfb3800abca3a3b753adebe2f518e08c0336084fedae26ed454bf8bad53da49705f070494bde57ca1d368d5384607c25a1ccb5a58e244042000"
+      ]
+    },
+    "tx_status": {
+      "block_hash": "0x5fa0aa239cd100fb3314350f7d2b1c0ac9a352fcf4b14610102a24246aecb7ea",
+      "block_number": "0xc",
+      "reason": null,
+      "status": "committed",
+      "tx_index": "0x1"
+    }
+  }
+}
