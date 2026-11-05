@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
 import {buildGenesis} from './pocket_genesis.mjs';
 import {verifyWalletTransaction} from './pocket_signing.mjs';
+import {discoverPolicy} from './pocket_discovery.mjs';
 const here=path.dirname(fileURLToPath(import.meta.url)),run=process.argv[2];assert(run,'Specify a new disposable directory');
 const exe=process.argv[3]||path.join(process.env.TEMP,'quotacell-wo07-tools/ckb_v0.210.0_x86_64-pc-windows-msvc/ckb.exe');
 assert.equal(crypto.createHash('sha256').update(await fs.readFile(exe)).digest('hex'),'77ff953e9dc3a03b36e38a3cab2b9b06f17be8254a15a23afa826c2d4aea98b0');
@@ -52,5 +53,19 @@ try{
  const built=buildGenesis({ownerPublicKey:publicKey,delegates,sharedLimit:250n*CKB,ownerInput,deps});const prepared=c.Transaction.fromBytes(built.transaction.toBytes()),info=await prepared.getSignHashInfo(lock(publicKey),client);assert.equal(info.position,0);
  owner.stdin.write(JSON.stringify({transaction:prepared.toHex(),message:info.message})+'\n');const signed=c.Transaction.fromBytes(JSON.parse((await it.next()).value).transaction);verifyWalletTransaction({prepared,signed,message:info.message,publicKey,position:0});await live(ownerInput.outPoint);
  const result=await commit(signed),cell=await live(point(signed.hash(),0));assert.equal(cell.cell.output.type.args,built.typeId);assert.equal(cell.cell.output.type.code_hash,hashes[2]);assert.equal(cell.cell.data.content,prepared.outputsData[0]);const b=Buffer.from(cell.cell.data.content.slice(2),'hex');assert.equal('0x'+b.subarray(125,158).toString('hex'),publicKey);for(const [i,d] of delegates.entries()){const off=158+154*i;assert.equal('0x'+b.subarray(off,off+33).toString('hex'),d.publicKey);assert.equal(b.readBigUInt64LE(off+106),d.limit);assert.equal(b.readBigUInt64LE(off+138),d.perPayment)}assert.equal(b.readBigUInt64LE(8),250n*CKB);
- console.log(JSON.stringify({result:'PASS',genesisHash:genesis.header.hash,transaction:signed.hash(),block:result.tx_status.block_hash,typeId:built.typeId,owner:publicKey,policyCapacity:cell.cell.output.capacity},null,2));
+ const expected={ownerPublicKey:publicKey,sharedLimit:String(250n*CKB),delegates:delegates.map(d=>({publicKey:d.publicKey,recipient:{codeHash:d.recipient.codeHash,hashType:d.recipient.hashType,args:d.recipient.args},limit:String(d.limit),perPayment:String(d.perPayment)}))};
+ const policy={codeHash:built.policy.codeHash,hashType:built.policy.hashType,args:built.typeId};
+ const request=JSON.stringify({url,policy,expected})+'\n';
+ function fresh(){const x=spawnSync(process.execPath,[path.join(here,'wo14a_discovery_client.mjs')],{input:request,encoding:'utf8',timeout:30000,windowsHide:true});assert.equal(x.status,0,x.stderr||x.stdout);return JSON.parse(x.stdout).result;}
+ const first=fresh(),second=fresh();assert.deepEqual(second,first);assert.equal(second.outPoint.tx_hash,signed.hash());assert.equal(second.outPoint.index,'0x0');assert.equal(second.blockHash,result.tx_status.block_hash);
+ await assert.rejects(()=>discoverPolicy({rpc,policy:{...policy,args:'0x'+'00'.repeat(32)},expected}),/Policy not found/);
+ await assert.rejects(()=>discoverPolicy({rpc,policy:{...policy,codeHash:'0x'+'00'.repeat(32)},expected}),/Invalid QCN4 policy identity/);
+ await assert.rejects(()=>discoverPolicy({rpc,policy,expected:{...expected,sharedLimit:'1'}}),/Shared limit mismatch/);
+ const badRpc=async(method,params)=>{const x=await rpc(method,params);if(method==='get_live_cell'&&params[0].tx_hash===signed.hash()){x.cell.data.content='0x00';}return x;};
+ await assert.rejects(()=>discoverPolicy({rpc:badRpc,policy,expected}),/Live data differs/);
+ const malformedRpc=async(method,params)=>{const x=await rpc(method,params);if(method==='get_block_by_number'){const t=x.transactions.find(t=>t.hash===signed.hash());if(t)t.outputs_data[0]='0x00';}if(method==='get_live_cell'&&params[0].tx_hash===signed.hash())x.cell.data.content='0x00';return x;};
+ await assert.rejects(()=>discoverPolicy({rpc:malformedRpc,policy,expected}),/Malformed policy state/);
+ const duplicateRpc=async(method,params)=>{const x=await rpc(method,params);if(method==='get_block_by_number'&&x.transactions.some(t=>t.hash===signed.hash())){const t=x.transactions.find(t=>t.hash===signed.hash());x.transactions.push(structuredClone(t));}return x;};
+ await assert.rejects(()=>discoverPolicy({rpc:duplicateRpc,policy,expected}),/Ambiguous live policy/);
+ console.log(JSON.stringify({result:'PASS',genesisHash:genesis.header.hash,transaction:signed.hash(),block:result.tx_status.block_hash,typeId:built.typeId,discovery:second,negativeChecks:['missing','incorrect identity','wrong limits','malformed response','ambiguous']},null,2));
 }finally{owner.stdin.end();owner.kill();node.kill();}
