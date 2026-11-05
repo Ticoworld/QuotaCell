@@ -29,15 +29,20 @@ $('connectWallet').onclick=()=>{
 };
 $('disconnectWallet').onclick=()=>{generation++;connector?.disconnect();connector?.remove();connector=undefined;signer=undefined;walletName=undefined;status('No wallet connected.');};
 async function post(url,body){const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw Error(data.error);return data;}
-window.quotaWallet={pay:async()=>{
- $('pay').disabled=true;
- try{
-  const selected=signer,version=generation,a=await account();$('status').textContent='Preparing transaction for wallet approvalâ€¦';
-  const request=await post('/api/external/prepare',{id:crypto.randomUUID(),role:$('role').value,amount:$('amount').value,recipient:$('to').value.trim(),publicKey:a.publicKey});
-  if(selected!==signer||version!==generation)throw Error('Wallet changed before signing.');
-  $('status').textContent='Approve the transaction in your wallet.';
-  const signed=await selected.signOnlyTransaction(c.Transaction.fromBytes(request.transaction));
-  const after=await account();if(selected!==signer||version!==generation||after.publicKey!==a.publicKey||$('signingMode').value!=='external')throw Error('Wallet or signing mode changed during signing.');
-  const result=await post('/api/external/submit',{id:request.id,transaction:signed.toHex()});$('status').textContent=`${result.state}: ${result.txHash}`;
- }catch(e){$('status').textContent=e.message;}finally{await refresh();}
-}};
+async function authorize(endpoint,terms){
+ const selected=signer,version=generation,a=await account();$('status').textContent='Preparing transaction for wallet approval…';
+ const request=await post(endpoint,{id:crypto.randomUUID(),...terms,publicKey:a.publicKey});
+ if(selected!==signer||version!==generation)throw Error('Wallet changed before signing.');
+ $('status').textContent='Approve the transaction in your wallet.';
+ const signed=await selected.signOnlyTransaction(c.Transaction.fromBytes(request.transaction));
+ const after=await account();if(selected!==signer||version!==generation||after.publicKey!==a.publicKey||$('signingMode').value!=='external')throw Error('Wallet or signing mode changed during signing.');
+ return post('/api/external/submit',{id:request.id,transaction:signed.toHex()});
+}
+async function run(action,endpoint,terms){
+ for(const id of ['pay','revoke','close','deposit','sweep'])$(id).disabled=true;
+ try{const result=await authorize(endpoint,terms);$('status').textContent=`${result.state}: ${result.txHash}`;}catch(e){$('status').textContent=e.message;}finally{await refresh();}
+}
+window.quotaWallet={
+ pay:()=>run('pay','/api/external/prepare',{role:$('role').value,amount:$('amount').value,recipient:$('to').value.trim()}),
+ owner:operation=>run(operation,'/api/external/owner',{operation,amount:$('depositAmount').value})
+};

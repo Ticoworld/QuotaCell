@@ -91,7 +91,7 @@ async function prepareExternal(body){
   const actor=await live(snap.state.seeds[body.role]),amount=BigInt(body.amount)*100000000n;
   const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:initial.allDeps,delegate:body.role==='alice'?0:1,amount,fee:2000n});
   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]});const lock=c.Script.from(actors[body.role].lock),info=await tx.getSignHashInfo(lock,client);assert.equal(info.position,1);
-  const record={bytes:tx.toHex(),message:info.message,position:info.position,publicKey:grant.publicKey,points:[snap.state.policy,snap.state.seeds[body.role],snap.state.fund],pocket:snap.view.pocket,amount:amount.toString(),recipient:body.recipient,expires:Date.now()+300000};
+  const record={bytes:tx.toHex(),message:info.message,position:info.position,publicKey:grant.publicKey,points:[snap.state.policy,snap.state.seeds[body.role],snap.state.fund],pocket:snap.view.pocket,amount:amount.toString(),recipient:body.recipient,operation:'pay',expires:Date.now()+300000};
   requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash};
  }finally{busy=false;}
 }
@@ -105,7 +105,7 @@ async function submitExternal(body){
   const prepared=c.Transaction.fromBytes(request.bytes),signed=c.Transaction.fromBytes(body.transaction);
   verifyWalletTransaction({prepared,signed,message:request.message,publicKey:request.publicKey,position:request.position});
   const signedRaw=raw(signed);await rpc('dry_run_transaction',[signedRaw]);
-  db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');insert.run(body.id,profile.genesisHeader.hash,request.pocket,request.publicKey,request.recipient,request.amount,signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),'pay');db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+  db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');insert.run(body.id,profile.genesisHeader.hash,request.pocket,request.publicKey,request.recipient,request.amount,signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),request.operation);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
   try{assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash());}catch(e){return {txHash:signed.hash(),state:'uncertain',error:e.message};}
   for(let i=0;i<20;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));if(await canonicalCommit(await rpc('get_transaction',[signed.hash()]))){update.run('committed',body.id);return {txHash:signed.hash(),state:'committed'};}}
   return {txHash:signed.hash(),state:'uncertain'};
@@ -134,10 +134,10 @@ async function pay(body){
   return {txHash:signed.hash(),state:'uncertain'};
  }finally{busy=false;}
 }
-async function ownerAction(body){
+async function ownerAction(body,external=false){
  if(busy)throw new Error('Another action is in progress');busy=true;
  try{
-  assert.match(body.id||'',/^[0-9a-f-]{36}$/);assert(['revoke','close','deposit','sweep'].includes(body.operation));assert(!rows().some(x=>x.id===body.id),'Intent already exists');
+  assert.match(body.id||'',/^[0-9a-f-]{36}$/);assert(['revoke','close','deposit','sweep'].includes(body.operation));assert(!requests.has(body.id)&&!rows().some(x=>x.id===body.id),'Intent already exists');if(external)assert.equal(body.publicKey,actors.owner.publicKey,'Connected account is not the owner');
   await verifyEnvironment();const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain');
   const op=body.operation,owner=await live(snap.state.ownerFee),ownerCap=BigInt(owner.cell.output.capacity),fee=2000n;
   const old=buf(snap.p.cell.data.content),ownerLock=c.Script.from(actors.owner.lock),policyOut={capacity:BigInt(snap.p.cell.output.capacity),lock:c.Script.from({codeHash:snap.p.cell.output.lock.code_hash,hashType:snap.p.cell.output.lock.hash_type,args:snap.p.cell.output.lock.args}),type:c.Script.from(initial.Q)};
@@ -161,7 +161,14 @@ async function ownerAction(body){
   tx.setWitnessArgs(position,{lock:'0x'+'00'.repeat(65),...(action?{inputType:action}:{})});
   const acp=await new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}).getKnownScript(c.KnownScript.AnyoneCanPay);
   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[],scripts:{[c.KnownScript.Secp256k1Blake160]:{codeHash:K,hashType:'type',cellDeps:[{cellDep:initial.kdep}]},[c.KnownScript.AnyoneCanPay]:acp}});
-  const secret=await load('keys/owner'),signer=new c.SignerCkbPrivateKey(client,secret.privateKey);assert.equal(signer.publicKey,actors.owner.publicKey);const info=await tx.getSignHashInfo(ownerLock,client);assert.equal(info.position,position);
+  const info=await tx.getSignHashInfo(ownerLock,client);assert.equal(info.position,position);
+  if(external){
+   for(const [id,request] of requests)if(request.expires<=Date.now())requests.delete(id);
+   assert(requests.size<128,'Too many outstanding signing requests');
+   const record={bytes:tx.toHex(),message:info.message,position,publicKey:actors.owner.publicKey,points:inputs,pocket:snap.view.pocket,amount:amount.toString(),recipient:actors.owner.lock.args,operation:op,expires:Date.now()+300000};
+   requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash};
+  }
+  const secret=await load('keys/owner'),signer=new c.SignerCkbPrivateKey(client,secret.privateKey);assert.equal(signer.publicKey,actors.owner.publicKey);
   const signed=await signWithCkbWallet({signer,prepared:tx,actorLock:ownerLock,publicKey:signer.publicKey,message:info.message,position});for(const p of inputs)await live(p);
   const signedRaw=raw(signed);await rpc('dry_run_transaction',[signedRaw]);
   db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');insert.run(body.id,profile.genesisHeader.hash,snap.view.pocket,signer.publicKey,actors.owner.lock.args,amount.toString(),signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),op);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
@@ -183,9 +190,9 @@ const server=http.createServer(async(req,res)=>{
    const result=await rpc(call.method,call.params||[]);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:call.id,result}));return;
   }
   if(req.method==='GET'&&req.url==='/api/state'){const s=await snapshot();res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(s.view));return;}
-  if(req.method==='POST'&&['/api/external/prepare','/api/external/submit'].includes(req.url)){
+  if(req.method==='POST'&&['/api/external/prepare','/api/external/owner','/api/external/submit'].includes(req.url)){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');let body='';for await(const chunk of req){body+=chunk;assert(body.length<210000);}
-   const result=await (req.url.endsWith('/prepare')?prepareExternal:submitExternal)(JSON.parse(body));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));return;
+   const input=JSON.parse(body);const result=await (req.url.endsWith('/owner')?ownerAction(input,true):req.url.endsWith('/prepare')?prepareExternal(input):submitExternal(input));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));return;
   }
   if(req.method==='POST'&&req.url==='/api/pay'){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');let body='';for await(const chunk of req){body+=chunk;assert(body.length<4096);}
