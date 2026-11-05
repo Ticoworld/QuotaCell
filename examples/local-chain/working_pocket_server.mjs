@@ -2,7 +2,8 @@
 import * as c from '@ckb-ccc/core';
 import {DatabaseSync} from 'node:sqlite';
 import {buildPayment} from './pocket_payment.ts';
-import {signWithCkbWallet} from './pocket_signing.mjs';
+import {signWithCkbWallet,verifyWalletTransaction} from './pocket_signing.mjs';
+import {build} from 'esbuild';
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -51,6 +52,8 @@ const insert=db.prepare('INSERT INTO intents (id,genesis,pocket,actor,recipient,
 const rows=()=>db.prepare('SELECT * FROM intents ORDER BY rowid').all();
 const update=db.prepare('UPDATE intents SET state=? WHERE id=?');
 let busy=false;
+const requests=new Map();
+const walletBundle=(await build({entryPoints:[path.join(here,'working_pocket_wallet.mjs')],bundle:true,write:false,platform:'browser',format:'iife',target:'chrome110'})).outputFiles[0].contents;
 async function canonicalCommit(tx){if(tx?.tx_status?.status!=='committed')return false;const header=await rpc('get_header',[tx.tx_status.block_hash]);return !!header && await rpc('get_block_hash',[header.number])===header.hash;}
 async function snapshot(){
  const state=structuredClone(initial);let unresolved=false;
@@ -73,7 +76,40 @@ async function snapshot(){
  if(closed)assert.equal(s.subarray(0,8).toString('hex'),'5143543404000100');else {assert.equal(s.length,466);assert.equal(s.subarray(0,6).toString('hex'),'51434e340400');}
  const u=o=>s.readBigUInt64LE(o)+(s.readBigUInt64LE(o+8)<<64n);
  const delegates=['alice','ben'].map((role,i)=>{if(closed)return {role,limit:'0',used:'0',perPayment:'0',enabled:false,recipient:'',publicKey:''};const o=158+154*i;return {role,limit:u(o+106).toString(),used:u(o+122).toString(),perPayment:u(o+138).toString(),enabled:Boolean(s[7]&(1<<i)),recipient:c.Script.fromBytes(s.subarray(o+33,o+106)).args,publicKey:hex(s.subarray(o,o+33))};});
- return {state,p,f,unresolved,closed,view:{pocket:c.Script.from(initial.Q).hash(),policyOutpoint:state.policy,fundShannons:f?BigInt(f.cell.output.capacity).toString():'0',fundOccupiedShannons:f?'7300000000':'0',sharedLimit:closed?'0':u(8).toString(),sharedUsed:closed?'0':u(24).toString(),delegates,closed,hasFund:!!f,policyCapacity:p.cell.output.capacity,history:rows().map(({id,tx_hash,state,amount,recipient,created,actor,operation})=>({id,tx_hash,state,amount,recipient,created,actor,operation})),unresolved}};
+ return {state,p,f,unresolved,closed,view:{pocket:c.Script.from(initial.Q).hash(),genesis:profile.genesisHeader.hash,owner:actors.owner.publicKey,policyOutpoint:state.policy,fundShannons:f?BigInt(f.cell.output.capacity).toString():'0',fundOccupiedShannons:f?'7300000000':'0',sharedLimit:closed?'0':u(8).toString(),sharedUsed:closed?'0':u(24).toString(),delegates,closed,hasFund:!!f,policyCapacity:p.cell.output.capacity,history:rows().map(({id,tx_hash,state,amount,recipient,created,actor,operation})=>({id,tx_hash,state,amount,recipient,created,actor,operation})),unresolved}};
+}
+async function prepareExternal(body){
+ assert(!busy,'Another action is in progress');busy=true;
+ try{
+  for(const [id,request] of requests)if(request.expires<=Date.now())requests.delete(id);
+  assert(requests.size<128,'Too many outstanding signing requests');
+  assert.match(body.id||'',/^[0-9a-f-]{36}$/);assert.match(body.amount||'',/^[0-9]{1,12}$/);assert.match(body.recipient||'',/^0x[0-9a-f]{40}$/);
+  assert(['alice','ben'].includes(body.role),'Unknown delegate');assert(!requests.has(body.id)&&!rows().some(x=>x.id===body.id),'Intent already exists');
+  await verifyEnvironment();const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain');
+  const grant=snap.view.delegates.find(d=>d.role===body.role);assert.equal(body.recipient,grant.recipient,'Recipient changed');
+  assert.equal(body.publicKey,grant.publicKey,'Connected account is not the selected delegate');
+  const actor=await live(snap.state.seeds[body.role]),amount=BigInt(body.amount)*100000000n;
+  const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:initial.allDeps,delegate:body.role==='alice'?0:1,amount,fee:2000n});
+  const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]});const lock=c.Script.from(actors[body.role].lock),info=await tx.getSignHashInfo(lock,client);assert.equal(info.position,1);
+  const record={bytes:tx.toHex(),message:info.message,position:info.position,publicKey:grant.publicKey,points:[snap.state.policy,snap.state.seeds[body.role],snap.state.fund],pocket:snap.view.pocket,amount:amount.toString(),recipient:body.recipient,expires:Date.now()+300000};
+  requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash};
+ }finally{busy=false;}
+}
+async function submitExternal(body){
+ assert(!busy,'Another action is in progress');busy=true;
+ try{
+  const request=requests.get(body.id);assert(request,'Unknown or expired signing request');requests.delete(body.id);assert(Date.now()<request.expires,'Signing request expired');
+  assert.match(body.transaction||'',/^0x[0-9a-f]+$/i);assert(body.transaction.length<200000,'Signed transaction too large');
+  await verifyEnvironment();const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain');assert.equal(snap.view.pocket,request.pocket);
+  for(const p of request.points)await live(p);
+  const prepared=c.Transaction.fromBytes(request.bytes),signed=c.Transaction.fromBytes(body.transaction);
+  verifyWalletTransaction({prepared,signed,message:request.message,publicKey:request.publicKey,position:request.position});
+  const signedRaw=raw(signed);await rpc('dry_run_transaction',[signedRaw]);
+  db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');insert.run(body.id,profile.genesisHeader.hash,request.pocket,request.publicKey,request.recipient,request.amount,signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),'pay');db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+  try{assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash());}catch(e){return {txHash:signed.hash(),state:'uncertain',error:e.message};}
+  for(let i=0;i<20;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));if(await canonicalCommit(await rpc('get_transaction',[signed.hash()]))){update.run('committed',body.id);return {txHash:signed.hash(),state:'committed'};}}
+  return {txHash:signed.hash(),state:'uncertain'};
+ }finally{busy=false;}
 }
 async function pay(body){
  if(busy)throw new Error('Another action is in progress');busy=true;
@@ -138,9 +174,19 @@ const html=await fs.readFile(path.join(here,'working_pocket.html'));
 const server=http.createServer(async(req,res)=>{
  try{
   if(req.headers.host!==`127.0.0.1:${port}`)throw new Error('Invalid host');
-  res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'");
+  res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Content-Security-Policy',"default-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'");
   if(req.method==='GET'&&req.url==='/'){res.writeHead(200,{'content-type':'text/html; charset=utf-8'});res.end(html);return;}
+  if(req.method==='GET'&&req.url==='/wallet.js'){res.writeHead(200,{'content-type':'text/javascript; charset=utf-8'});res.end(walletBundle);return;}
+  if(req.method==='POST'&&req.url==='/api/ckb'){
+   assert.equal(req.headers.origin,origin,'Invalid origin');let body='';for await(const chunk of req){body+=chunk;assert(body.length<65536);}
+   const call=JSON.parse(body);assert(['get_fee_rate_statistics','get_tip_header','get_live_cell','get_transaction','get_header','get_block_hash','get_consensus'].includes(call.method),'RPC method unavailable');
+   const result=await rpc(call.method,call.params||[]);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:call.id,result}));return;
+  }
   if(req.method==='GET'&&req.url==='/api/state'){const s=await snapshot();res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(s.view));return;}
+  if(req.method==='POST'&&['/api/external/prepare','/api/external/submit'].includes(req.url)){
+   assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');let body='';for await(const chunk of req){body+=chunk;assert(body.length<210000);}
+   const result=await (req.url.endsWith('/prepare')?prepareExternal:submitExternal)(JSON.parse(body));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));return;
+  }
   if(req.method==='POST'&&req.url==='/api/pay'){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');let body='';for await(const chunk of req){body+=chunk;assert(body.length<4096);}
    const result=await pay(JSON.parse(body));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));return;

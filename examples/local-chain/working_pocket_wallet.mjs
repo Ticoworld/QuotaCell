@@ -1,0 +1,43 @@
+// Browser wallet access only. This module never requests or exports private keys.
+import * as c from '@ckb-ccc/connector';
+const $=id=>document.getElementById(id);
+const K='0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
+// CCC's client must not fall back to a public testnet endpoint for this app.
+const client=new c.ClientPublicTestnet({url:location.origin+'/api/ckb',fallbacks:[]});
+let connector, signer, walletName, generation=0;
+const status=s=>{$('walletStatus').textContent=s;};
+async function account(){
+ if(!signer || !await signer.isConnected())throw Error('Wallet disconnected or wrong network. Select CKB testnet in the wallet.');
+ if(signer.signType!==c.SignerSignType.CkbSecp256k1)throw Error('Incompatible signing scheme: QCN4 requires CKB secp256k1.');
+ if(walletName!=='UTXO Global Wallet' || typeof signer.provider?.getNetwork!=='function')throw Error('Unsupported wallet: only the UTXO Global CKB adapter is enabled for this experiment.');
+ if(await signer.provider.getNetwork()!=='nervos_testnet')throw Error('Wrong wallet network: CKB testnet is required.');
+ const publicKey=await signer.getPublicKey();
+ if(!/^0x0[23][0-9a-f]{64}$/i.test(publicKey))throw Error('Wallet must expose a compressed secp256k1 public key.');
+ const address=await signer.getRecommendedAddressObj(),lock=address?.script;
+ const args=c.hashCkb(c.bytesFrom(publicKey)).slice(0,42);
+ if(!lock || lock.codeHash!==K || lock.hashType!=='type' || lock.args!==args)throw Error('Incompatible wallet lock: standard CKB secp256k1 is required.');
+ return {publicKey,address:await address.toString()};
+}
+async function update(){
+ const current=++generation;
+ try{const a=await account();if(current!==generation)return;const response=await fetch('/api/state');const state=await response.json();const role=a.publicKey===state.owner?'owner':state.delegates.find(d=>d.publicKey===a.publicKey)?.role||'unrecognized';status(`Connected: ${a.address} · ${role} · wallet testnet; application isolated dev chain. Signing compatibility is verified per transaction.`);}catch(e){if(current===generation)status(e.message);}
+}
+$('connectWallet').onclick=()=>{
+ if(connector){connector.hidden=false;return;}connector=document.createElement('ccc-connector');connector.client=client;connector.name='QuotaCell local experiment';connector.hideKhie=true;
+ connector.addEventListener('connection',e=>{signer=e.connectionOwner?.value?.signerInfo?.signer;walletName=e.connectionOwner?.value?.wallet?.name;void update();});
+ connector.addEventListener('close',()=>{connector.hidden=true;});document.body.append(connector);
+};
+$('disconnectWallet').onclick=()=>{generation++;connector?.disconnect();connector?.remove();connector=undefined;signer=undefined;walletName=undefined;status('No wallet connected.');};
+async function post(url,body){const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw Error(data.error);return data;}
+window.quotaWallet={pay:async()=>{
+ $('pay').disabled=true;
+ try{
+  const selected=signer,version=generation,a=await account();$('status').textContent='Preparing transaction for wallet approval…';
+  const request=await post('/api/external/prepare',{id:crypto.randomUUID(),role:$('role').value,amount:$('amount').value,recipient:$('to').value.trim(),publicKey:a.publicKey});
+  if(selected!==signer||version!==generation)throw Error('Wallet changed before signing.');
+  $('status').textContent='Approve the transaction in your wallet.';
+  const signed=await selected.signOnlyTransaction(c.Transaction.fromBytes(request.transaction));
+  const after=await account();if(selected!==signer||version!==generation||after.publicKey!==a.publicKey||$('signingMode').value!=='external')throw Error('Wallet or signing mode changed during signing.');
+  const result=await post('/api/external/submit',{id:request.id,transaction:signed.toHex()});$('status').textContent=`${result.state}: ${result.txHash}`;
+ }catch(e){$('status').textContent=e.message;}finally{await refresh();}
+}};
