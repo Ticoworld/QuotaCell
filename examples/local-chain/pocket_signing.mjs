@@ -28,8 +28,14 @@ export async function signWithCkbWallet({signer,prepared,actorLock,publicKey,mes
   assert.equal(lock.codeHash,'0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8','Unsupported wallet lock');
   assert.equal(lock.hashType,'type','Unsupported wallet hash type');
   assert.equal(lock.args,c.hashCkb(Buffer.from(publicKey.slice(2),'hex')).slice(0,42),'Public key does not match actor lock');
+  // A wallet adapter is outside this trust boundary and may mutate the object
+  // passed to it. Retain an independent byte-for-byte snapshot before any
+  // asynchronous wallet interaction, and never give that snapshot to it.
+  const approved=c.Transaction.fromBytes(prepared.toBytes());
   const address=await signer.getRecommendedAddressObj();
   assert(address?.script?.eq(lock),'Wallet does not control the required actor lock');
-  const signed=await signer.signOnlyTransaction(prepared);
-  return verifyWalletTransaction({prepared,signed,message,publicKey,position});
+  const signed=await signer.signOnlyTransaction(c.Transaction.fromBytes(approved.toBytes()));
+  const currentAddress=await signer.getRecommendedAddressObj();
+  assert(currentAddress?.script?.eq(lock),'Wallet account changed during signing');
+  return verifyWalletTransaction({prepared:approved,signed,message,publicKey,position});
 }

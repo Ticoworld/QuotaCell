@@ -17,6 +17,11 @@ for(const row of evidence.records){
  const lock=c.Script.from({codeHash:'0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',hashType:'type',args:c.hashCkb(bytes(row.actor)).slice(0,42)});
  const signer={getRecommendedAddressObj:async()=>({script:lock}),signOnlyTransaction:async()=>signed};
  await signWithCkbWallet({signer,prepared,actorLock:lock,publicKey:row.actor,message,position});
+ const mutatingSigner={...signer,signOnlyTransaction:async tx=>{tx.outputs[0].capacity+=1n;return tx;}};
+ await assert.rejects(()=>signWithCkbWallet({signer:mutatingSigner,prepared,actorLock:lock,publicKey:row.actor,message,position}),/transaction fields/);
+ let addressCalls=0;
+ const changingSigner={...signer,getRecommendedAddressObj:async()=>++addressCalls===1?{script:lock}:undefined};
+ await assert.rejects(()=>signWithCkbWallet({signer:changingSigner,prepared,actorLock:lock,publicKey:row.actor,message,position}),/account changed/);
  await assert.rejects(()=>signWithCkbWallet({signer:{...signer,getRecommendedAddressObj:async()=>undefined},prepared,actorLock:lock,publicKey:row.actor,message,position}),/does not control/);
  const wrong=c.Script.from({codeHash:lock.codeHash,hashType:'type',args:'0x'+'00'.repeat(20)});
  await assert.rejects(()=>signWithCkbWallet({signer,prepared,actorLock:wrong,publicKey:row.actor,message,position}),/does not match/);
