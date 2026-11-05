@@ -1,0 +1,17 @@
+# Experimental wallet signing boundary
+
+The `pocket_signing.mjs` boundary accepts a CCC signer, requires its recommended address to use the exact standard CKB secp256k1 lock and public key selected by the policy, and checks that the resulting signature is valid and recovers that key. It rejects modifications to the prepared transaction, action witness, other witnesses, and witness count. The message must be derived by the caller from independently resolved inputs and the prepared transaction; it must never be accepted from a wallet response.
+
+The current application still instantiates `SignerCkbPrivateKey` from disposable server-side keys. On a fresh isolated node the refactored boundary committed delegate payment `0xed73c1522ec807d5fa1dfc5bfc762072849e3a1becb6d1ccc895cd306f4f4209`, owner revocation `0xfeb249f2dc610e325dbb2a4eb6f3351cafe2026ba58061fd6b1f639c1559cc38`, owner close `0x6c86606a64078637b94929976b969152b75a7bf857b55e9f28972ae3e31d2486`, late deposit `0x3802e4b60356017802c1e47d30f6b659ae09b71887d4a0576cc1b4750cb9c46a`, and late sweep `0x2b7f42f84d1b134044ba400a3d95de7ab96900654092d90a37b16b37e6557b59`. `full-lifecycle.json` contains public signed transactions and canonical node results, not private keys. The earlier `transactions.json` records the first two transactions.
+
+`node examples/local-chain/pocket_signing_test.mjs` checks six historical real signatures and rejects altered outputs, action witnesses, incorrect keys and signatures. Its independent child-process test generates a disposable private key exclusively in the child and returns only its public key and signature. That test is offline and does not prove control of the recorded on-chain actor input.
+
+An initial live attempt failed before signing because CCC's `getAddressObjs()` searched the disabled indexer and returned `Method not found`. Checking the recommended address instead avoided that unsupported lookup; no transaction was broadcast in the failed attempt.
+
+## Compatibility and limits
+
+- Standard CKB `secp256k1_blake160_sighash_all` (`type`, canonical code hash, 20-byte args) with the policy's 33-byte compressed key and 65-byte recoverable signature: compatible with the local CCC private-key signer; external wallet behavior remains untested.
+- JoyID, UTXO Global, MetaMask, UniSat and other CCC wallet options: not qualified. A wallet name or CCC ecosystem type does not establish that its actual actor lock, signing behavior, witness layout, and network are compatible. CCC's [wallet guide](https://docs.ckbccc.com/en/docs/guides/connect-wallets) lists supported ecosystems, not QCN4 compatibility.
+- No browser wallet connector, wallet signing transport, user-owned pocket creation, external fee-cell discovery, or user-controlled signing flow is implemented. No Pudge broadcast is authorized by this evidence.
+- Q checks the Type ID lineage and mandatory successor; F requires the full Q type-script hash. The application now checks the live Q script and exact F lock against the expected full Q identity for both owner and delegate operations. Existing node tests include a substituted fund output and malformed state; they do not exhaustively cover Q/F input substitution, deployment/provider substitution, reorgs or independently funded cells. The policy and signer are unaudited.
+- The journal continues to block uncertain transactions from automatic rebuilding. It does not provide distributed exactly-once execution.

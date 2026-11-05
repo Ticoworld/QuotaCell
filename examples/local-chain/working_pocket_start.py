@@ -82,7 +82,7 @@ def main():
                 except Exception: time.sleep(.5)
             else: raise RuntimeError('Node readiness timeout')
             rpc(endpoint,'set_network_active',[False])
-            subprocess.run(['node','--experimental-strip-types',str(HERE/'working_pocket_server.mjs'),str(run),str(opts.port)],cwd=HERE,check=True)
+            subprocess.run(['node','--experimental-strip-types',str(HERE/'working_pocket_server.mjs'),str(run),str(opts.port)],cwd=HERE,check=True,env={**os.environ,'QUOTACELL_DEV_SIGNER':'1'})
         finally:
             process.terminate()
             try: process.wait(timeout=20)
@@ -152,7 +152,7 @@ type.args = "0x59297894bff4b8f7e1427bf4943b467ba168565d25fe75de207c146debaec14b"
         rpc(endpoint,'set_network_active',[False])
         command(['node',HERE/'pocket-proof.mjs','setup',run])
         if opts.scenario=='app':
-            subprocess.run(['node','--experimental-strip-types',str(HERE/'working_pocket_server.mjs'),str(run),str(opts.port)],cwd=HERE,check=True)
+            subprocess.run(['node','--experimental-strip-types',str(HERE/'working_pocket_server.mjs'),str(run),str(opts.port)],cwd=HERE,check=True,env={**os.environ,'QUOTACELL_DEV_SIGNER':'1'})
             return
         if opts.scenario=='wo13':
             command(['node',HERE/'pocket-proof.mjs','native',run])

@@ -2,6 +2,7 @@
 import * as c from '@ckb-ccc/core';
 import {DatabaseSync} from 'node:sqlite';
 import {buildPayment} from './pocket_payment.ts';
+import {signWithCkbWallet} from './pocket_signing.mjs';
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -9,6 +10,7 @@ import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
+assert.equal(process.env.QUOTACELL_DEV_SIGNER,'1','Development signer is disabled without explicit local launcher opt-in');
 const run=path.resolve(process.argv[2]||'');
 const port=Number(process.argv[3]||4173);
 assert(Number.isInteger(port)&&port>1024&&port<65536);
@@ -49,11 +51,6 @@ const insert=db.prepare('INSERT INTO intents (id,genesis,pocket,actor,recipient,
 const rows=()=>db.prepare('SELECT * FROM intents ORDER BY rowid').all();
 const update=db.prepare('UPDATE intents SET state=? WHERE id=?');
 let busy=false;
-function verifySigned(tx,signed,info,publicKey,position){
- assert.equal(signed.hash(),tx.hash());const expected=c.WitnessArgs.fromBytes(tx.witnesses[position]),actual=signed.getWitnessArgs(position);const signature=actual.lock;expected.lock=signature;assert.equal(expected.toHex(),signed.witnesses[position],'Signer altered action witness');
- for(let i=0;i<tx.witnesses.length;i++)if(i!==position)assert.equal(signed.witnesses[i],tx.witnesses[i],'Signer altered another witness');
- assert(c.verifyMessageSecp256k1(info.message,signature,publicKey),'Invalid signature');
-}
 async function canonicalCommit(tx){if(tx?.tx_status?.status!=='committed')return false;const header=await rpc('get_header',[tx.tx_status.block_hash]);return !!header && await rpc('get_block_hash',[header.number])===header.hash;}
 async function snapshot(){
  const state=structuredClone(initial);let unresolved=false;
@@ -70,6 +67,9 @@ async function snapshot(){
   }else{update.run('uncertain',item.id);unresolved=true;}
  }
  const p=await live(state.policy),f=state.fund?await live(state.fund):null,s=buf(p.cell.data.content),closed=s.length===28;
+ const ps=p.cell.output.type;assert(ps,'Missing policy type');const actualPolicy=c.Script.from({codeHash:ps.code_hash,hashType:ps.hash_type,args:ps.args});assert(actualPolicy.eq(c.Script.from(initial.Q)),'Policy identity mismatch');
+ const pl=p.cell.output.lock;assert(c.Script.from({codeHash:pl.code_hash,hashType:pl.hash_type,args:pl.args}).eq(c.Script.from({codeHash:hashes.A,hashType:'data1',args:'0x'})),'Policy lock mismatch');
+ if(f){const fl=f.cell.output.lock;const expected=c.Script.from({codeHash:hashes.F,hashType:'data1',args:actualPolicy.hash()});assert(c.Script.from({codeHash:fl.code_hash,hashType:fl.hash_type,args:fl.args}).eq(expected),'Fund policy identity mismatch');assert(!f.cell.output.type&&f.cell.data.content==='0x','Unsupported fund cell');}
  if(closed)assert.equal(s.subarray(0,8).toString('hex'),'5143543404000100');else {assert.equal(s.length,466);assert.equal(s.subarray(0,6).toString('hex'),'51434e340400');}
  const u=o=>s.readBigUInt64LE(o)+(s.readBigUInt64LE(o+8)<<64n);
  const delegates=['alice','ben'].map((role,i)=>{if(closed)return {role,limit:'0',used:'0',perPayment:'0',enabled:false,recipient:'',publicKey:''};const o=158+154*i;return {role,limit:u(o+106).toString(),used:u(o+122).toString(),perPayment:u(o+138).toString(),enabled:Boolean(s[7]&(1<<i)),recipient:c.Script.fromBytes(s.subarray(o+33,o+106)).args,publicKey:hex(s.subarray(o,o+33))};});
@@ -89,7 +89,7 @@ async function pay(body){
   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[],scripts:{[c.KnownScript.Secp256k1Blake160]:{codeHash:K,hashType:'type',cellDeps:[{cellDep:initial.kdep}]},[c.KnownScript.AnyoneCanPay]:acp}});
   const secret=await load('keys/'+body.role);const signer=new c.SignerCkbPrivateKey(client,secret.privateKey);assert.equal(signer.publicKey,actors[body.role].publicKey);
   const lock=c.Script.from(actors[body.role].lock),info=await tx.getSignHashInfo(lock,client);assert.equal(info.position,1);
-  const signed=await signer.signOnlyTransaction(tx);verifySigned(tx,signed,info,signer.publicKey,1);
+  const signed=await signWithCkbWallet({signer,prepared:tx,actorLock:lock,publicKey:signer.publicKey,message:info.message,position:1});
   for(const p of [snap.state.policy,snap.state.seeds[body.role],snap.state.fund])await live(p);
   const signedRaw=raw(signed);await rpc('dry_run_transaction',[signedRaw]);
   db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');insert.run(body.id,profile.genesisHeader.hash,snap.view.pocket,signer.publicKey,body.recipient,amount.toString(),signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),'pay');db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
@@ -105,6 +105,8 @@ async function ownerAction(body){
   await verifyEnvironment();const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain');
   const op=body.operation,owner=await live(snap.state.ownerFee),ownerCap=BigInt(owner.cell.output.capacity),fee=2000n;
   const old=buf(snap.p.cell.data.content),ownerLock=c.Script.from(actors.owner.lock),policyOut={capacity:BigInt(snap.p.cell.output.capacity),lock:c.Script.from({codeHash:snap.p.cell.output.lock.code_hash,hashType:snap.p.cell.output.lock.hash_type,args:snap.p.cell.output.lock.args}),type:c.Script.from(initial.Q)};
+  const ownerInput=owner.cell.output.lock;assert(c.Script.from({codeHash:ownerInput.code_hash,hashType:ownerInput.hash_type,args:ownerInput.args}).eq(ownerLock)&&!owner.cell.output.type&&owner.cell.data.content==='0x','Owner fee cell mismatch');
+  if(snap.closed)assert.equal(hex(old.subarray(8,28)),ownerLock.args,'Terminal owner mismatch');else assert.equal(hex(old.subarray(125,158)),actors.owner.publicKey,'Policy owner mismatch');
   let inputs,outputs,data,action,position,amount=0n;
   if(op==='revoke'){
    assert(!snap.closed && (old[7]&1),'Alice is already revoked or pocket is closed');const next=Buffer.from(old);next[7]&=~1;
@@ -124,7 +126,7 @@ async function ownerAction(body){
   const acp=await new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}).getKnownScript(c.KnownScript.AnyoneCanPay);
   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[],scripts:{[c.KnownScript.Secp256k1Blake160]:{codeHash:K,hashType:'type',cellDeps:[{cellDep:initial.kdep}]},[c.KnownScript.AnyoneCanPay]:acp}});
   const secret=await load('keys/owner'),signer=new c.SignerCkbPrivateKey(client,secret.privateKey);assert.equal(signer.publicKey,actors.owner.publicKey);const info=await tx.getSignHashInfo(ownerLock,client);assert.equal(info.position,position);
-  const signed=await signer.signOnlyTransaction(tx);verifySigned(tx,signed,info,signer.publicKey,position);for(const p of inputs)await live(p);
+  const signed=await signWithCkbWallet({signer,prepared:tx,actorLock:ownerLock,publicKey:signer.publicKey,message:info.message,position});for(const p of inputs)await live(p);
   const signedRaw=raw(signed);await rpc('dry_run_transaction',[signedRaw]);
   db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');insert.run(body.id,profile.genesisHeader.hash,snap.view.pocket,signer.publicKey,actors.owner.lock.args,amount.toString(),signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),op);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
   try{assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash());}catch(e){return {txHash:signed.hash(),state:'uncertain',error:e.message};}
