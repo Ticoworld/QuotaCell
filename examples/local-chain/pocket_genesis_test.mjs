@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import * as c from '@ckb-ccc/core';
+import {buildGenesis} from './pocket_genesis.mjs';
+const e=JSON.parse(await fs.readFile(new URL('../../evidence/pocket-native-v2/02-policy-genesis.json',import.meta.url),'utf8'));
+const state=Buffer.from(e.transaction.outputs_data[0].slice(2),'hex');
+const uint=o=>state.readBigUInt64LE(o)+(state.readBigUInt64LE(o+8)<<64n);
+const delegates=[158,312].map(o=>({publicKey:'0x'+state.subarray(o,o+33).toString('hex'),recipient:c.Script.fromBytes(state.subarray(o+33,o+106)),limit:uint(o+106),perPayment:uint(o+138)}));
+const input={ownerPublicKey:e.signing.publicKey,delegates,sharedLimit:uint(8),ownerInput:e.resolvedInputs[0],deps:e.transaction.cell_deps.map(d=>({outPoint:{txHash:d.out_point.tx_hash,index:BigInt(d.out_point.index)},depType:d.dep_type==='dep_group'?'depGroup':'code'})),policyCapacity:BigInt(e.transaction.outputs[0].capacity),fee:BigInt(e.feeShannon)};
+const result=buildGenesis(input);assert.equal(result.transaction.hash(),e.txHash);assert.equal(result.typeId,e.transaction.outputs[0].type.args);assert.equal(result.transaction.outputsData[0],e.transaction.outputs_data[0]);assert.equal(result.transaction.getWitnessArgs(0).inputType,'0x5143413100ff0000');
+assert.throws(()=>buildGenesis({...input,ownerPublicKey:delegates[0].publicKey}),/distinct/);
+assert.throws(()=>buildGenesis({...input,delegates:[{...delegates[0],perPayment:delegates[0].limit+1n},delegates[1]]}),/limits/);
+assert.throws(()=>buildGenesis({...input,ownerInput:{...input.ownerInput,status:'dead'}}),/live cell/);
+assert.throws(()=>buildGenesis({...input,fee:1000001n}),/capacity or fee/);
+console.log('PASS: recorded QCN4 genesis transaction hash, state, Type ID and witness reconstructed; invalid identities, limits, input and fee rejected');

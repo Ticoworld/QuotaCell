@@ -1,5 +1,6 @@
 // WO-07 only: a disposable dev-chain proof, not a wallet or supported SDK.
 import * as c from '@ckb-ccc/core';
+import {buildGenesis} from './pocket_genesis.mjs';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -100,12 +101,6 @@ function makeTx(inputs,outputs,data,deps,action,actorPosition){
  if(actorPosition!==undefined)tx.setWitnessArgs(actorPosition,{lock:'0x'+'00'.repeat(65),...(action===undefined?{}:{inputType:action})});
  return tx;
 }
-function state(actors){
- const b=Buffer.alloc(466);b.write('QCN4');b.writeUInt16LE(4,4);b[7]=3;le128(250n*CKB).copy(b,8);bytes(actors.owner.publicKey).copy(b,125);
- for(const [i,role]of ['alice','ben'].entries()){
-  const o=158+154*i;bytes(actors[role].publicKey).copy(b,o);Buffer.from(c.Script.from(actors[role+'Recipient'].lock).toBytes()).copy(b,o+33);le128(200n*CKB).copy(b,o+106);le128(100n*CKB).copy(b,o+138);
- }return b;
-}
 async function keys(){
  await fs.mkdir(path.join(run,'keys'),{recursive:true});await fs.mkdir(result,{recursive:true});const actors={};
  for(const role of ['owner','alice','ben','aliceRecipient','benRecipient']){
@@ -140,10 +135,9 @@ async function setup(){
  let tx=makeTx([seeds.owner],outputs,data,[kdep],undefined,0);let signed=await sign(tx,'owner',0,kdep);const deployedResult=await commit('01-deploy-dependencies',signed.tx,signed.signing);
  for(const name of Object.keys(deployed))deployed[name]=point(deployedResult.txHash,deployed[name]);
  const allDeps=[kdep,...['A','F','Q'].map(n=>dep(deployed[n]))];
- const ownerForGenesis=point(deployedResult.txHash,3);const firstInput=c.CellInput.from({previousOutput:ownerForGenesis,since:0});
- const Q=c.Script.from({codeHash:H.Q,hashType:'data2',args:c.hashCkb(Buffer.concat([Buffer.from(firstInput.toBytes()),Buffer.alloc(8)]))});
- const F=c.Script.from({codeHash:H.F,hashType:'data1',args:Q.hash()});const initial=state(actors);const ownerCell=await live(ownerForGenesis);
- tx=makeTx([ownerForGenesis],[{capacity:600n*CKB,lock:A,type:Q},{capacity:BigInt(ownerCell.cell.output.capacity)-600n*CKB-FEE,lock:actors.owner.lock}],[hex(initial),'0x'],allDeps,'0x5143413100ff0000',0);
+ const ownerForGenesis=point(deployedResult.txHash,3),ownerCell=await live(ownerForGenesis);
+ const built=buildGenesis({ownerPublicKey:actors.owner.publicKey,delegates:['alice','ben'].map(role=>({publicKey:actors[role].publicKey,recipient:actors[role+'Recipient'].lock,limit:200n*CKB,perPayment:100n*CKB})),sharedLimit:250n*CKB,ownerInput:ownerCell,deps:allDeps});
+ const Q=built.policy,F=c.Script.from({codeHash:H.F,hashType:'data1',args:Q.hash()});tx=built.transaction;
  signed=await sign(tx,'owner',0,kdep);const created=await commit('02-policy-genesis',signed.tx,signed.signing);
  const ownerFee=point(created.txHash,1),feeCell=await live(ownerFee);
  // Keep the first xUDT input's witness empty, matching the admitted plain
