@@ -1,0 +1,16 @@
+{
+  "outpoint": {
+    "txHash": "0x6eb51db3a7a5210c42bd7679e5275c97b0680113b569bc243fe20c174afbddd8",
+    "index": 0
+  },
+  "result": {
+    "block_hash": null,
+    "cell": null,
+    "status": "unknown"
+  },
+  "error": {
+    "code": -301,
+    "message": "TransactionFailedToResolve: Resolve failed Unknown(OutPoint(0x6eb51db3a7a5210c42bd7679e5275c97b0680113b569bc243fe20c174afbddd800000000))",
+    "data": "Resolve(Unknown(OutPoint(0x6eb51db3a7a5210c42bd7679e5275c97b0680113b569bc243fe20c174afbddd800000000)))"
+  }
+}
