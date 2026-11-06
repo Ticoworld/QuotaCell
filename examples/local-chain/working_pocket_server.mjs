@@ -11,13 +11,19 @@ import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
-assert.equal(process.env.QUOTACELL_DEV_SIGNER,'1','Development signer is disabled without explicit local launcher opt-in');
+const developmentSigner=process.env.QUOTACELL_DEV_SIGNER==='1';
 const run=path.resolve(process.argv[2]||'');
 const port=Number(process.argv[3]||4173);
 assert(Number.isInteger(port)&&port>1024&&port<65536);
 const origin=`http://127.0.0.1:${port}`;
 const load=async name=>JSON.parse(await fs.readFile(path.join(run,name+'.json'),'utf8'));
-const [runtime,initial,actors,profile]=await Promise.all(['runtime','context','actors','evidence/node-profile'].map(load));
+const optional=async name=>{try{return await load(name);}catch(e){if(e.code==='ENOENT')return null;throw e;}};
+const [runtime,profile,deployment]=await Promise.all([load('runtime'),load('evidence/node-profile'),optional('deployment')]);
+let initial=developmentSigner?await optional('context'):null;
+let actors=developmentSigner?await optional('actors'):null;
+assert(Boolean(initial)===Boolean(actors),'Development context and actors must be supplied together');
+const environment=deployment||initial;
+assert(environment,'A public deployment.json is required when no development Pocket exists');
 assert.match(runtime.url,/^http:\/\/127\.0\.0\.1:\d+$/);
 const K='0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 const hashes={A:'0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1',F:'0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a',Q:'0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e',Kcode:'0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',Kdata:'0x9799bee251b975b82c45a02154ce28cec89c5853ecc14d12b7b8cccfc19e0af4'};
@@ -38,11 +44,11 @@ async function verifyEnvironment(){
  assert.equal(await rpc('get_block_hash',['0x0']),profile.genesisHeader.hash,'Unexpected genesis');
  await rpc('set_network_active',[false]);
  assert.equal((await rpc('get_peers')).length,0,'Node must have no peers');
- for(const n of ['A','F','Q']){const x=await live(initial.deployed[n]);assert.equal(c.hashCkb(buf(x.cell.data.content)),hashes[n],`Wrong ${n} dependency`);}
- const group=await live(initial.kdep.outPoint),data=buf(group.cell.data.content);assert.equal(data.length,76);
+ for(const n of ['A','F','Q']){const x=await live(environment.deployed[n]);assert.equal(c.hashCkb(buf(x.cell.data.content)),hashes[n],`Wrong ${n} dependency`);}
+ const group=await live(environment.kdep.outPoint),data=buf(group.cell.data.content);assert.equal(data.length,76);
  const members=[0,1].map(j=>({txHash:hex(data.subarray(4+j*36,36+j*36)),index:data.readUInt32LE(36+j*36)}));
  for(const [i,n] of ['Kdata','Kcode'].entries()){const x=await live(members[i]);assert.equal(c.hashCkb(buf(x.cell.data.content)),hashes[n]);if(n==='Kcode'){const t=x.cell.output.type;assert(t);assert.equal(c.Script.from({codeHash:t.code_hash,hashType:t.hash_type,args:t.args}).hash(),K);}}
- assert.deepEqual(initial.allDeps,[initial.kdep,...['A','F','Q'].map(n=>({outPoint:initial.deployed[n],depType:'code'}))]);
+ assert.deepEqual(environment.allDeps,[environment.kdep,...['A','F','Q'].map(n=>({outPoint:environment.deployed[n],depType:'code'}))]);
 }
 await verifyEnvironment();
 const db=new DatabaseSync(path.join(run,'working-pocket.sqlite'));
@@ -56,6 +62,7 @@ const requests=new Map();
 const walletBundle=(await build({entryPoints:[path.join(here,'working_pocket_wallet.mjs')],bundle:true,write:false,platform:'browser',format:'iife',target:'chrome110'})).outputFiles[0].contents;
 async function canonicalCommit(tx){if(tx?.tx_status?.status!=='committed')return false;const header=await rpc('get_header',[tx.tx_status.block_hash]);return !!header && await rpc('get_block_hash',[header.number])===header.hash;}
 async function snapshot(){
+ assert(initial&&actors,'No Pocket is open');
  const state=structuredClone(initial);let unresolved=false;
  for(const item of rows()){
   assert.equal(item.genesis,profile.genesisHeader.hash);assert.equal(item.pocket,c.Script.from(initial.Q).hash());
@@ -89,7 +96,7 @@ async function prepareExternal(body){
   const grant=snap.view.delegates.find(d=>d.role===body.role);assert.equal(body.recipient,grant.recipient,'Recipient changed');
   assert.equal(body.publicKey,grant.publicKey,'Connected account is not the selected delegate');
   const actor=await live(snap.state.seeds[body.role]),amount=BigInt(body.amount)*100000000n;
-  const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:initial.allDeps,delegate:body.role==='alice'?0:1,amount,fee:2000n});
+  const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:2000n});
   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]});const lock=c.Script.from(actors[body.role].lock),info=await tx.getSignHashInfo(lock,client);assert.equal(info.position,1);
   const record={bytes:tx.toHex(),message:info.message,position:info.position,publicKey:grant.publicKey,points:[snap.state.policy,snap.state.seeds[body.role],snap.state.fund],pocket:snap.view.pocket,amount:amount.toString(),recipient:body.recipient,operation:'pay',expires:Date.now()+300000};
   requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash};
@@ -112,6 +119,7 @@ async function submitExternal(body){
  }finally{busy=false;}
 }
 async function pay(body){
+ assert(developmentSigner,'Development signer is disabled');
  if(busy)throw new Error('Another action is in progress');busy=true;
  try{
   assert.match(body.id||'',/^[0-9a-f-]{36}$/);assert.match(body.amount||'',/^[0-9]{1,12}$/);assert.match(body.recipient||'',/^0x[0-9a-f]{40}$/);
@@ -119,10 +127,10 @@ async function pay(body){
   await verifyEnvironment();const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain; reconcile before another payment');
   assert(['alice','ben'].includes(body.role),'Unknown delegate');const grant=snap.view.delegates.find(d=>d.role===body.role);assert.equal(body.recipient,grant.recipient,'Recipient changed; review the live policy');
   const amount=BigInt(body.amount)*100000000n;
-  const actor=await live(snap.state.seeds[body.role]);const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:initial.allDeps,delegate:body.role==='alice'?0:1,amount,fee:2000n});
+  const actor=await live(snap.state.seeds[body.role]);const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:2000n});
   assert.equal(tx.outputs[2].capacity,amount);assert.equal(tx.outputs[2].lock.args,body.recipient);
   const acp=await new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}).getKnownScript(c.KnownScript.AnyoneCanPay);
-  const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[],scripts:{[c.KnownScript.Secp256k1Blake160]:{codeHash:K,hashType:'type',cellDeps:[{cellDep:initial.kdep}]},[c.KnownScript.AnyoneCanPay]:acp}});
+  const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[],scripts:{[c.KnownScript.Secp256k1Blake160]:{codeHash:K,hashType:'type',cellDeps:[{cellDep:environment.kdep}]},[c.KnownScript.AnyoneCanPay]:acp}});
   const secret=await load('keys/'+body.role);const signer=new c.SignerCkbPrivateKey(client,secret.privateKey);assert.equal(signer.publicKey,actors[body.role].publicKey);
   const lock=c.Script.from(actors[body.role].lock),info=await tx.getSignHashInfo(lock,client);assert.equal(info.position,1);
   const signed=await signWithCkbWallet({signer,prepared:tx,actorLock:lock,publicKey:signer.publicKey,message:info.message,position:1});
@@ -135,6 +143,7 @@ async function pay(body){
  }finally{busy=false;}
 }
 async function ownerAction(body,external=false){
+ assert(external||developmentSigner,'Development signer is disabled');
  if(busy)throw new Error('Another action is in progress');busy=true;
  try{
   assert.match(body.id||'',/^[0-9a-f-]{36}$/);assert(['revoke','close','deposit','sweep'].includes(body.operation));assert(!requests.has(body.id)&&!rows().some(x=>x.id===body.id),'Intent already exists');if(external)assert.equal(body.publicKey,actors.owner.publicKey,'Connected account is not the owner');
@@ -157,10 +166,10 @@ async function ownerAction(body,external=false){
    assert(snap.closed&&snap.f,'No tracked late deposit');amount=BigInt(snap.f.cell.output.capacity);inputs=[snap.state.policy,snap.state.ownerFee,snap.state.fund];outputs=[policyOut,{capacity:amount,lock:ownerLock},{capacity:ownerCap-fee,lock:ownerLock}];data=[hex(old),'0x','0x'];action='0x5143413105ff0000';position=1;
   }
   assert(outputs.every(o=>o.capacity>=6100000000n),'Owner fee cell would be below occupied capacity');
-  const deps=op==='deposit'?[initial.kdep]:initial.allDeps,tx=c.Transaction.from({inputs:inputs.map(previousOutput=>({previousOutput,since:0})),outputs,outputsData:data,cellDeps:deps,headerDeps:[],witnesses:inputs.map(()=> '0x')});
+  const deps=op==='deposit'?[environment.kdep]:environment.allDeps,tx=c.Transaction.from({inputs:inputs.map(previousOutput=>({previousOutput,since:0})),outputs,outputsData:data,cellDeps:deps,headerDeps:[],witnesses:inputs.map(()=> '0x')});
   tx.setWitnessArgs(position,{lock:'0x'+'00'.repeat(65),...(action?{inputType:action}:{})});
   const acp=await new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}).getKnownScript(c.KnownScript.AnyoneCanPay);
-  const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[],scripts:{[c.KnownScript.Secp256k1Blake160]:{codeHash:K,hashType:'type',cellDeps:[{cellDep:initial.kdep}]},[c.KnownScript.AnyoneCanPay]:acp}});
+  const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[],scripts:{[c.KnownScript.Secp256k1Blake160]:{codeHash:K,hashType:'type',cellDeps:[{cellDep:environment.kdep}]},[c.KnownScript.AnyoneCanPay]:acp}});
   const info=await tx.getSignHashInfo(ownerLock,client);assert.equal(info.position,position);
   if(external){
    for(const [id,request] of requests)if(request.expires<=Date.now())requests.delete(id);
@@ -189,7 +198,7 @@ const server=http.createServer(async(req,res)=>{
    const call=JSON.parse(body);assert(['get_fee_rate_statistics','get_tip_header','get_live_cell','get_transaction','get_header','get_block_hash','get_consensus'].includes(call.method),'RPC method unavailable');
    const result=await rpc(call.method,call.params||[]);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:call.id,result}));return;
   }
-  if(req.method==='GET'&&req.url==='/api/state'){const s=await snapshot();res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(s.view));return;}
+  if(req.method==='GET'&&req.url==='/api/state'){const s=initial?await snapshot():{view:{empty:true,genesis:profile.genesisHeader.hash,developmentSigner}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(s.view));return;}
   if(req.method==='POST'&&['/api/external/prepare','/api/external/owner','/api/external/submit'].includes(req.url)){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');let body='';for await(const chunk of req){body+=chunk;assert(body.length<210000);}
    const input=JSON.parse(body);const result=await (req.url.endsWith('/owner')?ownerAction(input,true):req.url.endsWith('/prepare')?prepareExternal(input):submitExternal(input));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));return;
