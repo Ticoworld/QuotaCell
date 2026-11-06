@@ -1,0 +1,16 @@
+{
+  "result": "PASS",
+  "lifecycle": [
+    "creation",
+    "funding",
+    "alice payment",
+    "ben payment",
+    "revocation",
+    "recovery",
+    "late deposit",
+    "sweep",
+    "node and server restart/reopen"
+  ],
+  "genesis": "0x8b293e61bb10454bbe13dccefa3c81a710caccb8d5e058a7ce15c63ad1b962aa",
+  "pocket": "0x7c05b1e35cec88bb8d7389a19791d8ace11e56e361ce89cd1ad2bc0d9ca528e7"
+}
