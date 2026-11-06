@@ -20,7 +20,7 @@ async function account(){
 }
 async function update(){
  const current=++generation;
- try{const a=await account();if(current!==generation)return;const response=await fetch('/api/state');const state=await response.json();const role=a.publicKey===state.owner?'owner':state.delegates?.find(d=>d.publicKey===a.publicKey)?.role||'unrecognized';status(`Connected: ${a.address} Â· ${role} Â· wallet testnet; application isolated dev chain. Signing compatibility is verified per transaction.`);}catch(e){if(current===generation)status(e.message);}
+ try{const a=await account();if(current!==generation)return;const response=await fetch('/api/state');const state=await response.json();const role=a.publicKey===state.owner?'owner':state.delegates?.find(d=>d.publicKey===a.publicKey)?.role||'unrecognized';status(`Connected: ${a.address} · ${role} · wallet testnet; application isolated dev chain. Signing compatibility is verified per transaction.`);}catch(e){if(current===generation)status(e.message);}
 }
 $('connectWallet').onclick=()=>{
  if(connector){connector.hidden=false;return;}connector=document.createElement('ccc-connector');connector.client=client;connector.name='QuotaCell local experiment';connector.hideKhie=true;
@@ -30,7 +30,7 @@ $('connectWallet').onclick=()=>{
 $('disconnectWallet').onclick=()=>{generation++;connector?.disconnect();connector?.remove();connector=undefined;signer=undefined;walletName=undefined;status('No wallet connected.');};
 async function post(url,body){const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw Error(data.error);return data;}
 async function authorize(endpoint,terms){
- const selected=signer,version=generation,a=await account();$('status').textContent='Preparing transaction for wallet approval…';
+ const selected=signer,version=generation,a=await account();$('status').textContent='Preparing transaction for wallet approval�';
  const request=await post(endpoint,{id:crypto.randomUUID(),...terms,publicKey:a.publicKey});
  if(selected!==signer||version!==generation)throw Error('Wallet changed before signing.');
  $('status').textContent='Approve the transaction in your wallet.';
