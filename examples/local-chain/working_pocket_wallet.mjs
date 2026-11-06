@@ -46,3 +46,5 @@ window.quotaWallet={
  pay:()=>run('pay','/api/external/prepare',{role:$('role').value,amount:$('amount').value,recipient:$('to').value.trim()}),
  owner:operation=>run(operation,'/api/external/owner',{operation,amount:$('depositAmount').value})
 };
+
+$('createPocket').onclick=()=>{try{const terms=JSON.parse($('genesisTerms').value);void run('genesis','/api/external/genesis',terms);}catch(e){$('status').textContent=e.message;}};

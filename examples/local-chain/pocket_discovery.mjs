@@ -11,6 +11,14 @@ const read128=(b,o)=>b.readBigUInt64LE(o)+(b.readBigUInt64LE(o+8)<<64n);
 function validate(cell,policy,expected){
  const output=cell.output;assert(output.type&&toScript(output.type).eq(policy),'Policy identity mismatch');
  assert(toScript(output.lock).eq(c.Script.from({codeHash:A,hashType:'data1',args:'0x'})),'Policy lock mismatch');
+ const terminal=Buffer.from(cell.data.content.slice(2),'hex');
+ if(terminal.length===28){
+  assert.equal(terminal.subarray(0,8).toString('hex'),'5143543404000100','Invalid terminal state');
+  const ownerArgs=c.hashCkb(Buffer.from(expected.ownerPublicKey.slice(2),'hex')).slice(0,42);
+  assert.equal('0x'+terminal.subarray(8).toString('hex'),ownerArgs,'Terminal owner mismatch');
+  assert(BigInt(output.capacity)>=13400000000n,'Insufficient terminal capacity');
+  return {closed:true,owner:expected.ownerPublicKey};
+ }
  assert(BigInt(output.capacity)>=60000000000n,'Insufficient policy capacity');
  const data=cell.data.content;assert(/^0x[0-9a-f]{932}$/i.test(data),'Malformed policy state');const b=Buffer.from(data.slice(2),'hex');
  assert.equal(b.subarray(0,7).toString('hex'),'51434e34040000','Invalid active policy header');assert((b[7]&~3)===0,'Invalid delegate mask');assert(b.subarray(40,125).every(x=>x===0),'Nonzero reserved state');

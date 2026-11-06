@@ -1,14 +1,14 @@
 import * as c from '@ckb-ccc/core';
-const key=window.__testKey;
+const key=window.__testKey||c.hexFrom(crypto.getRandomValues(new Uint8Array(32)));
 const client=new c.ClientPublicTestnet();
 const signer=new c.SignerCkbPrivateKey(client,key);
-const other=new c.SignerCkbPrivateKey(client,window.__otherTestKey);
+const other=new c.SignerCkbPrivateKey(client,window.__otherTestKey||key);
 const lock=c.Script.from({codeHash:'0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',hashType:'type',args:c.hashCkb(c.bytesFrom(signer.publicKey)).slice(0,42)});
 const address=c.Address.fromScript(lock,client).toString();
 const otherLock=c.Script.from({codeHash:lock.codeHash,hashType:'type',args:c.hashCkb(c.bytesFrom(other.publicKey)).slice(0,42)});
 const otherAddress=c.Address.fromScript(otherLock,client).toString();
 const listeners={};
-window.testWallet={mode:'ok',network:'nervos_testnet',connected:false,switched:false};
+window.testWallet={publicKey:signer.publicKey,mode:'ok',network:'nervos_testnet',connected:false,switched:false};
 const p={getAccount:async()=>[window.testWallet.switched?otherAddress:address],getPublicKey:async()=>[{address,publicKey:signer.publicKey},{address:otherAddress,publicKey:other.publicKey}],connect:async()=>{window.testWallet.connected=true},isConnected:async()=>window.testWallet.connected,getNetwork:async()=>window.testWallet.network,switchNetwork:async n=>{if(window.testWallet.mode!=='wrong-network')window.testWallet.network=n},on:(n,f)=>{(listeners[n]??=[]).push(f);return p},removeListener:()=>p,signMessage:async()=>{throw Error('unused')},signTransaction:async tx=>{
  const mode=window.testWallet.mode;if(mode==='reject')throw Error('Authorization rejected');
  if(mode==='disconnect'){window.testWallet.connected=false;return tx}
