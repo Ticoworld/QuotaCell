@@ -1,0 +1,69 @@
+{
+  "observedUTC": "2026-11-09T06:23:45.865Z",
+  "url": "https://testnet.ckb.dev/",
+  "genesis": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+  "tip": {
+    "number": "0x15f0769",
+    "hash": "0x610242eeb33b80c6ac040efd14c713fda73057aa0cdcbcbc5901735e146f9f17"
+  },
+  "indexed": {
+    "block_hash": "0x610242eeb33b80c6ac040efd14c713fda73057aa0cdcbcbc5901735e146f9f17",
+    "block_number": "0x15f0769"
+  },
+  "fees": {
+    "mean": "0xbac3",
+    "median": "0x81c6"
+  },
+  "group": {
+    "point": {
+      "tx_hash": "0xf8de3bb47d055cdf460d93a2a6e1b05f7432f9777c8c474abf4eec1d4aee5d37",
+      "index": "0x0"
+    },
+    "hash": "0xf66ca3517241864672b7f47d093aec4d6d4d07824068993eacd728eb9078e236",
+    "members": [
+      {
+        "point": {
+          "tx_hash": "0x8f8c79eb6671709633fe6a46de93c0fedc9c1b8a6527a18d3983879542635c9f",
+          "index": "0x3"
+        },
+        "hash": "0x9799bee251b975b82c45a02154ce28cec89c5853ecc14d12b7b8cccfc19e0af4",
+        "bytes": 1048576
+      },
+      {
+        "point": {
+          "tx_hash": "0x8f8c79eb6671709633fe6a46de93c0fedc9c1b8a6527a18d3983879542635c9f",
+          "index": "0x1"
+        },
+        "hash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+        "bytes": 52048
+      }
+    ]
+  },
+  "upstream": [
+    {
+      "name": "A",
+      "point": {
+        "tx_hash": "0xb4f171c9c9caf7401f54a8e56225ae21d95032150a87a4678eac3f66a3137b93",
+        "index": "0x0"
+      },
+      "hash": "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1",
+      "bytes": 1216
+    },
+    {
+      "name": "F",
+      "point": {
+        "tx_hash": "0xb4f171c9c9caf7401f54a8e56225ae21d95032150a87a4678eac3f66a3137b93",
+        "index": "0x1"
+      },
+      "hash": "0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a",
+      "bytes": 27360
+    }
+  ],
+  "q": {
+    "bytes": 23600,
+    "sha256": "f636bb5a9ddb7db41c73ab263a5b5483acae2e36c53afca2257a1cbc95d83997",
+    "ckbHash": "0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e",
+    "capacityCKB": 23661
+  },
+  "policySearchFirstPage": 0
+}

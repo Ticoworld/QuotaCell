@@ -14,6 +14,8 @@ await assert.rejects(()=>recipientArgs(c.Address.fromScript(unsupported,testnet)
 const calls=[],rpc=async (m)=>{calls.push(m);return m==='get_consensus'?{id:'ckb_testnet'}:PUDGE_GENESIS};
 await verifyNetwork({mode:'pudge-readonly',url:'https://testnet.ckb.dev/',rpc,expectedGenesis:PUDGE_GENESIS,developmentSigner:false});
 assert.deepEqual(calls,['get_consensus','get_block_hash']);
+await verifyNetwork({mode:'pudge',url:'https://testnet.ckb.dev/',rpc,expectedGenesis:PUDGE_GENESIS,developmentSigner:false});
+await assert.rejects(()=>verifyNetwork({mode:'pudge',url:'https://testnet.ckb.dev/',rpc,expectedGenesis:PUDGE_GENESIS,developmentSigner:true}),/forbidden/);
 await assert.rejects(()=>verifyNetwork({mode:'pudge-readonly',url:'https://testnet.ckb.dev/',rpc,expectedGenesis:PUDGE_GENESIS,developmentSigner:true}),/forbidden/);
 await assert.rejects(()=>verifyNetwork({mode:'pudge-readonly',url:'https://testnet.ckb.dev/',rpc:async m=>m==='get_consensus'?{id:'ckb'}:PUDGE_GENESIS,expectedGenesis:PUDGE_GENESIS,developmentSigner:false}),/Not CKB testnet/);
 await assert.rejects(()=>verifyNetwork({mode:'pudge-readonly',url:'https://testnet.ckb.dev/',rpc:async m=>m==='get_consensus'?{id:'ckb_testnet'}:'0x00',expectedGenesis:PUDGE_GENESIS,developmentSigner:false}),/genesis/);
