@@ -1,0 +1,11 @@
+﻿import assert from 'node:assert/strict';
+import {observePublicTransaction,submitPublicTransaction} from './pocket_public_tx.mjs';
+const hash='0x'+'11'.repeat(32),block='0x'+'22'.repeat(32),signed={inputs:[{previous_output:{tx_hash:hash,index:'0x0'}}]},calls=[];
+let status='pending',dead=false,canonical=true,fail=false;
+const rpc=async(m)=>{calls.push(m);if(fail)throw Error('interrupted');if(m==='send_transaction')return hash;if(m==='get_transaction')return {tx_status:{status,block_hash:block}};if(m==='get_header')return {hash:block,number:'0x10'};if(m==='get_block_hash')return canonical?block:'0x'+'33'.repeat(32);if(m==='get_live_cell')return {status:dead?'dead':'live'};throw Error(m)};
+await assert.rejects(()=>submitPublicTransaction({rpc,hash,signed,enabled:false}),/not explicitly enabled/);assert.equal(calls.length,0);
+assert.equal((await submitPublicTransaction({rpc,hash,signed,enabled:true})).state,'submitted');assert.equal((await observePublicTransaction({rpc,hash,signed})).state,'pending');
+status='committed';assert.equal((await observePublicTransaction({rpc,hash,signed})).state,'committed');canonical=false;assert.equal((await observePublicTransaction({rpc,hash,signed,priorState:'committed'})).state,'uncertain');
+status='unknown';canonical=true;assert.equal((await observePublicTransaction({rpc,hash,signed,priorState:'committed'})).state,'uncertain');assert.equal((await observePublicTransaction({rpc,hash,signed})).state,'uncertain');dead=true;assert.equal((await observePublicTransaction({rpc,hash,signed})).state,'conflicting');
+status='rejected';assert.equal((await observePublicTransaction({rpc,hash,signed})).state,'rejected');fail=true;assert.equal((await observePublicTransaction({rpc,hash,signed})).state,'uncertain');assert.equal((await submitPublicTransaction({rpc,hash,signed,enabled:true})).state,'uncertain');
+assert(!calls.includes('generate_block'));console.log('PASS public submission gate, status, conflict, restart, reorganization and interrupted RPC');

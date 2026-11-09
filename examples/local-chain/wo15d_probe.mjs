@@ -1,0 +1,17 @@
+﻿import * as c from '@ckb-ccc/core';
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import {PUDGE_GENESIS} from './pocket_network.mjs';
+const url=process.argv[2]||'https://testnet.ckb.dev/';assert.match(url,/^https:\/\/[^/]+\/?$/);let id=0;
+async function rpc(method,params=[]){const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:++id,method,params}),signal:AbortSignal.timeout(15000)});assert(r.ok,`HTTP ${r.status}`);const x=await r.json();if(x.error)throw Error(JSON.stringify(x.error));return x.result;}
+assert.equal((await rpc('get_consensus')).id,'ckb_testnet');assert.equal(await rpc('get_block_hash',['0x0']),PUDGE_GENESIS);
+const tip=await rpc('get_tip_header'),indexed=await rpc('get_indexer_tip'),fees=await rpc('get_fee_rate_statistics',['0x65']);
+const live=async point=>{const x=await rpc('get_live_cell',[point,true]);assert.equal(x.status,'live');return x.cell;};
+const groupPoint={tx_hash:'0xf8de3bb47d055cdf460d93a2a6e1b05f7432f9777c8c474abf4eec1d4aee5d37',index:'0x0'},group=await live(groupPoint),bytes=Buffer.from(group.data.content.slice(2),'hex');assert.equal(bytes.length,76);assert.equal(bytes.readUInt32LE(0),2);assert.equal(c.hashCkb(bytes),'0xf66ca3517241864672b7f47d093aec4d6d4d07824068993eacd728eb9078e236');
+const members=[];for(const [i,hash] of ['0x9799bee251b975b82c45a02154ce28cec89c5853ecc14d12b7b8cccfc19e0af4','0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649'].entries()){
+ const point={tx_hash:'0x'+bytes.subarray(4+i*36,36+i*36).toString('hex'),index:'0x'+bytes.readUInt32LE(36+i*36).toString(16)},cell=await live(point);assert.equal(c.hashCkb(c.bytesFrom(cell.data.content)),hash);if(i===1){const t=cell.output.type;assert(t);assert.equal(c.Script.from({codeHash:t.code_hash,hashType:t.hash_type,args:t.args}).hash(),'0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8');}members.push({point,hash,bytes:(cell.data.content.length-2)/2});}
+const upstream=[];for(const [name,index,hash] of [['A','0x0','0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1'],['F','0x1','0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a']]){const point={tx_hash:'0xb4f171c9c9caf7401f54a8e56225ae21d95032150a87a4678eac3f66a3137b93',index},cell=await live(point);assert.equal(c.hashCkb(c.bytesFrom(cell.data.content)),hash);upstream.push({name,point,hash,bytes:(cell.data.content.length-2)/2});}
+const q=await fs.readFile(new URL('../../policy/build/allowance-native-v2',import.meta.url));assert.equal(q.length,23600);assert.equal(c.hashCkb(q),'0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e');const qSha=crypto.createHash('sha256').update(q).digest('hex');assert.equal(qSha,'f636bb5a9ddb7db41c73ab263a5b5483acae2e36c53afca2257a1cbc95d83997');
+const policies=await rpc('get_cells',[{script:{code_hash:'0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e',hash_type:'data2',args:'0x'},script_type:'type',script_search_mode:'prefix',with_data:false},'asc','0x1']);
+console.log(JSON.stringify({observedUTC:new Date().toISOString(),url,genesis:PUDGE_GENESIS,tip:{number:tip.number,hash:tip.hash},indexed,fees,group:{point:groupPoint,hash:c.hashCkb(bytes),members},upstream,q:{bytes:q.length,sha256:qSha,ckbHash:c.hashCkb(q),capacityCKB:q.length+61},policySearchFirstPage:policies.objects.length},null,2));

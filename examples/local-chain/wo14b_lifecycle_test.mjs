@@ -1,4 +1,6 @@
 // Fresh isolated-node independent QCN4 genesis integration test, Windows only.
+import {discoverIndexed} from './pocket_indexed_discovery.mjs';
+import {PUDGE_GENESIS} from './pocket_network.mjs';
 import {createRequire} from 'node:module';
 import {build} from 'esbuild';
 import * as c from '@ckb-ccc/core';
@@ -31,7 +33,7 @@ const port=async()=>{const s=net.createServer();await new Promise(r=>s.listen(0,
 const cmd=(args)=>{const r=spawnSync(exe,args,{encoding:'utf8',windowsHide:true});assert.equal(r.status,0,r.stderr);};
 cmd(['-C',run,'init','--chain','dev','--ba-arg',lock(bootstrap.publicKey).args,'--rpc-port',String(rpcPort),'--p2p-port',String(p2pPort)]);
 const spec=path.join(run,'specs/dev.toml');let text=await fs.readFile(spec,'utf8');const issued=`[[genesis.issued_cells]]\ncapacity = ${1000000n*CKB}\nlock.code_hash = "${K}"\nlock.args = "${lock(bootstrap.publicKey).args}"\nlock.hash_type = "type"\n`;text=text.slice(0,text.indexOf('# Burn'))+issued+'\n'+text.slice(text.indexOf('[params]'));await fs.writeFile(spec,text);
-const config=path.join(run,'ckb.toml');text=await fs.readFile(config,'utf8');text=text.replace(/^listen_addresses = .*$/m,`listen_addresses = ["/ip4/127.0.0.1/tcp/${p2pPort}"]`).replace(/^max_outbound_peers = .*$/m,'max_outbound_peers = 0').replace(/^discovery_local_address = .*$/m,'discovery_local_address = false').replace(/^modules = .*$/m,'modules = ["Net", "Pool", "Miner", "Chain", "Stats", "Experiment", "IntegrationTest"]');assert.match(text,/^bootnodes = \[\]/m);await fs.writeFile(config,text);
+const config=path.join(run,'ckb.toml');text=await fs.readFile(config,'utf8');text=text.replace(/^listen_addresses = .*$/m,`listen_addresses = ["/ip4/127.0.0.1/tcp/${p2pPort}"]`).replace(/^max_outbound_peers = .*$/m,'max_outbound_peers = 0').replace(/^discovery_local_address = .*$/m,'discovery_local_address = false').replace(/^modules = .*$/m,'modules = ["Net", "Pool", "Miner", "Chain", "Stats", "Experiment", "IntegrationTest", "Indexer"]');assert.match(text,/^bootnodes = \[\]/m);await fs.writeFile(config,text);
 let node=spawn(exe,['-C',run,'run'],{stdio:'ignore',windowsHide:true});const url=`http://127.0.0.1:${rpcPort}`;let id=0;
 async function rpc(method,params=[]){const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:++id,method,params}),signal:AbortSignal.timeout(10000)});const x=await r.json();if(x.error)throw Error(JSON.stringify(x.error));return x.result;}
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -94,7 +96,10 @@ try{
    }
    await p.locator('#pay').click();await committed(p);
   }
-app.kill();await new Promise(r=>app.once('exit',r));node.kill();await new Promise(r=>node.once('exit',r));
+const current=JSON.parse(await fs.readFile(path.join(run,'pocket.json')));const localIndexerRpc=async(method,params=[])=>method==='get_consensus'?{id:'ckb_testnet'}:method==='get_block_hash'&&params[0]==='0x0'?PUDGE_GENESIS:rpc(method,params);
+  let indexed;for(let i=0;i<100;i++){try{indexed=await discoverIndexed({rpc:localIndexerRpc,policy:current.initial.Q,expected:current.initial.expected});break;}catch(e){if(!/lag or chain-tip mismatch/.test(e.message))throw e;await sleep(100);}}
+  assert.equal(indexed?.cells.length,1);const indexFunds=await discoverIndexed({rpc:localIndexerRpc,lock:current.initial.F});assert.equal(indexFunds.cells.length,1);const indexOwner=await discoverIndexed({rpc:localIndexerRpc,lock:current.actors.owner.lock});assert(indexOwner.cells.length>=1);console.log('isolated node indexer discovery PASS');
+  app.kill();await new Promise(r=>app.once('exit',r));node.kill();await new Promise(r=>node.once('exit',r));
   node=spawn(exe,['-C',run,'run'],{stdio:'ignore',windowsHide:true});
   for(let i=0;i<100;i++){try{await rpc('get_tip_header');break;}catch{}await sleep(100);}
   app=spawn(process.execPath,['--experimental-strip-types',path.join(here,'working_pocket_server.mjs'),run,String(appPort)],{stdio:'ignore',env:{...process.env,QUOTACELL_DEV_SIGNER:'0'},windowsHide:true});

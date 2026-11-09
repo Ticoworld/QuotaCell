@@ -1,9 +1,11 @@
 // Disposable local development only. Never use with real keys or funds.
 import * as c from '@ckb-ccc/core';
 import {DatabaseSync} from 'node:sqlite';
+import {observePublicTransaction,submitPublicTransaction} from './pocket_public_tx.mjs';
 import {verifyNetwork} from './pocket_network.mjs';
 import {parseCkb,recipientArgs} from './pocket_input.mjs';
 import {buildGenesis} from './pocket_genesis.mjs';
+import {discoverIndexed} from './pocket_indexed_discovery.mjs';
 import {discoverPolicy} from './pocket_discovery.mjs';
 import {discoverPlainCells} from './pocket_cell_discovery.mjs';
 import {buildPayment} from './pocket_payment.ts';
@@ -49,7 +51,7 @@ async function live(p){const x=await rpc('get_live_cell',[point(p),true]);assert
 async function verifyEnvironment(){
  await verifyNetwork({mode:networkMode,url:runtime.url,rpc,expectedGenesis:profile.genesisHeader.hash,developmentSigner});
  for(const n of ['A','F','Q']){const x=await live(environment.deployed[n]);assert.equal(c.hashCkb(buf(x.cell.data.content)),hashes[n],`Wrong ${n} dependency`);}
- const group=await live(environment.kdep.outPoint),data=buf(group.cell.data.content);assert.equal(data.length,76);
+ const group=await live(environment.kdep.outPoint),data=buf(group.cell.data.content);assert.equal(data.length,76);assert.equal(data.readUInt32LE(0),2,'Invalid K dependency group');
  const members=[0,1].map(j=>({txHash:hex(data.subarray(4+j*36,36+j*36)),index:data.readUInt32LE(36+j*36)}));
  for(const [i,n] of ['Kdata','Kcode'].entries()){const x=await live(members[i]);assert.equal(c.hashCkb(buf(x.cell.data.content)),hashes[n]);if(n==='Kcode'){const t=x.cell.output.type;assert(t);assert.equal(c.Script.from({codeHash:t.code_hash,hashType:t.hash_type,args:t.args}).hash(),K);}}
  assert.deepEqual(environment.allDeps,[environment.kdep,...['A','F','Q'].map(n=>({outPoint:environment.deployed[n],depType:'code'}))]);
@@ -68,17 +70,29 @@ async function canonicalCommit(tx){if(tx?.tx_status?.status!=='committed')return
 async function snapshot(){
  assert(initial&&actors,'No Pocket is open');
  const state=structuredClone(initial);let unresolved=false;
+ let indexedTip=null;
  if(initial.expected){
-  const found=await discoverPolicy({rpc,policy:initial.Q,expected:initial.expected});state.policy={txHash:found.outPoint.tx_hash,index:Number(BigInt(found.outPoint.index))};
-  const locate=async lock=>(await discoverPlainCells({rpc,lock})).cells.sort((a,b)=>BigInt(a.cell.output.capacity)>BigInt(b.cell.output.capacity)?-1:1).map(x=>({txHash:x.outPoint.tx_hash,index:Number(BigInt(x.outPoint.index))}));
-  const funds=await locate(initial.F);assert(funds.length<=1,'Multiple protected funds require consolidation');state.fund=funds[0]||null;
-  const owners=await locate(actors.owner.lock);state.ownerFee=owners[0];
-  for(const role of ['alice','ben'])state.seeds[role]=(await locate(actors[role].lock))[0];
+  const expectedKeys=[initial.expected.ownerPublicKey,...initial.expected.delegates.map(d=>d.publicKey)];
+  for(const [i,role] of ['owner','alice','ben'].entries()){assert.equal(actors[role].publicKey,expectedKeys[i],'Pocket actor identity mismatch');assert(c.Script.from(actors[role].lock).eq(lockFor(expectedKeys[i])),'Pocket actor lock mismatch');}
+  assert(c.Script.from(initial.F).eq(c.Script.from({codeHash:hashes.F,hashType:'data1',args:c.Script.from(initial.Q).hash()})),'Pocket fund identity mismatch');
+  let found,fundCells,ownerCells,aliceCells,benCells;
+  if(networkMode==='isolated'){
+   found=await discoverPolicy({rpc,policy:initial.Q,expected:initial.expected});
+   [fundCells,ownerCells,aliceCells,benCells]=await Promise.all([initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map(async lock=>(await discoverPlainCells({rpc,lock})).cells));
+  }else{
+   const results=await Promise.all([discoverIndexed({rpc,policy:initial.Q,expected:initial.expected}),...[initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map(lock=>discoverIndexed({rpc,lock}))]);
+   indexedTip=results[0].indexedTip;for(const r of results)assert.deepEqual(r.indexedTip,indexedTip,'Indexed snapshots differ');
+   found=results[0].cells[0];[fundCells,ownerCells,aliceCells,benCells]=results.slice(1).map(r=>r.cells);
+  }
+  state.policy={txHash:found.outPoint.tx_hash,index:Number(BigInt(found.outPoint.index))};
+  const points=cells=>cells.sort((a,b)=>BigInt(a.cell.output.capacity)>BigInt(b.cell.output.capacity)?-1:1).map(x=>({txHash:x.outPoint.tx_hash,index:Number(BigInt(x.outPoint.index))}));
+  const funds=points(fundCells);assert(funds.length<=1,'Multiple protected funds require consolidation');state.fund=funds[0]||null;
+  state.ownerFee=points(ownerCells)[0];state.seeds.alice=points(aliceCells)[0];state.seeds.ben=points(benCells)[0];
  }
 
  for(const item of rows()){
   assert.equal(item.genesis,profile.genesisHeader.hash);assert.equal(item.pocket,c.Script.from(initial.Q).hash());
-  if(initial.expected){const tx=await rpc('get_transaction',[item.tx_hash]);if(await canonicalCommit(tx))update.run('committed',item.id);else unresolved=true;continue;}
+  if(initial.expected){if(networkMode==='pudge'){const result=await observePublicTransaction({rpc,hash:item.tx_hash,signed:JSON.parse(item.signed),priorState:item.state});update.run(result.state,item.id);if(result.state!=='committed')unresolved=true;}else{const tx=await rpc('get_transaction',[item.tx_hash]);if(await canonicalCommit(tx))update.run('committed',item.id);else unresolved=true;}continue;}
   if(item.operation==='genesis')continue;
   const tx=await rpc('get_transaction',[item.tx_hash]);const status=tx?.tx_status?.status||'unknown';
   if(status==='committed' && await canonicalCommit(tx)){
@@ -97,9 +111,10 @@ async function snapshot(){
  if(closed)assert.equal(s.subarray(0,8).toString('hex'),'5143543404000100');else {assert.equal(s.length,466);assert.equal(s.subarray(0,6).toString('hex'),'51434e340400');}
  const u=o=>s.readBigUInt64LE(o)+(s.readBigUInt64LE(o+8)<<64n);
  const delegates=['alice','ben'].map((role,i)=>{if(closed)return {role,limit:'0',used:'0',perPayment:'0',enabled:false,recipient:'',publicKey:''};const o=158+154*i;return {role,limit:u(o+106).toString(),used:u(o+122).toString(),perPayment:u(o+138).toString(),enabled:Boolean(s[7]&(1<<i)),recipient:c.Script.fromBytes(s.subarray(o+33,o+106)).args,publicKey:hex(s.subarray(o,o+33))};});
- return {state,p,f,unresolved,closed,view:{pocket:c.Script.from(initial.Q).hash(),genesis:profile.genesisHeader.hash,owner:actors.owner.publicKey,policyOutpoint:state.policy,fundShannons:f?BigInt(f.cell.output.capacity).toString():'0',fundOccupiedShannons:f?'7300000000':'0',sharedLimit:closed?'0':u(8).toString(),sharedUsed:closed?'0':u(24).toString(),delegates,closed,hasFund:!!f,policyCapacity:p.cell.output.capacity,history:rows().map(({id,tx_hash,state,amount,recipient,created,actor,operation})=>({id,tx_hash,state,amount,recipient,created,actor,operation})),unresolved}};
+ return {state,p,f,unresolved,closed,view:{networkMode,indexedTip,pocket:c.Script.from(initial.Q).hash(),genesis:profile.genesisHeader.hash,owner:actors.owner.publicKey,policyOutpoint:state.policy,fundShannons:f?BigInt(f.cell.output.capacity).toString():'0',fundOccupiedShannons:f?'7300000000':'0',sharedLimit:closed?'0':u(8).toString(),sharedUsed:closed?'0':u(24).toString(),delegates,closed,hasFund:!!f,policyCapacity:p.cell.output.capacity,history:rows().map(({id,tx_hash,state,amount,recipient,created,actor,operation})=>({id,tx_hash,state,amount,recipient,created,actor,operation})),unresolved}};
 }
 const lockFor=publicKey=>c.Script.from({codeHash:K,hashType:'type',args:c.hashCkb(buf(publicKey)).slice(0,42)});
+async function selectedFee(){if(networkMode==='isolated')return 2000n;const f=await rpc('get_fee_rate_statistics',['0x65']);assert(f?.median,'Fee statistics unavailable');const fee=BigInt(f.median)*8n;assert(fee>0n&&fee<=1000000n,'Current fee exceeds policy bound');return fee;}
 async function transactionFee(tx){let total=0n;for(const i of tx.inputs){const cell=await live(i.previousOutput);total+=BigInt(cell.cell.output.capacity);}return (total-tx.outputs.reduce((sum,o)=>sum+o.capacity,0n)).toString();}
 async function prepareGenesis(body){
  assert(!busy,'Another action is in progress');busy=true;
@@ -107,10 +122,10 @@ async function prepareGenesis(body){
   assert(!initial,'A Pocket is already open');assert.match(body.id||'',/^[0-9a-f-]{36}$/);
   assert(!requests.has(body.id),'Intent already exists');assert(requests.size<128,'Too many outstanding signing requests');
   await verifyEnvironment();
-  const found=await discoverPlainCells({rpc,lock:lockFor(body.publicKey)});
+  const found=networkMode==='isolated'?await discoverPlainCells({rpc,lock:lockFor(body.publicKey)}):await discoverIndexed({rpc,lock:lockFor(body.publicKey)});
   const candidate=found.cells.find(x=>BigInt(x.cell.output.capacity)>=66100002000n);assert(candidate,'Owner needs a plain cell covering policy capacity and change');
   const ownerInput=await live({txHash:candidate.outPoint.tx_hash,index:Number(BigInt(candidate.outPoint.index))});
-  const built=buildGenesis({ownerPublicKey:body.publicKey,delegates:body.delegates,sharedLimit:body.sharedLimit,ownerInput,deps:environment.allDeps});
+  const built=buildGenesis({ownerPublicKey:body.publicKey,delegates:body.delegates,sharedLimit:body.sharedLimit,ownerInput,deps:environment.allDeps,fee:await selectedFee()});
   const tx=built.transaction,client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}),info=await tx.getSignHashInfo(lockFor(body.publicKey),client);
   const next={...environment,Q:{codeHash:built.policy.codeHash,hashType:built.policy.hashType,args:built.policy.args},F:{codeHash:hashes.F,hashType:'data1',args:built.policy.hash()},policy:{txHash:tx.hash(),index:0},ownerFee:{txHash:tx.hash(),index:1},fund:null,seeds:{},expected:{ownerPublicKey:body.publicKey,delegates:body.delegates,sharedLimit:body.sharedLimit}};
   const identities=Object.fromEntries([['owner',body.publicKey],...body.delegates.map((d,i)=>[i?'ben':'alice',d.publicKey])].map(([role,publicKey])=>[role,{publicKey,lock:JSON.parse(JSON.stringify(lockFor(publicKey)))}]));
@@ -129,7 +144,7 @@ async function prepareExternal(body){
   const grant=snap.view.delegates.find(d=>d.role===body.role);assert.equal(body.recipient,grant.recipient,'Recipient changed');
   assert.equal(body.publicKey,grant.publicKey,'Connected account is not the selected delegate');
   const actor=await live(snap.state.seeds[body.role]),amount=parseCkb(body.amount);
-  const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:2000n});
+  const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:await selectedFee()});
   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]});const lock=c.Script.from(actors[body.role].lock),info=await tx.getSignHashInfo(lock,client);assert.equal(info.position,1);
   const record={bytes:tx.toHex(),message:info.message,position:info.position,publicKey:grant.publicKey,points:[snap.state.policy,snap.state.seeds[body.role],snap.state.fund],pocket:snap.view.pocket,amount:amount.toString(),recipient:body.recipient,operation:'pay',expires:Date.now()+300000};
   requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash,fee:await transactionFee(tx)};
@@ -138,15 +153,17 @@ async function prepareExternal(body){
 async function submitExternal(body){
  assert(!busy,'Another action is in progress');busy=true;
  try{
+  if(networkMode==='pudge')assert.equal(process.env.QUOTACELL_PUDGE_BROADCAST,'1','Pudge broadcasting is disabled');
   const request=requests.get(body.id);assert(request,'Unknown or expired signing request');requests.delete(body.id);assert(Date.now()<request.expires,'Signing request expired');
   assert.match(body.transaction||'',/^0x[0-9a-f]+$/i);assert(body.transaction.length<200000,'Signed transaction too large');
   await verifyEnvironment();if(request.operation!=='genesis'){const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain');assert.equal(snap.view.pocket,request.pocket);}else assert(!initial,'A Pocket is already open');
   for(const p of request.points)await live(p);
   const prepared=c.Transaction.fromBytes(request.bytes),signed=c.Transaction.fromBytes(body.transaction);
   verifyWalletTransaction({prepared,signed,message:request.message,publicKey:request.publicKey,position:request.position});
-  const signedRaw=raw(signed);await rpc('dry_run_transaction',[signedRaw]);
+  const signedRaw=raw(signed);if(networkMode==='pudge'){const f=await rpc('get_fee_rate_statistics',['0x65']);const minimum=(BigInt(signed.toBytes().length)*BigInt(f.median)+999n)/1000n;assert(BigInt(await transactionFee(signed))>=minimum,'Fee below current median');}await rpc('dry_run_transaction',[signedRaw]);
   db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');insert.run(body.id,profile.genesisHeader.hash,request.pocket,request.publicKey,request.recipient,request.amount,signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),request.operation);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
   if(request.operation==='genesis'){await fs.writeFile(path.join(run,'pocket.json.tmp'),JSON.stringify({initial:request.next,actors:request.identities}));await fs.rename(path.join(run,'pocket.json.tmp'),path.join(run,'pocket.json'));initial=request.next;actors=request.identities;}
+  if(networkMode==='pudge'){const outcome=await submitPublicTransaction({rpc,hash:signed.hash(),signed:signedRaw,enabled:process.env.QUOTACELL_PUDGE_BROADCAST==='1'});update.run(outcome.state,body.id);return {txHash:signed.hash(),...outcome};}
   try{assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash());}catch(e){return {txHash:signed.hash(),state:'uncertain',error:e.message};}
   for(let i=0;i<20;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));if(await canonicalCommit(await rpc('get_transaction',[signed.hash()]))){update.run('committed',body.id);return {txHash:signed.hash(),state:'committed'};}}
   return {txHash:signed.hash(),state:'uncertain'};
@@ -161,7 +178,7 @@ async function pay(body){
   await verifyEnvironment();const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain; reconcile before another payment');
   assert(['alice','ben'].includes(body.role),'Unknown delegate');const grant=snap.view.delegates.find(d=>d.role===body.role);assert.equal(body.recipient,grant.recipient,'Recipient changed; review the live policy');
   const amount=parseCkb(body.amount);
-  const actor=await live(snap.state.seeds[body.role]);const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:2000n});
+  const actor=await live(snap.state.seeds[body.role]);const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:await selectedFee()});
   assert.equal(tx.outputs[2].capacity,amount);assert.equal(tx.outputs[2].lock.args,body.recipient);
   const acp=await new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}).getKnownScript(c.KnownScript.AnyoneCanPay);
   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[],scripts:{[c.KnownScript.Secp256k1Blake160]:{codeHash:K,hashType:'type',cellDeps:[{cellDep:environment.kdep}]},[c.KnownScript.AnyoneCanPay]:acp}});
@@ -182,7 +199,7 @@ async function ownerAction(body,external=false){
  try{
   assert.match(body.id||'',/^[0-9a-f-]{36}$/);assert(['revoke','close','deposit','sweep'].includes(body.operation));assert(!requests.has(body.id)&&!rows().some(x=>x.id===body.id),'Intent already exists');if(external)assert.equal(body.publicKey,actors.owner.publicKey,'Connected account is not the owner');
   await verifyEnvironment();const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain');
-  const op=body.operation,owner=await live(snap.state.ownerFee),ownerCap=BigInt(owner.cell.output.capacity),fee=2000n;
+  const op=body.operation,owner=await live(snap.state.ownerFee),ownerCap=BigInt(owner.cell.output.capacity),fee=await selectedFee();
   const old=buf(snap.p.cell.data.content),ownerLock=c.Script.from(actors.owner.lock),policyOut={capacity:BigInt(snap.p.cell.output.capacity),lock:c.Script.from({codeHash:snap.p.cell.output.lock.code_hash,hashType:snap.p.cell.output.lock.hash_type,args:snap.p.cell.output.lock.args}),type:c.Script.from(initial.Q)};
   const ownerInput=owner.cell.output.lock;assert(c.Script.from({codeHash:ownerInput.code_hash,hashType:ownerInput.hash_type,args:ownerInput.args}).eq(ownerLock)&&!owner.cell.output.type&&owner.cell.data.content==='0x','Owner fee cell mismatch');
   if(snap.closed)assert.equal(hex(old.subarray(8,28)),ownerLock.args,'Terminal owner mismatch');else assert.equal(hex(old.subarray(125,158)),actors.owner.publicKey,'Policy owner mismatch');
@@ -232,7 +249,7 @@ const server=http.createServer(async(req,res)=>{
    const call=JSON.parse(body);assert(['get_fee_rate_statistics','get_tip_header','get_live_cell','get_transaction','get_header','get_block_hash','get_consensus'].includes(call.method),'RPC method unavailable');
    const result=await rpc(call.method,call.params||[]);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:call.id,result}));return;
   }
-  if(req.method==='GET'&&req.url==='/api/state'){const s=initial?await snapshot():{view:{empty:true,genesis:profile.genesisHeader.hash,developmentSigner}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(s.view));return;}
+  if(req.method==='GET'&&req.url==='/api/state'){const s=initial?await snapshot():{view:{empty:true,genesis:profile.genesisHeader.hash,developmentSigner,networkMode}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(s.view));return;}
   if(req.method==='POST'&&networkMode==='pudge-readonly'&&req.url!=='/api/ckb')throw new Error('Pudge transactions are disabled pending dependency and wallet qualification');
   if(req.method==='POST'&&['/api/external/genesis','/api/external/prepare','/api/external/owner','/api/external/submit'].includes(req.url)){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');let body='';for await(const chunk of req){body+=chunk;assert(body.length<210000);}
@@ -248,7 +265,7 @@ const server=http.createServer(async(req,res)=>{
   }
   if(req.method==='POST'&&req.url==='/api/reconcile'){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');assert(!busy,'Another action is in progress');busy=true;
-   try{await verifyEnvironment();const outcomes=[];for(const item of rows().filter(x=>x.state!=='committed')){let tx=await rpc('get_transaction',[item.tx_hash]);if(['pending','proposed'].includes(tx?.tx_status?.status)){for(let i=0;i<8;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));tx=await rpc('get_transaction',[item.tx_hash]);if(await canonicalCommit(tx))break;}}if(await canonicalCommit(tx))update.run('committed',item.id);outcomes.push({txHash:item.tx_hash,status:tx?.tx_status?.status||'unknown'});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));}finally{busy=false;}return;
+   try{await verifyEnvironment();const outcomes=[];if(networkMode==='pudge'){for(const item of rows()){const result=await observePublicTransaction({rpc,hash:item.tx_hash,signed:JSON.parse(item.signed),priorState:item.state});update.run(result.state,item.id);outcomes.push({txHash:item.tx_hash,...result});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));return;}for(const item of rows().filter(x=>x.state!=='committed')){let tx=await rpc('get_transaction',[item.tx_hash]);if(['pending','proposed'].includes(tx?.tx_status?.status)){for(let i=0;i<8;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));tx=await rpc('get_transaction',[item.tx_hash]);if(await canonicalCommit(tx))break;}}if(await canonicalCommit(tx))update.run('committed',item.id);outcomes.push({txHash:item.tx_hash,status:tx?.tx_status?.status||'unknown'});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));}finally{busy=false;}return;
   }
   res.writeHead(404);res.end('Not found');
  }catch(e){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:e.message}));}

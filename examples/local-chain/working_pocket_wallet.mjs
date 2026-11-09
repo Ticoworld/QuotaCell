@@ -5,7 +5,7 @@ const $=id=>document.getElementById(id);
 const K='0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 // CCC's client must not fall back to a public testnet endpoint for this app.
 const client=new c.ClientPublicTestnet({url:location.origin+'/api/ckb',fallbacks:[]});
-let connector, signer, walletName, generation=0;
+let connector, signer, walletName, generation=0, networkLabel='isolated dev chain';
 const status=s=>{$('walletStatus').textContent=s;};
 async function account(){
  if(!signer || !await signer.isConnected())throw Error('Wallet disconnected or wrong network. Select CKB testnet in the wallet.');
@@ -21,7 +21,7 @@ async function account(){
 }
 async function update(){
  const current=++generation;
- try{const a=await account();if(current!==generation)return;const response=await fetch('/api/state');const state=await response.json();const role=a.publicKey===state.owner?'owner':state.delegates?.find(d=>d.publicKey===a.publicKey)?.role||'unrecognized';status(`Connected: ${a.address} · ${role} · wallet testnet; application isolated dev chain. Signing compatibility is verified per transaction.`);}catch(e){if(current===generation)status(e.message);}
+ try{const a=await account();if(current!==generation)return;const response=await fetch('/api/state');const state=await response.json();networkLabel=state.networkMode?.startsWith('pudge')?'Pudge testnet':'isolated dev chain';const role=a.publicKey===state.owner?'owner':state.delegates?.find(d=>d.publicKey===a.publicKey)?.role||'unrecognized';status(`Connected: ${a.address} · ${role} · wallet testnet; application ${networkLabel}. Signing compatibility is verified per transaction.`);}catch(e){if(current===generation)status(e.message);}
 }
 $('connectWallet').onclick=()=>{
  if(connector){connector.hidden=false;return;}connector=document.createElement('ccc-connector');connector.client=client;connector.name='QuotaCell local experiment';connector.hideKhie=true;
@@ -37,7 +37,7 @@ async function authorize(endpoint,terms){
  const tx=c.Transaction.fromBytes(request.transaction);
  const showCKB=n=>{n=BigInt(n);const f=(n%100000000n).toString().padStart(8,'0').replace(/0+$/,'');return (n/100000000n).toString()+(f?'.'+f:'');};
  const details=tx.outputs.map((o,i)=>`Output ${i+1}: ${showCKB(o.capacity)} CKB to ${o.lock.codeHash} / ${o.lock.hashType} / ${o.lock.args}`).join('\n');
- if(!window.confirm(`Review ${endpoint.split('/').pop()} transaction on isolated dev chain\nSigner: ${a.address}\nFee: ${showCKB(request.fee)} CKB\n${details}\n\nContinue to wallet approval?`))throw Error('Rejected before wallet approval');
+ if(!window.confirm(`Review ${endpoint.split('/').pop()} transaction on ${networkLabel}\nSigner: ${a.address}\nFee: ${showCKB(request.fee)} CKB\n${details}\n\nContinue to wallet approval?`))throw Error('Rejected before wallet approval');
  $('status').textContent='Approve the transaction in your wallet.';
  const signed=await selected.signOnlyTransaction(c.Transaction.fromBytes(request.transaction));
  const after=await account();if(selected!==signer||version!==generation||after.publicKey!==a.publicKey||$('signingMode').value!=='external')throw Error('Wallet or signing mode changed during signing.');

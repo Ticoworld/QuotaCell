@@ -8,7 +8,7 @@ const K='0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 const toScript=s=>c.Script.from({codeHash:s.code_hash??s.codeHash,hashType:s.hash_type??s.hashType,args:s.args});
 const num=x=>'0x'+BigInt(x).toString(16);
 const read128=(b,o)=>b.readBigUInt64LE(o)+(b.readBigUInt64LE(o+8)<<64n);
-function validate(cell,policy,expected){
+export function validatePolicy(cell,policy,expected){
  const output=cell.output;assert(output.type&&toScript(output.type).eq(policy),'Policy identity mismatch');
  assert(toScript(output.lock).eq(c.Script.from({codeHash:A,hashType:'data1',args:'0x'})),'Policy lock mismatch');
  const terminal=Buffer.from(cell.data.content.slice(2),'hex');
@@ -54,5 +54,5 @@ export async function discoverPolicy({rpc,policy:policyLike,expected,maxBlocks=1
  assert.equal(await rpc('get_block_hash',[tip.number]),tip.hash,'Chain reorganized during scan');
  assert.equal(candidates.length,1,candidates.length?'Ambiguous live policy':'Policy not found');
  const found=candidates[0],latest=await rpc('get_live_cell',[found.outPoint,true]);assert.equal(latest.status,'live','Policy became stale');assert.deepEqual(latest.cell,found.cell,'Policy changed during scan');
- const state=validate(found.cell,policy,expected);return {outPoint:found.outPoint,blockHash:found.blockHash,blockNumber:found.blockNumber,policyHash:policy.hash(),typeId:policy.args,state,scanTip:tip.hash};
+ const state=validatePolicy(found.cell,policy,expected);return {outPoint:found.outPoint,blockHash:found.blockHash,blockNumber:found.blockNumber,policyHash:policy.hash(),typeId:policy.args,state,scanTip:tip.hash};
 }

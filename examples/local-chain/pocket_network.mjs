@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 export const PUDGE_GENESIS='0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606';
 export async function verifyNetwork({mode,url,rpc,expectedGenesis,developmentSigner}){
- assert(['isolated','pudge-readonly'].includes(mode),'Select isolated or pudge-readonly profile');
+ assert(['isolated','pudge-readonly','pudge'].includes(mode),'Select isolated, pudge-readonly or pudge profile');
  if(mode==='isolated'){
   assert.match(url,/^http:\/\/127\.0\.0\.1:\d+$/,'Isolated RPC must be loopback');
   assert.equal((await rpc('get_consensus')).id,'ckb_dev','Only isolated CKB dev chains are allowed');
