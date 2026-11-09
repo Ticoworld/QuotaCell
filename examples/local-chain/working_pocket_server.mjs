@@ -1,6 +1,8 @@
 // Disposable local development only. Never use with real keys or funds.
 import * as c from '@ckb-ccc/core';
 import {DatabaseSync} from 'node:sqlite';
+import {verifyNetwork} from './pocket_network.mjs';
+import {parseCkb,recipientArgs} from './pocket_input.mjs';
 import {buildGenesis} from './pocket_genesis.mjs';
 import {discoverPolicy} from './pocket_discovery.mjs';
 import {discoverPlainCells} from './pocket_cell_discovery.mjs';
@@ -29,7 +31,7 @@ if(!initial&&descriptor){initial=descriptor.initial;actors=descriptor.actors;}
 assert(Boolean(initial)===Boolean(actors),'Development context and actors must be supplied together');
 const environment=deployment||initial;
 assert(environment,'A public deployment.json is required when no development Pocket exists');
-assert.match(runtime.url,/^http:\/\/127\.0\.0\.1:\d+$/);
+const networkMode=process.env.QUOTACELL_NETWORK||'isolated';
 const K='0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 const hashes={A:'0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1',F:'0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a',Q:'0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e',Kcode:'0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',Kdata:'0x9799bee251b975b82c45a02154ce28cec89c5853ecc14d12b7b8cccfc19e0af4'};
 const buf=h=>Buffer.from(h.slice(2),'hex');
@@ -45,10 +47,7 @@ async function rpc(method,params=[]){
 }
 async function live(p){const x=await rpc('get_live_cell',[point(p),true]);assert.equal(x.status,'live','Input is stale');return {...x,outPoint:p};}
 async function verifyEnvironment(){
- assert.equal((await rpc('get_consensus')).id,'ckb_dev','Only isolated CKB dev chains are allowed');
- assert.equal(await rpc('get_block_hash',['0x0']),profile.genesisHeader.hash,'Unexpected genesis');
- await rpc('set_network_active',[false]);
- assert.equal((await rpc('get_peers')).length,0,'Node must have no peers');
+ await verifyNetwork({mode:networkMode,url:runtime.url,rpc,expectedGenesis:profile.genesisHeader.hash,developmentSigner});
  for(const n of ['A','F','Q']){const x=await live(environment.deployed[n]);assert.equal(c.hashCkb(buf(x.cell.data.content)),hashes[n],`Wrong ${n} dependency`);}
  const group=await live(environment.kdep.outPoint),data=buf(group.cell.data.content);assert.equal(data.length,76);
  const members=[0,1].map(j=>({txHash:hex(data.subarray(4+j*36,36+j*36)),index:data.readUInt32LE(36+j*36)}));
@@ -101,6 +100,7 @@ async function snapshot(){
  return {state,p,f,unresolved,closed,view:{pocket:c.Script.from(initial.Q).hash(),genesis:profile.genesisHeader.hash,owner:actors.owner.publicKey,policyOutpoint:state.policy,fundShannons:f?BigInt(f.cell.output.capacity).toString():'0',fundOccupiedShannons:f?'7300000000':'0',sharedLimit:closed?'0':u(8).toString(),sharedUsed:closed?'0':u(24).toString(),delegates,closed,hasFund:!!f,policyCapacity:p.cell.output.capacity,history:rows().map(({id,tx_hash,state,amount,recipient,created,actor,operation})=>({id,tx_hash,state,amount,recipient,created,actor,operation})),unresolved}};
 }
 const lockFor=publicKey=>c.Script.from({codeHash:K,hashType:'type',args:c.hashCkb(buf(publicKey)).slice(0,42)});
+async function transactionFee(tx){let total=0n;for(const i of tx.inputs){const cell=await live(i.previousOutput);total+=BigInt(cell.cell.output.capacity);}return (total-tx.outputs.reduce((sum,o)=>sum+o.capacity,0n)).toString();}
 async function prepareGenesis(body){
  assert(!busy,'Another action is in progress');busy=true;
  try{
@@ -115,7 +115,7 @@ async function prepareGenesis(body){
   const next={...environment,Q:{codeHash:built.policy.codeHash,hashType:built.policy.hashType,args:built.policy.args},F:{codeHash:hashes.F,hashType:'data1',args:built.policy.hash()},policy:{txHash:tx.hash(),index:0},ownerFee:{txHash:tx.hash(),index:1},fund:null,seeds:{},expected:{ownerPublicKey:body.publicKey,delegates:body.delegates,sharedLimit:body.sharedLimit}};
   const identities=Object.fromEntries([['owner',body.publicKey],...body.delegates.map((d,i)=>[i?'ben':'alice',d.publicKey])].map(([role,publicKey])=>[role,{publicKey,lock:JSON.parse(JSON.stringify(lockFor(publicKey)))}]));
   requests.set(body.id,{bytes:tx.toHex(),message:info.message,position:0,publicKey:body.publicKey,points:[ownerInput.outPoint],pocket:built.policy.hash(),amount:'0',recipient:lockFor(body.publicKey).args,operation:'genesis',expires:Date.now()+300000,next,identities});
-  return {id:body.id,transaction:tx.toHex(),publicKey:body.publicKey,genesis:profile.genesisHeader.hash};
+  return {id:body.id,transaction:tx.toHex(),publicKey:body.publicKey,genesis:profile.genesisHeader.hash,fee:await transactionFee(tx)};
  }finally{busy=false;}
 }
 async function prepareExternal(body){
@@ -123,16 +123,16 @@ async function prepareExternal(body){
  try{
   for(const [id,request] of requests)if(request.expires<=Date.now())requests.delete(id);
   assert(requests.size<128,'Too many outstanding signing requests');
-  assert.match(body.id||'',/^[0-9a-f-]{36}$/);assert.match(body.amount||'',/^[0-9]{1,12}$/);assert.match(body.recipient||'',/^0x[0-9a-f]{40}$/);
+  assert.match(body.id||'',/^[0-9a-f-]{36}$/);body.recipient=await recipientArgs(body.recipient,new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}));
   assert(['alice','ben'].includes(body.role),'Unknown delegate');assert(!requests.has(body.id)&&!rows().some(x=>x.id===body.id),'Intent already exists');
   await verifyEnvironment();const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain');
   const grant=snap.view.delegates.find(d=>d.role===body.role);assert.equal(body.recipient,grant.recipient,'Recipient changed');
   assert.equal(body.publicKey,grant.publicKey,'Connected account is not the selected delegate');
-  const actor=await live(snap.state.seeds[body.role]),amount=BigInt(body.amount)*100000000n;
+  const actor=await live(snap.state.seeds[body.role]),amount=parseCkb(body.amount);
   const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:2000n});
   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]});const lock=c.Script.from(actors[body.role].lock),info=await tx.getSignHashInfo(lock,client);assert.equal(info.position,1);
   const record={bytes:tx.toHex(),message:info.message,position:info.position,publicKey:grant.publicKey,points:[snap.state.policy,snap.state.seeds[body.role],snap.state.fund],pocket:snap.view.pocket,amount:amount.toString(),recipient:body.recipient,operation:'pay',expires:Date.now()+300000};
-  requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash};
+  requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash,fee:await transactionFee(tx)};
  }finally{busy=false;}
 }
 async function submitExternal(body){
@@ -156,11 +156,11 @@ async function pay(body){
  assert(developmentSigner,'Development signer is disabled');
  if(busy)throw new Error('Another action is in progress');busy=true;
  try{
-  assert.match(body.id||'',/^[0-9a-f-]{36}$/);assert.match(body.amount||'',/^[0-9]{1,12}$/);assert.match(body.recipient||'',/^0x[0-9a-f]{40}$/);
+  assert.match(body.id||'',/^[0-9a-f-]{36}$/);body.recipient=await recipientArgs(body.recipient,new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}));
   assert(!rows().some(x=>x.id===body.id),'Intent already exists; reconcile the existing transaction');
   await verifyEnvironment();const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain; reconcile before another payment');
   assert(['alice','ben'].includes(body.role),'Unknown delegate');const grant=snap.view.delegates.find(d=>d.role===body.role);assert.equal(body.recipient,grant.recipient,'Recipient changed; review the live policy');
-  const amount=BigInt(body.amount)*100000000n;
+  const amount=parseCkb(body.amount);
   const actor=await live(snap.state.seeds[body.role]);const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:2000n});
   assert.equal(tx.outputs[2].capacity,amount);assert.equal(tx.outputs[2].lock.args,body.recipient);
   const acp=await new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}).getKnownScript(c.KnownScript.AnyoneCanPay);
@@ -194,7 +194,7 @@ async function ownerAction(body,external=false){
    assert(!snap.closed&&snap.f,'An active funded pocket is required');const terminal=Buffer.concat([Buffer.from('5143543404000100','hex'),buf(actors.owner.lock.args)]);const released=policyOut.capacity-13400000000n;
    inputs=[snap.state.policy,snap.state.ownerFee,snap.state.fund];amount=BigInt(snap.f.cell.output.capacity);outputs=[{...policyOut,capacity:13400000000n},{capacity:amount,lock:ownerLock},{capacity:ownerCap+released-fee,lock:ownerLock}];data=[hex(terminal),'0x','0x'];action='0x5143413104ff0000';position=1;
   }else if(op==='deposit'){
-   assert(!snap.f,'Pocket already has a protected fund');assert.match(body.amount||'',/^[0-9]{1,12}$/);amount=BigInt(body.amount)*100000000n;assert(amount>=7300000000n,'Deposit below occupied capacity');
+   assert(!snap.f,'Pocket already has a protected fund');amount=parseCkb(body.amount);assert(amount>=7300000000n,'Deposit below occupied capacity');
    inputs=[snap.state.ownerFee];outputs=[{capacity:amount,lock:c.Script.from(initial.F)},{capacity:ownerCap-amount-fee,lock:ownerLock}];data=['0x','0x'];position=0;
   }else{
    assert(snap.closed&&snap.f,'No tracked late deposit');amount=BigInt(snap.f.cell.output.capacity);inputs=[snap.state.policy,snap.state.ownerFee,snap.state.fund];outputs=[policyOut,{capacity:amount,lock:ownerLock},{capacity:ownerCap-fee,lock:ownerLock}];data=[hex(old),'0x','0x'];action='0x5143413105ff0000';position=1;
@@ -209,7 +209,7 @@ async function ownerAction(body,external=false){
    for(const [id,request] of requests)if(request.expires<=Date.now())requests.delete(id);
    assert(requests.size<128,'Too many outstanding signing requests');
    const record={bytes:tx.toHex(),message:info.message,position,publicKey:actors.owner.publicKey,points:inputs,pocket:snap.view.pocket,amount:amount.toString(),recipient:actors.owner.lock.args,operation:op,expires:Date.now()+300000};
-   requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash};
+   requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash,fee:await transactionFee(tx)};
   }
   const secret=await load('keys/owner'),signer=new c.SignerCkbPrivateKey(client,secret.privateKey);assert.equal(signer.publicKey,actors.owner.publicKey);
   const signed=await signWithCkbWallet({signer,prepared:tx,actorLock:ownerLock,publicKey:signer.publicKey,message:info.message,position});for(const p of inputs)await live(p);
@@ -233,6 +233,7 @@ const server=http.createServer(async(req,res)=>{
    const result=await rpc(call.method,call.params||[]);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:call.id,result}));return;
   }
   if(req.method==='GET'&&req.url==='/api/state'){const s=initial?await snapshot():{view:{empty:true,genesis:profile.genesisHeader.hash,developmentSigner}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(s.view));return;}
+  if(req.method==='POST'&&networkMode==='pudge-readonly'&&req.url!=='/api/ckb')throw new Error('Pudge transactions are disabled pending dependency and wallet qualification');
   if(req.method==='POST'&&['/api/external/genesis','/api/external/prepare','/api/external/owner','/api/external/submit'].includes(req.url)){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');let body='';for await(const chunk of req){body+=chunk;assert(body.length<210000);}
    const input=JSON.parse(body);const result=await (req.url.endsWith('/genesis')?prepareGenesis(input):req.url.endsWith('/owner')?ownerAction(input,true):req.url.endsWith('/prepare')?prepareExternal(input):submitExternal(input));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));return;
@@ -252,4 +253,4 @@ const server=http.createServer(async(req,res)=>{
   res.writeHead(404);res.end('Not found');
  }catch(e){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:e.message}));}
 });
-server.listen(port,'127.0.0.1',()=>console.log(`Working Pocket development app: ${origin}`));
+server.listen(port,'127.0.0.1',()=>console.log(`Working Pocket ${networkMode}: ${origin}`));

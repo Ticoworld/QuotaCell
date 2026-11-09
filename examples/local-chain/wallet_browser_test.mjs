@@ -13,7 +13,7 @@ const other=JSON.parse(await fs.readFile(path.join(run,'keys/ben.json'))).privat
 const provider=(await build({entryPoints:[new URL('./wallet_sim_provider.mjs',import.meta.url).pathname.replace(/^\/(\w:)/,'$1')],bundle:true,write:false,platform:'browser',format:'iife'})).outputFiles[0].text;
 const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'});
 async function pageFor(chain='CKB'){
- const page=await browser.newPage();await page.addInitScript({content:`window.__testKey=${JSON.stringify(key)};window.__otherTestKey=${JSON.stringify(other)};`+provider});
+ const page=await browser.newPage();page.on('dialog',dialog=>dialog.accept());await page.addInitScript({content:`window.__testKey=${JSON.stringify(key)};window.__otherTestKey=${JSON.stringify(other)};`+provider});
  await page.goto(url);await page.locator('#connectWallet').click();await page.getByText('UTXO Global Wallet',{exact:true}).first().click();await page.getByText(chain,{exact:true}).first().click();return page;
 }
 async function waitText(page,selector,regex){await page.waitForFunction(([s,r])=>new RegExp(r).test(document.querySelector(s).textContent),[selector,regex.source],{timeout:15000});return page.locator(selector).innerText();}

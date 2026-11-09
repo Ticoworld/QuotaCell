@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import {buildPayment} from './pocket_payment.ts';
 
@@ -9,6 +9,8 @@ const input={policy,actor,funds,deps,delegate:0,amount:10000000000n,fee:2000n};
 assert.equal(buildPayment(input).hash(),evidence.txHash);
 assert.throws(()=>buildPayment({...input,amount:10100000000n}),/limits/);
 assert.throws(()=>buildPayment({...input,fee:1000001n}),/fee/);
+const lowFund=structuredClone(funds);lowFund[0].cell.output.capacity='0x'+(172n*100000000n).toString(16);
+assert.throws(()=>buildPayment({...input,funds:[lowFund[0]]}),/insufficient protected change/);
 const altered=structuredClone(funds);altered[0].cell.output.lock.args='0x'+'00'.repeat(32);
 assert.throws(()=>buildPayment({...input,funds:altered}),/fund identity/);
 assert.throws(()=>buildPayment({...input,actor:funds[0]}),/actor input/);

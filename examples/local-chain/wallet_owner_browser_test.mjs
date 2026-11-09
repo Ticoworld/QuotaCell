@@ -10,7 +10,7 @@ const key=JSON.parse(await fs.readFile(path.join(run,'keys/owner.json'))).privat
 const provider=(await build({entryPoints:[new URL('./wallet_sim_provider.mjs',import.meta.url).pathname.replace(/^\/(\w:)/,'$1')],bundle:true,write:false,platform:'browser',format:'iife'})).outputFiles[0].text;
 const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'});
 try{
- const p=await browser.newPage();await p.addInitScript({content:`window.__testKey=${JSON.stringify(key)};window.__otherTestKey=${JSON.stringify(other)};`+provider});await p.goto(url);
+ const p=await browser.newPage();p.on('dialog',dialog=>dialog.accept());await p.addInitScript({content:`window.__testKey=${JSON.stringify(key)};window.__otherTestKey=${JSON.stringify(other)};`+provider});await p.goto(url);
  await p.locator('#connectWallet').click();await p.getByText('UTXO Global Wallet',{exact:true}).first().click();await p.getByText('CKB',{exact:true}).first().click();
  async function status(pattern){await p.waitForFunction(r=>new RegExp(r).test(document.querySelector('#status').textContent),pattern.source,{timeout:20000});return p.locator('#status').innerText();}
  await p.waitForFunction(()=>document.querySelector('#walletStatus').textContent.includes('· owner ·'),null,{timeout:15000});

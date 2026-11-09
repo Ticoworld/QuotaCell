@@ -22,7 +22,7 @@ const require=createRequire(import.meta.url),{chromium}=require(process.env.PLAY
 const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe'});
 const provider=(await build({entryPoints:[path.join(here,'wallet_sim_provider.mjs')],bundle:true,write:false,platform:'browser',format:'iife'})).outputFiles[0].text;
 const pages=[];const publicKeys=[];
-for(let i=0;i<3;i++){const page=await browser.newPage();await page.goto('about:blank');await page.evaluate(()=>window.name=Array.from(crypto.getRandomValues(new Uint8Array(32)),x=>x.toString(16).padStart(2,'0')).join(''));const seeded="window.__testKey='0x'+window.name;"+provider;await page.evaluate(seeded);publicKeys.push(await page.evaluate(()=>window.testWallet.publicKey));await page.addInitScript({content:seeded});pages.push(page);}
+for(let i=0;i<3;i++){const page=await browser.newPage();page.on('dialog',dialog=>dialog.accept());await page.goto('about:blank');await page.evaluate(()=>window.name=Array.from(crypto.getRandomValues(new Uint8Array(32)),x=>x.toString(16).padStart(2,'0')).join(''));const seeded="window.__testKey='0x'+window.name;"+provider;await page.evaluate(seeded);publicKeys.push(await page.evaluate(()=>window.testWallet.publicKey));await page.addInitScript({content:seeded});pages.push(page);}
 const publicKey=publicKeys[0];
 const K='0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',CKB=100000000n;
 const key=()=>new c.SignerCkbPrivateKey(new c.ClientPublicTestnet({url:'http://127.0.0.1:1',fallbacks:[]}), '0x'+crypto.randomBytes(32).toString('hex'));
@@ -74,14 +74,25 @@ try{
   const appURL=`http://127.0.0.1:${appPort}`;
   for(const p of pages){await p.goto(appURL);await p.locator('#connectWallet').click();await p.getByText('UTXO Global Wallet',{exact:true}).first().click();await p.getByText('CKB',{exact:true}).first().click();await p.waitForFunction(()=>document.querySelector('#walletStatus').textContent.includes('Connected:'));}
   const terms={sharedLimit:String(250n*CKB),delegates:publicKeys.slice(1).map((publicKey,i)=>({publicKey,recipient:JSON.parse(JSON.stringify(lock(other[i].publicKey))),limit:String(200n*CKB),perPayment:String(100n*CKB)}))};
-  const ownerPage=pages[0];await ownerPage.locator('#genesisTerms').fill(JSON.stringify(terms));await ownerPage.locator('#createPocket').click();
+  const ownerPage=pages[0];await ownerPage.locator('#genesisTerms').fill(JSON.stringify({sharedLimit:'250',delegates:terms.delegates.map(d=>({publicKey:d.publicKey,recipient:d.recipient.args,limit:'200',perPayment:'100'}))}));await ownerPage.locator('#createPocket').click();
   const committed=async p=>{await p.waitForFunction(()=>/^committed:/.test(document.querySelector('#status').textContent),null,{timeout:45000}).catch(async e=>{throw Error(await p.locator('#status').innerText());});console.log(await p.locator('#status').innerText());};
   await committed(ownerPage);
   await ownerPage.locator('#depositAmount').fill('500');
   await ownerPage.locator('#status').evaluate(e=>e.textContent='');await ownerPage.locator('#deposit').click();await committed(ownerPage);
   for(const [i,p] of pages.slice(1).entries()){
    await p.reload();await p.locator('#connectWallet').click();await p.getByText('UTXO Global Wallet',{exact:true}).first().click();await p.getByText('CKB',{exact:true}).first().click();
-   await p.locator('#role').selectOption(i?'ben':'alice');await p.locator('#amount').fill('100');await p.locator('#to').fill(terms.delegates[i].recipient.args);await p.locator('#pay').click();await committed(p);
+   await p.locator('#role').selectOption(i?'ben':'alice');await p.locator('#amount').fill(i?'100':'99.00000001');
+   const address=c.Address.fromScript(lock(other[i].publicKey),new c.ClientPublicTestnet({url:'http://127.0.0.1:1',fallbacks:[]})).toString();await p.locator('#to').fill(address);
+   if(i===0){
+    const rejected=async(mode,pattern)=>{await p.locator('#status').evaluate(e=>e.textContent='');await p.evaluate(mode=>window.testWallet.mode=mode,mode);await p.locator('#pay').click();await p.waitForFunction(pattern=>new RegExp(pattern).test(document.querySelector('#status').textContent),pattern,{timeout:20000});};
+    await rejected('reject','Authorization rejected');await rejected('mutate','Wallet altered transaction fields');
+    await p.evaluate(()=>{window.testWallet.mode='ok';window.testWallet.network='nervos'});await p.locator('#status').evaluate(e=>e.textContent='');await p.locator('#pay').click();await p.waitForFunction(()=>document.querySelector('#status').textContent.includes('wrong network'));
+    await p.evaluate(()=>window.testWallet.network='nervos_testnet');await rejected('switch','Wallet.*changed|not the selected delegate');
+    await p.reload();await p.locator('#connectWallet').click();await p.getByText('UTXO Global Wallet',{exact:true}).first().click();await p.getByText('CKB',{exact:true}).first().click();await p.locator('#amount').fill('99.00000001');await p.locator('#to').fill(address);
+    await rejected('disconnect','disconnected|changed');
+    await p.reload();await p.locator('#connectWallet').click();await p.getByText('UTXO Global Wallet',{exact:true}).first().click();await p.getByText('CKB',{exact:true}).first().click();await p.locator('#amount').fill('99.00000001');await p.locator('#to').fill(address);console.log('simulated wallet negative checks PASS');
+   }
+   await p.locator('#pay').click();await committed(p);
   }
 app.kill();await new Promise(r=>app.once('exit',r));node.kill();await new Promise(r=>node.once('exit',r));
   node=spawn(exe,['-C',run,'run'],{stdio:'ignore',windowsHide:true});
@@ -89,7 +100,7 @@ app.kill();await new Promise(r=>app.once('exit',r));node.kill();await new Promis
   app=spawn(process.execPath,['--experimental-strip-types',path.join(here,'working_pocket_server.mjs'),run,String(appPort)],{stdio:'ignore',env:{...process.env,QUOTACELL_DEV_SIGNER:'0'},windowsHide:true});
   let reopened;
   for(let i=0;i<100;i++){try{const response=await fetch(appURL+'/api/state');reopened=await response.json();if(response.ok)break;}catch{}await sleep(100);}
-  assert.equal(reopened.closed,false);assert.equal(reopened.sharedUsed,String(200n*CKB));assert.equal(reopened.fundShannons,String(300n*CKB));console.log('active node/server restart PASS');
+  assert.equal(reopened.closed,false);assert.equal(reopened.sharedUsed,String(199n*CKB+1n));assert.equal(reopened.fundShannons,String(301n*CKB-1n));console.log('active node/server restart PASS');
   await ownerPage.reload();await ownerPage.locator('#connectWallet').click();await ownerPage.getByText('UTXO Global Wallet',{exact:true}).first().click();await ownerPage.getByText('CKB',{exact:true}).first().click();
   for(const op of ['revoke','close','deposit','sweep']){ await ownerPage.locator('#status').evaluate(e=>e.textContent='');await ownerPage.locator('#'+op).click();await committed(ownerPage);
    if(op==='revoke'){

@@ -1,5 +1,6 @@
 // Browser wallet access only. This module never requests or exports private keys.
 import * as c from '@ckb-ccc/connector';
+import {parseCkb,recipientArgs} from './pocket_input.mjs';
 const $=id=>document.getElementById(id);
 const K='0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 // CCC's client must not fall back to a public testnet endpoint for this app.
@@ -33,6 +34,10 @@ async function authorize(endpoint,terms){
  const selected=signer,version=generation,a=await account();$('status').textContent='Preparing transaction for wallet approval…';
  const request=await post(endpoint,{id:crypto.randomUUID(),...terms,publicKey:a.publicKey});
  if(selected!==signer||version!==generation)throw Error('Wallet changed before signing.');
+ const tx=c.Transaction.fromBytes(request.transaction);
+ const showCKB=n=>{n=BigInt(n);const f=(n%100000000n).toString().padStart(8,'0').replace(/0+$/,'');return (n/100000000n).toString()+(f?'.'+f:'');};
+ const details=tx.outputs.map((o,i)=>`Output ${i+1}: ${showCKB(o.capacity)} CKB to ${o.lock.codeHash} / ${o.lock.hashType} / ${o.lock.args}`).join('\n');
+ if(!window.confirm(`Review ${endpoint.split('/').pop()} transaction on isolated dev chain\nSigner: ${a.address}\nFee: ${showCKB(request.fee)} CKB\n${details}\n\nContinue to wallet approval?`))throw Error('Rejected before wallet approval');
  $('status').textContent='Approve the transaction in your wallet.';
  const signed=await selected.signOnlyTransaction(c.Transaction.fromBytes(request.transaction));
  const after=await account();if(selected!==signer||version!==generation||after.publicKey!==a.publicKey||$('signingMode').value!=='external')throw Error('Wallet or signing mode changed during signing.');
@@ -47,4 +52,4 @@ window.quotaWallet={
  owner:operation=>run(operation,'/api/external/owner',{operation,amount:$('depositAmount').value})
 };
 
-$('createPocket').onclick=()=>{try{const terms=JSON.parse($('genesisTerms').value);void run('genesis','/api/external/genesis',terms);}catch(e){$('status').textContent=e.message;}};
+$('createPocket').onclick=async()=>{try{const terms=JSON.parse($('genesisTerms').value);terms.sharedLimit=parseCkb(terms.sharedLimit).toString();for(const d of terms.delegates){const args=await recipientArgs(d.recipient,client);d.recipient={codeHash:K,hashType:'type',args};d.limit=parseCkb(d.limit).toString();d.perPayment=parseCkb(d.perPayment).toString();}await run('genesis','/api/external/genesis',terms);}catch(e){$('status').textContent=e.message;}};
