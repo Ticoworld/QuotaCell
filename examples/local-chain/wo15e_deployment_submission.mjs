@@ -1,0 +1,33 @@
+import * as c from '@ckb-ccc/core';
+import assert from 'node:assert/strict';
+import {verifyWalletTransaction} from './pocket_signing.mjs';
+import {PUDGE_GENESIS} from './pocket_network.mjs';
+import {Q_HASH,K_DEP,ownerLock} from './wo15e_acceptance_builder.mjs';
+const num=n=>'0x'+BigInt(n).toString(16),point=p=>({tx_hash:p.txHash,index:num(p.index)}),script=s=>({code_hash:s.codeHash,hash_type:s.hashType,args:s.args});
+const raw=t=>({version:num(t.version),cell_deps:t.cellDeps.map(d=>({out_point:point(d.outPoint),dep_type:d.depType==='depGroup'?'dep_group':'code'})),header_deps:t.headerDeps,inputs:t.inputs.map(i=>({since:num(i.since),previous_output:point(i.previousOutput)})),outputs:t.outputs.map(o=>({capacity:num(o.capacity),lock:script(o.lock),type:o.type?script(o.type):null})),outputs_data:t.outputsData,witnesses:t.witnesses});
+async function network(rpc){assert.equal((await rpc('get_consensus')).id,'ckb_testnet','Wrong network');assert.equal(await rpc('get_block_hash',['0x0']),PUDGE_GENESIS,'Wrong genesis');}
+/** The durable record callback must flush metadata before resolving. Never persist signed bytes. */
+export async function prepareReviewedDeployment({rpc,prepared,signed,publicKey,message,record,verifyDependencies}){
+ assert.equal(typeof record,'function','A durable metadata journal is required');assert.equal(typeof verifyDependencies,'function','Dependency verification is required');await network(rpc);await verifyDependencies();
+ const original=c.Transaction.fromBytes(prepared.toBytes()),authorized=c.Transaction.fromBytes(signed.toBytes()),owner=ownerLock(publicKey);
+ assert.equal(original.witnesses.length,1,'Unexpected witness count');const w=original.getWitnessArgs(0);assert.equal(w.lock,'0x'+'00'.repeat(65),'Expected unsigned witness');assert(!w.inputType&&!w.outputType,'Unexpected witness fields');const wb=Buffer.from(original.witnesses[0].slice(2),'hex'),len=Buffer.alloc(8);len.writeBigUInt64LE(BigInt(wb.length));const derived=c.hashCkb(Buffer.concat([Buffer.from(original.hash().slice(2),'hex'),len,wb]));assert.equal(message,derived,'Prepared signing digest mismatch');verifyWalletTransaction({prepared:original,signed:authorized,message:derived,publicKey,position:0});
+ assert.equal(BigInt(original.version),0n);assert.equal(original.inputs.length,1);assert.equal(BigInt(original.inputs[0].since),0n);assert.equal(original.outputs.length,2);assert.equal(original.cellDeps.length,1);assert.equal(original.cellDeps[0].depType,'depGroup');assert.equal(original.cellDeps[0].outPoint.txHash,K_DEP.outPoint.txHash);assert.equal(BigInt(original.cellDeps[0].outPoint.index),0n);assert.equal(original.headerDeps.length,0);
+ assert.equal(original.outputs[0].capacity,2366100000000n);for(const out of original.outputs){assert(out.lock.eq(owner),'Owner lock mismatch');assert(!out.type,'Unexpected output type');}assert(original.outputs[1].capacity>=6100000000n,'Insufficient change');assert.equal(original.outputsData[1],'0x');assert.equal(c.bytesFrom(original.outputsData[0]).length,23600);assert.equal(c.hashCkb(c.bytesFrom(original.outputsData[0])),Q_HASH,'Wrong Q bytes');
+ const input=point(original.inputs[0].previousOutput),live=await rpc('get_live_cell',[input,true]);assert.equal(live.status,'live','Stale funding input');const cell=live.cell;assert(!cell.output.type&&cell.data.content==='0x','Funding cell must be plain');assert(c.Script.from({codeHash:cell.output.lock.code_hash,hashType:cell.output.lock.hash_type,args:cell.output.lock.args}).eq(owner),'Funding lock mismatch');
+ const fee=BigInt(cell.output.capacity)-original.outputs.reduce((n,o)=>n+o.capacity,0n),rate=BigInt((await rpc('get_fee_rate_statistics',['0x65'])).median);assert(rate>0n&&fee>=0n&&fee*1000n>=BigInt(authorized.toBytes().length)*rate,'Insufficient fee');
+ const hash=authorized.hash(),signedRaw=raw(authorized);await rpc('dry_run_transaction',[signedRaw]);let used=false;
+ const review={hash,publicKey,input,fee:fee.toString(),rate:rate.toString(),codeHash:Q_HASH,codeCapacity:original.outputs[0].capacity.toString(),change:original.outputs[1].capacity.toString(),ownerLock:script(owner),network:'pudge'};
+ return {review,async submit({approvedHash,broadcastEnabled}){
+  assert(!used,'Transaction already attempted');assert(broadcastEnabled===true,'Broadcast disabled');assert.equal(approvedHash,hash,'Explicit approval must identify the reviewed transaction hash');used=true;
+  await network(rpc);await verifyDependencies();assert.equal((await rpc('get_live_cell',[input,true])).status,'live','Funding input became stale');const currentRate=BigInt((await rpc('get_fee_rate_statistics',['0x65'])).median);assert(currentRate>0n&&fee*1000n>=BigInt(authorized.toBytes().length)*currentRate,'Fee below current rate');await rpc('dry_run_transaction',[signedRaw]);
+  await record({...review,state:'uncertain',phase:'before-send'});
+  let state='uncertain';try{const actual=await rpc('send_transaction',[signedRaw]);if(actual===hash)state='submitted';}catch{}
+  await record({...review,state,phase:'after-send'});return {hash,state};
+ }};
+}
+/** Reconcile a known hash without signed transaction bytes or any resubmission. */
+export async function reconcileDeployment({rpc,hash,ownerPublicKey,record}){
+ try{await network(rpc);const tx=await rpc('get_transaction',[hash]);if(tx?.tx_status?.status!=='committed'){const state=['pending','proposed'].includes(tx?.tx_status?.status)?'pending':tx?.tx_status?.status==='rejected'?'rejected':'uncertain';await record({hash,state});return {hash,state};}
+  const h=await rpc('get_header',[tx.tx_status.block_hash]);assert(h&&await rpc('get_block_hash',[h.number])===h.hash,'Noncanonical deployment');const outPoint={tx_hash:hash,index:'0x0'},x=await rpc('get_live_cell',[outPoint,true]);assert.equal(x.status,'live','Deployed code cell is not live');assert.equal(c.bytesFrom(x.cell.data.content).length,23600,'Live Q length mismatch');assert.equal(c.hashCkb(c.bytesFrom(x.cell.data.content)),Q_HASH,'Live Q hash mismatch');assert(tx.transaction&&tx.transaction.outputs_data?.[0]===x.cell.data.content,'Deployment transaction data mismatch');assert.deepEqual(tx.transaction.outputs?.[0],x.cell.output,'Deployment transaction output mismatch');const l=x.cell.output.lock;assert(c.Script.from({codeHash:l.code_hash,hashType:l.hash_type,args:l.args}).eq(ownerLock(ownerPublicKey)),'Deployed owner lock mismatch');assert.equal(BigInt(x.cell.output.capacity),2366100000000n);assert(!x.cell.output.type,'Unexpected deployed type');const result={hash,state:'committed',blockHash:h.hash,blockNumber:h.number,outPoint,codeHash:Q_HASH};await record(result);return result;
+ }catch(e){const result={hash,state:'uncertain',reason:e.message};await record(result);return result;}
+}

@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+const sock=net.createServer();await new Promise(r=>sock.listen(0,'127.0.0.1',r));const port=sock.address().port;await new Promise(r=>sock.close(r));const dir=await fs.mkdtemp(path.join(os.tmpdir(),'quotacell-deployment-test-')),db=path.join(dir,'journal.sqlite');
+const app=spawn(process.execPath,['--experimental-strip-types',new URL('./wo15e_deployment_server.mjs',import.meta.url).pathname.replace(/^\/(\w:)/,'$1')],{env:{...process.env,QUOTACELL_DEPLOY_PORT:String(port),QUOTACELL_DEPLOY_JOURNAL:db},windowsHide:true,stdio:['ignore','pipe','pipe']});let errors='';app.stderr.on('data',b=>errors+=b);const base=`http://127.0.0.1:${port}`;
+try{let response;for(let i=0;i<100;i++){if(app.exitCode!==null)throw Error(errors);try{response=await fetch(base);if(response.ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}assert(response?.ok,errors);const html=await response.text();assert.match(html,/Separate broadcast approval/);assert.match(html,/could technically relay/);assert.match(html,/expires after five minutes/);assert.match(html,/Complete prepared transaction/);assert.match(await (await fetch(base+'/wallet.js')).text(),/signOnlyTransaction/);
+ const journal=await (await fetch(base+'/api/journal')).json();assert.deepEqual(journal,[]);const post=async(p,body,origin=base)=>{const r=await fetch(base+p,{method:'POST',headers:{'content-type':'application/json',origin},body:JSON.stringify(body)});return {status:r.status,body:await r.json()};};
+ assert.equal((await post('/api/ckb',{method:'send_transaction'})).status,400);assert.equal((await post('/api/broadcast',{approvedHash:'0x'+'11'.repeat(32),broadcastEnabled:true})).status,400);assert.equal((await post('/api/verify',{token:'invalid'})).status,400);assert.equal((await post('/api/prepare',{},'https://example.invalid')).status,400);assert.equal((await post('/api/reconcile',{hash:'0x'+'11'.repeat(32)})).status,400);
+ const evidence=JSON.parse(await fs.readFile(new URL('../../evidence/working-pocket-local/transactions.json',import.meta.url),'utf8'));const blocked=await post('/api/prepare',{operation:'deployment',publicKey:evidence.records[0].actor});assert.equal(blocked.status,400);assert.match(blocked.body.error,/sign-only/);assert.deepEqual(await (await fetch(base+'/api/journal')).json(),[]);
+ console.log('PASS isolated deployment UI routing, origin, sign-only prerequisite, broadcast gate and empty journal; no RPC calls');
+}finally{app.kill();await new Promise(r=>app.once('exit',r));for(const name of ['journal.sqlite','journal.sqlite-wal','journal.sqlite-shm'])await fs.unlink(path.join(dir,name)).catch(e=>{if(e.code!=='ENOENT')throw e;});await fs.rmdir(dir);}
