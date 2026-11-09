@@ -18,9 +18,11 @@ export async function prepareReviewedDeployment({rpc,prepared,signed,publicKey,m
  const hash=authorized.hash(),signedRaw=raw(authorized);await rpc('dry_run_transaction',[signedRaw]);let used=false;
  const review={hash,publicKey,input,fee:fee.toString(),rate:rate.toString(),codeHash:Q_HASH,codeCapacity:original.outputs[0].capacity.toString(),change:original.outputs[1].capacity.toString(),ownerLock:script(owner),network:'pudge'};
  return {review,async submit({approvedHash,broadcastEnabled}){
-  assert(!used,'Transaction already attempted');assert(broadcastEnabled===true,'Broadcast disabled');assert.equal(approvedHash,hash,'Explicit approval must identify the reviewed transaction hash');used=true;
-  await network(rpc);await verifyDependencies();assert.equal((await rpc('get_live_cell',[input,true])).status,'live','Funding input became stale');const currentRate=BigInt((await rpc('get_fee_rate_statistics',['0x65'])).median);assert(currentRate>0n&&fee*1000n>=BigInt(authorized.toBytes().length)*currentRate,'Fee below current rate');await rpc('dry_run_transaction',[signedRaw]);
-  await record({...review,state:'uncertain',phase:'before-send'});
+  assert(!used,'Transaction already attempted');assert(broadcastEnabled===true,'Broadcast disabled');assert.equal(approvedHash,hash,'Explicit approval must identify the reviewed transaction hash');
+  let phase='network identity';try{
+   await network(rpc);phase='dependency verification';await verifyDependencies();phase='funding input';assert.equal((await rpc('get_live_cell',[input,true])).status,'live','Funding input became stale');phase='fee statistics';const currentRate=BigInt((await rpc('get_fee_rate_statistics',['0x65'])).median);assert(currentRate>0n&&fee*1000n>=BigInt(authorized.toBytes().length)*currentRate,'Fee below current rate');phase='dry run';await rpc('dry_run_transaction',[signedRaw]);
+  }catch(cause){const error=new Error(`Pre-submission ${phase} failed: ${cause.message}`,{cause});error.preSubmission=true;throw error;}
+  used=true;await record({...review,state:'uncertain',phase:'before-send'});
   let state='uncertain';try{const actual=await rpc('send_transaction',[signedRaw]);if(actual===hash)state='submitted';}catch{}
   await record({...review,state,phase:'after-send'});return {hash,state};
  }};
