@@ -6,7 +6,7 @@ import http from 'node:http';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {build} from 'esbuild';
-import {discoverIndexed} from './pocket_indexed_discovery.mjs';
+import {findFundingCell} from './wo15e_funding_discovery.mjs';
 import {verifyWalletTransaction} from './pocket_signing.mjs';
 import {buildAcceptanceTransaction,ownerLock,K_DEP} from './wo15e_acceptance_builder.mjs';
 import {verifyNetwork,PUDGE_GENESIS} from './pocket_network.mjs';
@@ -27,9 +27,10 @@ const toRaw=t=>({version:'0x0',cell_deps:t.cellDeps.map(d=>({out_point:point(d.o
 let request,acceptedPublicKey;
 async function prepare(body){
  assert(['sign-only','deployment'].includes(body.operation));const owner=ownerLock(body.publicKey);if(body.operation==='deployment')assert.equal(body.publicKey,acceptedPublicKey,'Complete a verified sign-only check with this wallet first');await checkEnvironment();
- let found;for(let i=0;i<3;i++){try{found=await discoverIndexed({rpc,lock:owner});break;}catch(e){if(!/tip changed|lag or chain-tip mismatch|reorganized/.test(e.message)||i===2)throw e;}}
  const feeRate=BigInt((await rpc('get_fee_rate_statistics',['0x65'])).median);assert(feeRate>0n,'No fee estimate');
  let code;if(body.operation==='deployment')code=await fs.readFile(path.join(here,'../../policy/build/allowance-native-v2'));
+ const estimate=(feeRate*(code?26000n:2000n)+999n)/1000n,minimum=(code?23722n:61n)*100000000n+estimate;
+ let found;for(let i=0;i<3;i++){try{found=await findFundingCell({rpc,lock:owner,minimum});break;}catch(e){if(!/lag or chain-tip mismatch/.test(e.message)||i===2)throw e;}}
  const {tx,candidate:chosen,input,fee,codeCapacity:protectedCapacity,change}=buildAcceptanceTransaction({operation:body.operation,publicKey:body.publicKey,cells:found.cells,feeRate,code});
  const info=await tx.getSignHashInfo(owner,client);assert.equal(info.position,0);
  const token=crypto.randomUUID(),prepared=tx.toHex();request={token,publicKey:body.publicKey,prepared,message:info.message,point:chosen.outPoint,operation:body.operation,expires:Date.now()+300000};
