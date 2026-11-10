@@ -1,0 +1,62 @@
+{
+  "network": "pudge",
+  "genesis": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+  "kdep": {
+    "outPoint": {
+      "txHash": "0xf8de3bb47d055cdf460d93a2a6e1b05f7432f9777c8c474abf4eec1d4aee5d37",
+      "index": 0
+    },
+    "depType": "depGroup"
+  },
+  "deployed": {
+    "A": {
+      "txHash": "0xb4f171c9c9caf7401f54a8e56225ae21d95032150a87a4678eac3f66a3137b93",
+      "index": 0
+    },
+    "F": {
+      "txHash": "0xb4f171c9c9caf7401f54a8e56225ae21d95032150a87a4678eac3f66a3137b93",
+      "index": 1
+    },
+    "Q": {
+      "txHash": "0xd6654da12e92d44a37b9c48a7b27db325fa3e68cc50f3e17ce74a791523c00d0",
+      "index": 0
+    }
+  },
+  "allDeps": [
+    {
+      "outPoint": {
+        "txHash": "0xf8de3bb47d055cdf460d93a2a6e1b05f7432f9777c8c474abf4eec1d4aee5d37",
+        "index": 0
+      },
+      "depType": "depGroup"
+    },
+    {
+      "outPoint": {
+        "txHash": "0xb4f171c9c9caf7401f54a8e56225ae21d95032150a87a4678eac3f66a3137b93",
+        "index": 0
+      },
+      "depType": "code"
+    },
+    {
+      "outPoint": {
+        "txHash": "0xb4f171c9c9caf7401f54a8e56225ae21d95032150a87a4678eac3f66a3137b93",
+        "index": 1
+      },
+      "depType": "code"
+    },
+    {
+      "outPoint": {
+        "txHash": "0xd6654da12e92d44a37b9c48a7b27db325fa3e68cc50f3e17ce74a791523c00d0",
+        "index": 0
+      },
+      "depType": "code"
+    }
+  ],
+  "verification": {
+    "blockHash": "0xa04b7b4746537d9c7e6237caf81cbf15fff82f3e29fd4240dd7a479414b97b65",
+    "blockNumber": "0x15f33da",
+    "qDataHash": "0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e",
+    "qSha256": "f636bb5a9ddb7db41c73ab263a5b5483acae2e36c53afca2257a1cbc95d83997",
+    "verifiedBy": "primary and independent Pudge RPC"
+  }
+}
