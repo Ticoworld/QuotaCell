@@ -6,7 +6,7 @@ import {PUDGE_GENESIS} from './pocket_network.mjs';
 const Q='0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e';
 const script=s=>c.Script.from({codeHash:s.code_hash??s.codeHash,hashType:s.hash_type??s.hashType,args:s.args});
 const raw=s=>({code_hash:s.codeHash,hash_type:s.hashType,args:s.args});
-export async function discoverIndexed({rpc,lock,policy,expected,maxPages=100,pageSize=100}){
+export async function discoverIndexed({rpc,lock,policy,expected,includeUnsupported=false,maxPages=100,pageSize=100}){
  assert((await rpc('get_consensus')).id==='ckb_testnet','Wrong network');
  assert.equal(await rpc('get_block_hash',['0x0']),PUDGE_GENESIS,'Wrong network genesis');
  const tip=await rpc('get_tip_header'),indexed=await rpc('get_indexer_tip');
@@ -15,7 +15,7 @@ export async function discoverIndexed({rpc,lock,policy,expected,maxPages=100,pag
  assert(Number.isSafeInteger(maxPages)&&maxPages>0&&Number.isSafeInteger(pageSize)&&pageSize>0&&pageSize<=1000,'Invalid pagination bounds');
  const type=policy?'type':'lock',target=script(policy||lock);
  if(policy)assert(target.codeHash===Q&&target.hashType==='data2'&&/^0x[0-9a-f]{64}$/i.test(target.args),'Invalid QCN4 policy identity');
- const key={script:raw(target),script_type:type,script_search_mode:'exact',with_data:true,...(policy?{}:{filter:{script_len_range:['0x0','0x1'],output_data_len_range:['0x0','0x1']}})};let cursor;const cells=[],seen=new Set();let finished=false;
+ const key={script:raw(target),script_type:type,script_search_mode:'exact',with_data:true,...(policy||includeUnsupported?{}:{filter:{script_len_range:['0x0','0x1'],output_data_len_range:['0x0','0x1']}})};let cursor;const cells=[],unsupported=[],seen=new Set();let finished=false;
  for(let page=0;page<maxPages;page++){
   const args=[key,'asc','0x'+pageSize.toString(16)];if(cursor!==undefined)args.push(cursor);
   const result=await rpc('get_cells',args);assert(result&&Array.isArray(result.objects)&&typeof result.last_cursor==='string','Invalid indexer response');
@@ -29,7 +29,7 @@ export async function discoverIndexed({rpc,lock,policy,expected,maxPages=100,pag
    const header=await rpc('get_header',[tx.tx_status.block_hash]);assert(header&&header.number===item.block_number,'Indexed block mismatch');
    assert.equal(await rpc('get_block_hash',[header.number]),header.hash,'Noncanonical cell transaction');
    const n=Number(BigInt(point.index));assert.deepEqual(tx.transaction.outputs[n],output,'Transaction output mismatch');assert.equal(tx.transaction.outputs_data[n],live.cell.data.content,'Transaction data mismatch');
-   if(policy)validatePolicy(live.cell,target,expected);else assert(!output.type&&live.cell.data.content==='0x','Unsupported matching cell');
+   if(policy)validatePolicy(live.cell,target,expected);else if(output.type||live.cell.data.content!=='0x'){assert(includeUnsupported,'Unsupported matching cell');unsupported.push({outPoint:point,cell:live.cell,blockHash:header.hash,blockNumber:header.number});continue;}
    cells.push({outPoint:point,cell:live.cell,blockHash:header.hash,blockNumber:header.number});
   }
   if(result.objects.length<pageSize){finished=true;break;}
@@ -39,7 +39,7 @@ export async function discoverIndexed({rpc,lock,policy,expected,maxPages=100,pag
  const end=await rpc('get_indexer_tip');assert.deepEqual(end,indexed,'Indexer tip changed during scan');
  const nodeEnd=await rpc('get_tip_header');assert.equal(nodeEnd.hash,tip.hash,'Node tip changed during scan');
  assert.equal(await rpc('get_block_hash',[tip.number]),tip.hash,'Chain reorganized during scan');
- for(const item of cells){const current=await rpc('get_live_cell',[item.outPoint,true]);assert.equal(current.status,'live','Cell became stale');assert.deepEqual(current.cell,item.cell,'Cell changed during scan');}
+ for(const item of [...cells,...unsupported]){const current=await rpc('get_live_cell',[item.outPoint,true]);assert.equal(current.status,'live','Cell became stale');assert.deepEqual(current.cell,item.cell,'Cell changed during scan');}
  if(policy)assert.equal(cells.length,1,cells.length?'Ambiguous live policy':'Policy not found');
- return {cells,indexedTip:indexed,genesis:PUDGE_GENESIS};
+ return {cells,unsupported,indexedTip:indexed,genesis:PUDGE_GENESIS};
 }

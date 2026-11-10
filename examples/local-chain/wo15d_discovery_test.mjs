@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import * as c from '@ckb-ccc/core';
 import {discoverIndexed} from './pocket_indexed_discovery.mjs';
@@ -17,6 +17,8 @@ function fixture(cells){let calls=0;return async(method,args=[])=>{
 };}
 const lock=actor.cell.output.lock;
 let rpc=fixture([actor]);let result=await discoverIndexed({rpc,lock,pageSize:1});assert.equal(result.cells.length,1);assert.equal(result.genesis,PUDGE_GENESIS);
+let seenKey;const underlying=fixture([actor]);await discoverIndexed({rpc:async(m,p)=>{if(m==='get_cells')seenKey=p[0];return underlying(m,p);},lock,pageSize:1,includeUnsupported:true});assert.equal(seenKey.filter,undefined,'Protected fund search must include unsupported cells');
+const unsupported=structuredClone(actor);unsupported.outPoint.txHash='0x'+'77'.repeat(32);unsupported.cell.data.content='0x01';const mixed=await discoverIndexed({rpc:fixture([actor,unsupported]),lock,pageSize:1,includeUnsupported:true});assert.equal(mixed.cells.length,1);assert.equal(mixed.unsupported.length,1);
 const duplicate=structuredClone(actor);duplicate.outPoint.txHash='0x'+'55'.repeat(32);result=await discoverIndexed({rpc:fixture([actor,duplicate]),lock,pageSize:1});assert.equal(result.cells.length,2);
 for(const [name,override,pattern] of [
  ['stale',async(m,p,next)=>m==='get_live_cell'?{status:'dead'}:next(m,p),/Stale/],

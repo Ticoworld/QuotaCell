@@ -41,6 +41,7 @@ async function authorize(endpoint,terms){
  $('status').textContent='Approve the transaction in your wallet.';
  const signed=await selected.signOnlyTransaction(c.Transaction.fromBytes(request.transaction));
  const after=await account();if(selected!==signer||version!==generation||after.publicKey!==a.publicKey||$('signingMode').value!=='external')throw Error('Wallet or signing mode changed during signing.');
+ if(networkLabel==='Pudge testnet'&&!window.confirm(`Broadcast signed transaction ${signed.hash()} to Pudge? The RPC receives signed bytes for a dry run and could relay them.`))throw Error('Broadcast canceled; no signed transaction was sent by this page.');
  return post('/api/external/submit',{id:request.id,transaction:signed.toHex()});
 }
 async function run(action,endpoint,terms){
@@ -52,4 +53,6 @@ window.quotaWallet={
  owner:operation=>run(operation,'/api/external/owner',{operation,amount:$('depositAmount').value})
 };
 
-$('createPocket').onclick=async()=>{try{const terms=JSON.parse($('genesisTerms').value);terms.sharedLimit=parseCkb(terms.sharedLimit).toString();for(const d of terms.delegates){const args=await recipientArgs(d.recipient,client);d.recipient={codeHash:K,hashType:'type',args};d.limit=parseCkb(d.limit).toString();d.perPayment=parseCkb(d.perPayment).toString();}await run('genesis','/api/external/genesis',terms);}catch(e){$('status').textContent=e.message;}};
+const registered={};
+for(const role of ['Owner','Alice','Ben'])$('register'+role).onclick=async()=>{try{const a=await account();if(Object.entries(registered).some(([name,value])=>name!==role&&value.publicKey===a.publicKey))throw Error('Each person must use a different wallet.');registered[role]=a;$('registrationStatus').textContent=['Owner','Alice','Ben'].map(name=>name+': '+(registered[name]?.address||'not registered')).join(' | ');}catch(e){$('registrationStatus').textContent=e.message;}};
+$('createPocket').onclick=async()=>{try{let terms;if($('genesisTerms').value.trim())terms=JSON.parse($('genesisTerms').value);else{const owner=await account();if(!registered.Owner||!registered.Alice||!registered.Ben)throw Error('Register owner, Alice and Ben first.');if(owner.publicKey!==registered.Owner.publicKey)throw Error('Reconnect the registered owner wallet.');const alice=$('aliceRecipient').value.trim(),ben=$('benRecipient').value.trim();if(!alice||!ben)throw Error('Enter both approved recipient addresses.');const [a,b]=await Promise.all([recipientArgs(alice,client),recipientArgs(ben,client)]);if(a===b)throw Error('The approved recipients must be different.');terms={sharedLimit:'500',delegates:[{publicKey:registered.Alice.publicKey,recipient:alice,limit:'400',perPayment:'100'},{publicKey:registered.Ben.publicKey,recipient:ben,limit:'500',perPayment:'400'}]};}terms.sharedLimit=parseCkb(terms.sharedLimit).toString();for(const d of terms.delegates){const args=await recipientArgs(d.recipient,client);d.recipient={codeHash:K,hashType:'type',args};d.limit=parseCkb(d.limit).toString();d.perPayment=parseCkb(d.perPayment).toString();}await run('genesis','/api/external/genesis',terms);}catch(e){$('status').textContent=e.message;}};

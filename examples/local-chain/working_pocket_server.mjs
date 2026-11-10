@@ -75,18 +75,18 @@ async function snapshot(){
   const expectedKeys=[initial.expected.ownerPublicKey,...initial.expected.delegates.map(d=>d.publicKey)];
   for(const [i,role] of ['owner','alice','ben'].entries()){assert.equal(actors[role].publicKey,expectedKeys[i],'Pocket actor identity mismatch');assert(c.Script.from(actors[role].lock).eq(lockFor(expectedKeys[i])),'Pocket actor lock mismatch');}
   assert(c.Script.from(initial.F).eq(c.Script.from({codeHash:hashes.F,hashType:'data1',args:c.Script.from(initial.Q).hash()})),'Pocket fund identity mismatch');
-  let found,fundCells,ownerCells,aliceCells,benCells;
+  let found,fundCells,ownerCells,aliceCells,benCells,unsupportedFunds=[];
   if(networkMode==='isolated'){
    found=await discoverPolicy({rpc,policy:initial.Q,expected:initial.expected});
-   [fundCells,ownerCells,aliceCells,benCells]=await Promise.all([initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map(async lock=>(await discoverPlainCells({rpc,lock})).cells));
+   const results=await Promise.all([initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map((lock,i)=>discoverPlainCells({rpc,lock,includeUnsupported:i===0})));[fundCells,ownerCells,aliceCells,benCells]=results.map(r=>r.cells);unsupportedFunds=results[0].unsupported;
   }else{
-   const results=await Promise.all([discoverIndexed({rpc,policy:initial.Q,expected:initial.expected}),...[initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map(lock=>discoverIndexed({rpc,lock}))]);
+   const results=await Promise.all([discoverIndexed({rpc,policy:initial.Q,expected:initial.expected}),...[initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map((lock,i)=>discoverIndexed({rpc,lock,includeUnsupported:i===0}))]);
    indexedTip=results[0].indexedTip;for(const r of results)assert.deepEqual(r.indexedTip,indexedTip,'Indexed snapshots differ');
-   found=results[0].cells[0];[fundCells,ownerCells,aliceCells,benCells]=results.slice(1).map(r=>r.cells);
+   found=results[0].cells[0];[fundCells,ownerCells,aliceCells,benCells]=results.slice(1).map(r=>r.cells);unsupportedFunds=results[1].unsupported;
   }
   state.policy={txHash:found.outPoint.tx_hash,index:Number(BigInt(found.outPoint.index))};
   const points=cells=>cells.sort((a,b)=>BigInt(a.cell.output.capacity)>BigInt(b.cell.output.capacity)?-1:1).map(x=>({txHash:x.outPoint.tx_hash,index:Number(BigInt(x.outPoint.index))}));
-  const funds=points(fundCells);assert(funds.length<=1,'Multiple protected funds require consolidation');state.fund=funds[0]||null;
+  state.unsupportedFunds=unsupportedFunds.map(x=>({outPoint:x.outPoint,capacity:x.cell.output.capacity,hasType:!!x.cell.output.type,dataBytes:(x.cell.data.content.length-2)/2}));const funds=points(fundCells);state.funds=funds;state.fund=funds[0]||null;
   state.ownerFee=points(ownerCells)[0];state.seeds.alice=points(aliceCells)[0];state.seeds.ben=points(benCells)[0];
  }
 
@@ -104,14 +104,14 @@ async function snapshot(){
    else throw new Error('Unknown journal operation');
   }else{update.run('uncertain',item.id);unresolved=true;}
  }
- const p=await live(state.policy),f=state.fund?await live(state.fund):null,s=buf(p.cell.data.content),closed=s.length===28;
+ const p=await live(state.policy),fs=await Promise.all((state.funds||[state.fund].filter(Boolean)).map(live)),f=fs[0]||null,s=buf(p.cell.data.content),closed=s.length===28;
  const ps=p.cell.output.type;assert(ps,'Missing policy type');const actualPolicy=c.Script.from({codeHash:ps.code_hash,hashType:ps.hash_type,args:ps.args});assert(actualPolicy.eq(c.Script.from(initial.Q)),'Policy identity mismatch');
  const pl=p.cell.output.lock;assert(c.Script.from({codeHash:pl.code_hash,hashType:pl.hash_type,args:pl.args}).eq(c.Script.from({codeHash:hashes.A,hashType:'data1',args:'0x'})),'Policy lock mismatch');
- if(f){const fl=f.cell.output.lock;const expected=c.Script.from({codeHash:hashes.F,hashType:'data1',args:actualPolicy.hash()});assert(c.Script.from({codeHash:fl.code_hash,hashType:fl.hash_type,args:fl.args}).eq(expected),'Fund policy identity mismatch');assert(!f.cell.output.type&&f.cell.data.content==='0x','Unsupported fund cell');}
+ for(const f of fs){const fl=f.cell.output.lock;const expected=c.Script.from({codeHash:hashes.F,hashType:'data1',args:actualPolicy.hash()});assert(c.Script.from({codeHash:fl.code_hash,hashType:fl.hash_type,args:fl.args}).eq(expected),'Fund policy identity mismatch');assert(!f.cell.output.type&&f.cell.data.content==='0x','Unsupported fund cell');}
  if(closed)assert.equal(s.subarray(0,8).toString('hex'),'5143543404000100');else {assert.equal(s.length,466);assert.equal(s.subarray(0,6).toString('hex'),'51434e340400');}
  const u=o=>s.readBigUInt64LE(o)+(s.readBigUInt64LE(o+8)<<64n);
  const delegates=['alice','ben'].map((role,i)=>{if(closed)return {role,limit:'0',used:'0',perPayment:'0',enabled:false,recipient:'',publicKey:''};const o=158+154*i;return {role,limit:u(o+106).toString(),used:u(o+122).toString(),perPayment:u(o+138).toString(),enabled:Boolean(s[7]&(1<<i)),recipient:c.Script.fromBytes(s.subarray(o+33,o+106)).args,publicKey:hex(s.subarray(o,o+33))};});
- return {state,p,f,unresolved,closed,view:{networkMode,indexedTip,pocket:c.Script.from(initial.Q).hash(),genesis:profile.genesisHeader.hash,owner:actors.owner.publicKey,policyOutpoint:state.policy,fundShannons:f?BigInt(f.cell.output.capacity).toString():'0',fundOccupiedShannons:f?'7300000000':'0',sharedLimit:closed?'0':u(8).toString(),sharedUsed:closed?'0':u(24).toString(),delegates,closed,hasFund:!!f,policyCapacity:p.cell.output.capacity,history:rows().map(({id,tx_hash,state,amount,recipient,created,actor,operation})=>({id,tx_hash,state,amount,recipient,created,actor,operation})),unresolved}};
+ return {state,p,f,fs,unresolved,closed,view:{unsupportedFunds:state.unsupportedFunds||[],networkMode,indexedTip,pocket:c.Script.from(initial.Q).hash(),genesis:profile.genesisHeader.hash,owner:actors.owner.publicKey,policyOutpoint:state.policy,fundShannons:fs.reduce((n,x)=>n+BigInt(x.cell.output.capacity),0n).toString(),fundOccupiedShannons:(BigInt(fs.length)*7300000000n).toString(),sharedLimit:closed?'0':u(8).toString(),sharedUsed:closed?'0':u(24).toString(),delegates,closed,hasFund:!!f,policyCapacity:p.cell.output.capacity,history:rows().map(({id,tx_hash,state,amount,recipient,created,actor,operation})=>({id,tx_hash,state,amount,recipient,created,actor,operation})),unresolved}};
 }
 const lockFor=publicKey=>c.Script.from({codeHash:K,hashType:'type',args:c.hashCkb(buf(publicKey)).slice(0,42)});
 async function selectedFee(){if(networkMode==='isolated')return 2000n;const f=await rpc('get_fee_rate_statistics',['0x65']);assert(f?.median,'Fee statistics unavailable');const fee=BigInt(f.median)*8n;assert(fee>0n&&fee<=1000000n,'Current fee exceeds policy bound');return fee;}
@@ -144,9 +144,9 @@ async function prepareExternal(body){
   const grant=snap.view.delegates.find(d=>d.role===body.role);assert.equal(body.recipient,grant.recipient,'Recipient changed');
   assert.equal(body.publicKey,grant.publicKey,'Connected account is not the selected delegate');
   const actor=await live(snap.state.seeds[body.role]),amount=parseCkb(body.amount);
-  const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:await selectedFee()});
+  const tx=buildPayment({policy:snap.p,actor,funds:snap.fs,deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:await selectedFee()});
   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]});const lock=c.Script.from(actors[body.role].lock),info=await tx.getSignHashInfo(lock,client);assert.equal(info.position,1);
-  const record={bytes:tx.toHex(),message:info.message,position:info.position,publicKey:grant.publicKey,points:[snap.state.policy,snap.state.seeds[body.role],snap.state.fund],pocket:snap.view.pocket,amount:amount.toString(),recipient:body.recipient,operation:'pay',expires:Date.now()+300000};
+  const record={bytes:tx.toHex(),message:info.message,position:info.position,publicKey:grant.publicKey,points:[snap.state.policy,snap.state.seeds[body.role],...snap.state.funds||[snap.state.fund]],pocket:snap.view.pocket,amount:amount.toString(),recipient:body.recipient,operation:'pay',expires:Date.now()+300000};
   requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash,fee:await transactionFee(tx)};
  }finally{busy=false;}
 }
@@ -178,14 +178,14 @@ async function pay(body){
   await verifyEnvironment();const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain; reconcile before another payment');
   assert(['alice','ben'].includes(body.role),'Unknown delegate');const grant=snap.view.delegates.find(d=>d.role===body.role);assert.equal(body.recipient,grant.recipient,'Recipient changed; review the live policy');
   const amount=parseCkb(body.amount);
-  const actor=await live(snap.state.seeds[body.role]);const tx=buildPayment({policy:snap.p,actor,funds:[snap.f],deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:await selectedFee()});
+  const actor=await live(snap.state.seeds[body.role]);const tx=buildPayment({policy:snap.p,actor,funds:snap.fs,deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:await selectedFee()});
   assert.equal(tx.outputs[2].capacity,amount);assert.equal(tx.outputs[2].lock.args,body.recipient);
   const acp=await new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}).getKnownScript(c.KnownScript.AnyoneCanPay);
   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[],scripts:{[c.KnownScript.Secp256k1Blake160]:{codeHash:K,hashType:'type',cellDeps:[{cellDep:environment.kdep}]},[c.KnownScript.AnyoneCanPay]:acp}});
   const secret=await load('keys/'+body.role);const signer=new c.SignerCkbPrivateKey(client,secret.privateKey);assert.equal(signer.publicKey,actors[body.role].publicKey);
   const lock=c.Script.from(actors[body.role].lock),info=await tx.getSignHashInfo(lock,client);assert.equal(info.position,1);
   const signed=await signWithCkbWallet({signer,prepared:tx,actorLock:lock,publicKey:signer.publicKey,message:info.message,position:1});
-  for(const p of [snap.state.policy,snap.state.seeds[body.role],snap.state.fund])await live(p);
+  for(const p of [snap.state.policy,snap.state.seeds[body.role],...snap.state.funds||[snap.state.fund]])await live(p);
   const signedRaw=raw(signed);await rpc('dry_run_transaction',[signedRaw]);
   db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');insert.run(body.id,profile.genesisHeader.hash,snap.view.pocket,signer.publicKey,body.recipient,amount.toString(),signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),'pay');db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
   try{assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash());}catch(e){return {txHash:signed.hash(),state:'uncertain',error:e.message};}
@@ -209,12 +209,12 @@ async function ownerAction(body,external=false){
    inputs=[snap.state.policy,snap.state.ownerFee];outputs=[policyOut,{capacity:ownerCap-fee,lock:ownerLock}];data=[hex(next),'0x'];action='0x5143413103ff000001';position=1;
   }else if(op==='close'){
    assert(!snap.closed&&snap.f,'An active funded pocket is required');const terminal=Buffer.concat([Buffer.from('5143543404000100','hex'),buf(actors.owner.lock.args)]);const released=policyOut.capacity-13400000000n;
-   inputs=[snap.state.policy,snap.state.ownerFee,snap.state.fund];amount=BigInt(snap.f.cell.output.capacity);outputs=[{...policyOut,capacity:13400000000n},{capacity:amount,lock:ownerLock},{capacity:ownerCap+released-fee,lock:ownerLock}];data=[hex(terminal),'0x','0x'];action='0x5143413104ff0000';position=1;
+   inputs=[snap.state.policy,snap.state.ownerFee,...(snap.state.funds||[snap.state.fund])];amount=snap.fs.reduce((n,x)=>n+BigInt(x.cell.output.capacity),0n);outputs=[{...policyOut,capacity:13400000000n},{capacity:amount,lock:ownerLock},{capacity:ownerCap+released-fee,lock:ownerLock}];data=[hex(terminal),'0x','0x'];action='0x5143413104ff0000';position=1;
   }else if(op==='deposit'){
    assert(!snap.f,'Pocket already has a protected fund');amount=parseCkb(body.amount);assert(amount>=7300000000n,'Deposit below occupied capacity');
    inputs=[snap.state.ownerFee];outputs=[{capacity:amount,lock:c.Script.from(initial.F)},{capacity:ownerCap-amount-fee,lock:ownerLock}];data=['0x','0x'];position=0;
   }else{
-   assert(snap.closed&&snap.f,'No tracked late deposit');amount=BigInt(snap.f.cell.output.capacity);inputs=[snap.state.policy,snap.state.ownerFee,snap.state.fund];outputs=[policyOut,{capacity:amount,lock:ownerLock},{capacity:ownerCap-fee,lock:ownerLock}];data=[hex(old),'0x','0x'];action='0x5143413105ff0000';position=1;
+   assert(snap.closed&&snap.f,'No tracked late deposit');amount=snap.fs.reduce((n,x)=>n+BigInt(x.cell.output.capacity),0n);inputs=[snap.state.policy,snap.state.ownerFee,...(snap.state.funds||[snap.state.fund])];outputs=[policyOut,{capacity:amount,lock:ownerLock},{capacity:ownerCap-fee,lock:ownerLock}];data=[hex(old),'0x','0x'];action='0x5143413105ff0000';position=1;
   }
   assert(outputs.every(o=>o.capacity>=6100000000n),'Owner fee cell would be below occupied capacity');
   const deps=op==='deposit'?[environment.kdep]:environment.allDeps,tx=c.Transaction.from({inputs:inputs.map(previousOutput=>({previousOutput,since:0})),outputs,outputsData:data,cellDeps:deps,headerDeps:[],witnesses:inputs.map(()=> '0x')});

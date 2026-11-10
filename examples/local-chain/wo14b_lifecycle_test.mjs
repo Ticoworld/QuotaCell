@@ -81,6 +81,13 @@ try{
   await committed(ownerPage);
   await ownerPage.locator('#depositAmount').fill('500');
   await ownerPage.locator('#status').evaluate(e=>e.textContent='');await ownerPage.locator('#deposit').click();await committed(ownerPage);
+  // Independent third-party deposit adds a second policy-bound fund Cell.
+  const descriptorForExtra=JSON.parse(await fs.readFile(path.join(run,'pocket.json')));
+  const thirdPartyInput=await live(point(deployed.hash(),6));
+  const extra=c.Transaction.from({inputs:[{previousOutput:thirdPartyInput.outPoint,since:0}],outputs:[{capacity:100n*CKB,lock:c.Script.from(descriptorForExtra.initial.F)},{capacity:BigInt(thirdPartyInput.cell.output.capacity)-201n*CKB-200000n,lock:lock(bootstrap.publicKey)},{capacity:101n*CKB,lock:c.Script.from(descriptorForExtra.initial.F)}],outputsData:['0x','0x','0x01'],cellDeps:[kdep],headerDeps:[],witnesses:['0x']});
+  extra.setWitnessArgs(0,{lock:'0x'+'00'.repeat(65)});let extraSigned=await bs.signOnlyTransaction(extra);await commit(extraSigned);
+  const twoFunds=await discoverPlainCells({rpc,lock:descriptorForExtra.initial.F,includeUnsupported:true});assert.equal(twoFunds.cells.length,2);assert.equal(twoFunds.unsupported.length,1);console.log('third-party extra fund PASS');
+
   for(const [i,p] of pages.slice(1).entries()){
    await p.reload();await p.locator('#connectWallet').click();await p.getByText('UTXO Global Wallet',{exact:true}).first().click();await p.getByText('CKB',{exact:true}).first().click();
    await p.locator('#role').selectOption(i?'ben':'alice');await p.locator('#amount').fill(i?'100':'99.00000001');
@@ -105,9 +112,11 @@ const current=JSON.parse(await fs.readFile(path.join(run,'pocket.json')));const 
   app=spawn(process.execPath,['--experimental-strip-types',path.join(here,'working_pocket_server.mjs'),run,String(appPort)],{stdio:'ignore',env:{...process.env,QUOTACELL_DEV_SIGNER:'0'},windowsHide:true});
   let reopened;
   for(let i=0;i<100;i++){try{const response=await fetch(appURL+'/api/state');reopened=await response.json();if(response.ok)break;}catch{}await sleep(100);}
-  assert.equal(reopened.closed,false);assert.equal(reopened.sharedUsed,String(199n*CKB+1n));assert.equal(reopened.fundShannons,String(301n*CKB-1n));console.log('active node/server restart PASS');
+  assert.equal(reopened.closed,false);assert.equal(reopened.sharedUsed,String(199n*CKB+1n));assert.equal(reopened.fundShannons,String(401n*CKB-1n));console.log('active node/server restart PASS');
   await ownerPage.reload();await ownerPage.locator('#connectWallet').click();await ownerPage.getByText('UTXO Global Wallet',{exact:true}).first().click();await ownerPage.getByText('CKB',{exact:true}).first().click();
-  for(const op of ['revoke','close','deposit','sweep']){ await ownerPage.locator('#status').evaluate(e=>e.textContent='');await ownerPage.locator('#'+op).click();await committed(ownerPage);
+  for(const op of ['revoke','close','deposit','sweep']){ if(op==='close'||op==='sweep'){
+    const input=await live(point(extraSigned.hash(),1));const additional=c.Transaction.from({inputs:[{previousOutput:input.outPoint,since:0}],outputs:[{capacity:100n*CKB,lock:c.Script.from(descriptorForExtra.initial.F)},{capacity:BigInt(input.cell.output.capacity)-100n*CKB-200000n,lock:lock(bootstrap.publicKey)}],outputsData:['0x','0x'],cellDeps:[kdep],headerDeps:[],witnesses:['0x']});additional.setWitnessArgs(0,{lock:'0x'+'00'.repeat(65)});extraSigned=await bs.signOnlyTransaction(additional);await commit(extraSigned);assert.equal((await discoverPlainCells({rpc,lock:descriptorForExtra.initial.F,includeUnsupported:true})).cells.length,2);
+   } await ownerPage.locator('#status').evaluate(e=>e.textContent='');await ownerPage.locator('#'+op).click();await committed(ownerPage);
    if(op==='revoke'){
     const denied=await pages[1].evaluate(async terms=>{const r=await fetch('/api/external/prepare',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:crypto.randomUUID(),publicKey:terms.publicKey,role:'alice',amount:'61',recipient:terms.recipient.args})});return {status:r.status,body:await r.json()};},terms.delegates[0]);
     assert.equal(denied.status,400);assert.match(denied.body.error,/delegate disabled/);console.log('revoked delegate rejected PASS');
