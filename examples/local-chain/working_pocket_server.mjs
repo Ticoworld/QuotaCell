@@ -205,13 +205,13 @@ async function ownerAction(body,external=false){
   if(snap.closed)assert.equal(hex(old.subarray(8,28)),ownerLock.args,'Terminal owner mismatch');else assert.equal(hex(old.subarray(125,158)),actors.owner.publicKey,'Policy owner mismatch');
   let inputs,outputs,data,action,position,amount=0n;
   if(op==='revoke'){
-   assert(!snap.closed && (old[7]&1),'Alice is already revoked or pocket is closed');const next=Buffer.from(old);next[7]&=~1;
-   inputs=[snap.state.policy,snap.state.ownerFee];outputs=[policyOut,{capacity:ownerCap-fee,lock:ownerLock}];data=[hex(next),'0x'];action='0x5143413103ff000001';position=1;
+   const role=body.role??'alice';assert(['alice','ben'].includes(role),'Invalid delegate');const mask=role==='alice'?1:2;assert(!snap.closed && (old[7]&mask),'Delegate is already revoked or pocket is closed');const next=Buffer.from(old);next[7]&=~mask;
+   inputs=[snap.state.policy,snap.state.ownerFee];outputs=[policyOut,{capacity:ownerCap-fee,lock:ownerLock}];data=[hex(next),'0x'];action='0x5143413103ff0000'+mask.toString(16).padStart(2,'0');position=1;
   }else if(op==='close'){
    assert(!snap.closed&&snap.f,'An active funded pocket is required');const terminal=Buffer.concat([Buffer.from('5143543404000100','hex'),buf(actors.owner.lock.args)]);const released=policyOut.capacity-13400000000n;
    inputs=[snap.state.policy,snap.state.ownerFee,...(snap.state.funds||[snap.state.fund])];amount=snap.fs.reduce((n,x)=>n+BigInt(x.cell.output.capacity),0n);outputs=[{...policyOut,capacity:13400000000n},{capacity:amount,lock:ownerLock},{capacity:ownerCap+released-fee,lock:ownerLock}];data=[hex(terminal),'0x','0x'];action='0x5143413104ff0000';position=1;
   }else if(op==='deposit'){
-   assert(!snap.f,'Pocket already has a protected fund');amount=parseCkb(body.amount);assert(amount>=7300000000n,'Deposit below occupied capacity');
+   amount=parseCkb(body.amount);assert(amount>=7300000000n,'Deposit below occupied capacity');
    inputs=[snap.state.ownerFee];outputs=[{capacity:amount,lock:c.Script.from(initial.F)},{capacity:ownerCap-amount-fee,lock:ownerLock}];data=['0x','0x'];position=0;
   }else{
    assert(snap.closed&&snap.f,'No tracked late deposit');amount=snap.fs.reduce((n,x)=>n+BigInt(x.cell.output.capacity),0n);inputs=[snap.state.policy,snap.state.ownerFee,...(snap.state.funds||[snap.state.fund])];outputs=[policyOut,{capacity:amount,lock:ownerLock},{capacity:ownerCap-fee,lock:ownerLock}];data=[hex(old),'0x','0x'];action='0x5143413105ff0000';position=1;
@@ -241,7 +241,7 @@ const html=await fs.readFile(path.join(here,'working_pocket.html'));
 const server=http.createServer(async(req,res)=>{
  try{
   if(req.headers.host!==`127.0.0.1:${port}`)throw new Error('Invalid host');
-  res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Content-Security-Policy',"default-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'");
+  res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Content-Security-Policy',"default-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'self'");
   if(req.method==='GET'&&req.url==='/'){res.writeHead(200,{'content-type':'text/html; charset=utf-8'});res.end(html);return;}
   if(req.method==='GET'&&req.url==='/wallet.js'){res.writeHead(200,{'content-type':'text/javascript; charset=utf-8'});res.end(walletBundle);return;}
   if(req.method==='POST'&&req.url==='/api/ckb'){
