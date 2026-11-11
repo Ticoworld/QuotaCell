@@ -1,6 +1,7 @@
 import type { WalletIdentity } from './domain';
 
 const STANDARD_LOCK = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
+const CONNECTOR_SUCCESS_GRACE_MS = 2_000;
 type Signer = {
   isConnected(): Promise<boolean>;
   getPublicKey(): Promise<string>;
@@ -36,13 +37,13 @@ export class CkbWalletSession {
         if (epoch !== this.epoch) return reject(new Error('Wallet session changed. Connect again.'));
         this.accept(event, resolve, reject);
       }, { once: true });
-      // CCC emits its close event immediately before its successful connection event.
-      // Defer cancellation detection one task so a normal connect is not mistaken for a cancel.
+      // CCC dispatches close after its animation, then performs an async signer check
+      // before emitting connection. Give that success event time to arrive.
       element.addEventListener('close', () => {
         element.hidden = true;
         window.setTimeout(() => {
           if (epoch === this.epoch && !this.signer) reject(new Error('Wallet connection was canceled.'));
-        }, 0);
+        }, CONNECTOR_SUCCESS_GRACE_MS);
       }, { once: true });
       document.body.append(element);
     });
