@@ -1,0 +1,120 @@
+{
+  "checkedDate": "2026-11-11",
+  "repository": "Ticoworld/QuotaCell",
+  "branch": "codex/wo15-pudge-qualification",
+  "sourceCommit": "464457410bad499f9a68f129dbbf52f996b7d8a1",
+  "runtimeDirectory": "C:\\Users\\timot\\Desktop\\2026\\CKB\\QuotaCell\\local-state\\wo18-pudge-acceptance-20261111",
+  "runtimeDirectoryIsUnderSynchronizedDesktop": false,
+  "network": {
+    "mode": "pudge-readonly",
+    "developmentSigner": false,
+    "expectedNetwork": "ckb_testnet",
+    "expectedGenesis": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+    "endpoints": [
+      {
+        "url": "https://testnet.ckbapp.dev/",
+        "consensus": "ckb_testnet",
+        "genesis": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+        "tipHeight": "0x15f6d07",
+        "tipHash": "0xb40ec10131a5da19cd4024ec780e9139449dea485626c31dcff8670417060974",
+        "indexerTipHeight": "0x15f6d07",
+        "indexerTipHash": "0xb40ec10131a5da19cd4024ec780e9139449dea485626c31dcff8670417060974",
+        "medianFeeRate": "0x81c6",
+        "responseMs": {
+          "consensus": 1550,
+          "genesis": 1636,
+          "tip": 1606,
+          "feeStatistics": 1529,
+          "indexerTip": 1587
+        }
+      },
+      {
+        "url": "https://testnet.ckb.dev/",
+        "consensus": "ckb_testnet",
+        "genesis": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+        "tipHeight": "0x15f6d07",
+        "tipHash": "0xb40ec10131a5da19cd4024ec780e9139449dea485626c31dcff8670417060974",
+        "indexerTipHeight": "0x15f6d07",
+        "indexerTipHash": "0xb40ec10131a5da19cd4024ec780e9139449dea485626c31dcff8670417060974",
+        "medianFeeRate": "0x81c6",
+        "responseMs": {
+          "consensus": 1478,
+          "genesis": 1353,
+          "tip": 1377,
+          "feeStatistics": 1387,
+          "indexerTip": 1350
+        }
+      }
+    ],
+    "sameCanonicalTipObserved": true,
+    "independentInfrastructureProven": false
+  },
+  "dependencies": {
+    "A": {
+      "outPoint": "0xb4f171c9c9caf7401f54a8e56225ae21d95032150a87a4678eac3f66a3137b93:0",
+      "dataHash": "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1",
+      "capacity": "0x1dbb835d00",
+      "status": "live"
+    },
+    "F": {
+      "outPoint": "0xb4f171c9c9caf7401f54a8e56225ae21d95032150a87a4678eac3f66a3137b93:1",
+      "dataHash": "0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a",
+      "capacity": "0x27e71e57d00",
+      "status": "live"
+    },
+    "Q": {
+      "outPoint": "0xd6654da12e92d44a37b9c48a7b27db325fa3e68cc50f3e17ce74a791523c00d0:0",
+      "dataHash": "0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e",
+      "status": "live",
+      "transactionStatus": "committed",
+      "canonicalBlockHeight": "0x15f33da",
+      "canonicalBlockHash": "0xa04b7b4746537d9c7e6237caf81cbf15fff82f3e29fd4240dd7a479414b97b65",
+      "capacity": "0x226e68ccd00"
+    },
+    "KDependencyGroup": {
+      "outPoint": "0xf8de3bb47d055cdf460d93a2a6e1b05f7432f9777c8c474abf4eec1d4aee5d37:0",
+      "capacity": "0x2b95fd500",
+      "status": "live",
+      "members": [
+        {
+          "outPoint": "0x8f8c79eb6671709633fe6a46de93c0fedc9c1b8a6527a18d3983879542635c9f:3",
+          "dataHash": "0x9799bee251b975b82c45a02154ce28cec89c5853ecc14d12b7b8cccfc19e0af4",
+          "status": "live"
+        },
+        {
+          "outPoint": "0x8f8c79eb6671709633fe6a46de93c0fedc9c1b8a6527a18d3983879542635c9f:1",
+          "dataHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+          "status": "live"
+        }
+      ]
+    }
+  },
+  "runtimeObservation": {
+    "pocketDescriptorPresent": false,
+    "journalIntentCount": 0,
+    "serverStateEmpty": true,
+    "publicTransactionsPreparedOrBroadcast": false
+  },
+  "walletConnectionObservation": {
+    "source": "user-provided Chrome screenshot",
+    "applicationDisplayedConnected": true,
+    "addressRecorded": false,
+    "providerVendorIndependentlyAttested": false,
+    "transactionSigningObserved": false
+  },
+  "gates": {
+    "A": "PASS",
+    "B": "PARTIAL",
+    "C": "PARTIAL",
+    "D": "BLOCKED",
+    "E": "BLOCKED",
+    "F": "BLOCKED",
+    "G": "BLOCKED",
+    "H": "BLOCKED"
+  },
+  "limitations": [
+    "The two RPC URLs returned the same canonical tip during this check, but independent infrastructure ownership is not established.",
+    "The connected-wallet screenshot supports a successful user-visible connection; it does not independently attest wallet vendor provenance or record the public account identity.",
+    "No public Pocket transaction has been prepared, signed, or broadcast."
+  ]
+}
