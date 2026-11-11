@@ -6,6 +6,7 @@
     "repository": "Ticoworld/QuotaCell",
     "branch": "codex/wo15-pudge-qualification",
     "baseCommit": "0694c96f0ac166eae5e176df31787bbe1c9f53e",
+    "testedCommit": "a6861d3988af3b188eae1aea9e0d2eb6795dad67",
     "mainModified": false
   },
   "workspace": {
@@ -89,7 +90,12 @@
     "apiGenesis": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
     "apiConsensus": "ckb_testnet",
     "creationRouteStatus": 400,
-    "journalIntents": 0
+    "journalIntents": 0,
+    "latestSourceRestart": "PASS",
+    "latestSourceCommit": "a6861d3988af3b188eae1aea9e0d2eb6795dad67",
+    "persistentRuntimePath": "C:\\Users\\timot\\Desktop\\2026\\CKB\\QuotaCell\\local-state\\wo18-pudge-acceptance-20261111",
+    "latestProxyConsensus": "ckb_testnet",
+    "latestGenesisCreationRouteStatus": 400
   },
   "regressions": {
     "frontendBuild": "PASS",
@@ -99,6 +105,7 @@
     "publicTransactionStateTest": "PASS",
     "isolatedLifecycle": "PASS",
     "isolatedLifecycleRun": "examples/local-chain/.local/wo18a-lifecycle-regression-17-20261111",
+    "isolatedLifecycleRunResult": "PASS",
     "publicPocketLifecycle": "NOT_RUN"
   },
   "realWallet": {
