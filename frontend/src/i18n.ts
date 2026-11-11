@@ -1,0 +1,93 @@
+import i18n from 'i18next';
+import { initReactI18next } from 'react-i18next';
+
+const resources = {
+  en: { translation: {
+    brand: 'QuotaCell', connected: 'Connected', disconnected: 'Connect wallet', refresh: 'Refresh', refreshing: 'Refreshing…',
+    networkLocal: 'Isolated local chain', networkPudge: 'Pudge testnet', networkLocalShort: 'Local', networkPudgeShort: 'Pudge', readOnly: 'Read only', language: 'Language', english: 'English', chinese: '简体中文',
+    loadError: 'Pocket state is unavailable', retry: 'Try again', fallback: 'Legacy HTML',
+    emptyTitle: 'Create a shared Pocket', emptyBody: 'Set spending permissions for two independent wallets, with one shared allowance and owner control.', createPocket: 'Create Pocket',
+    setup: 'Set up your Pocket', participants: 'People', spendingRules: 'Spending rules', review: 'Review', back: 'Back', next: 'Continue',
+    stepPeopleTitle: 'Connect the three people', stepPeopleBody: 'Each person connects their own CKB testnet wallet. Keys stay in the wallet.', owner: 'Pocket owner', delegateOne: 'Delegate 1', delegateTwo: 'Delegate 2',
+    connect: 'Connect wallet', reconnectOwner: 'Connect owner wallet to sign', registered: 'Wallet registered', name: 'Display name', description: 'Description (optional)', nameLocal: 'Saved in this browser only',
+    stepRulesTitle: 'Choose shared spending rules', stepRulesBody: 'Two delegates spend from one lifetime allowance. Adding funds later does not restore spent authority.', sharedAllowance: 'Shared lifetime allowance', personalAllowance: 'Personal allowance', perPayment: 'Maximum per payment', approvedRecipient: 'Approved recipient address',
+    termsHint: 'Amounts use CKB. The existing QCN4 policy supports exactly two delegates.', termsError: 'Check each amount. A per-payment limit must be at least 61 CKB and no more than its delegate allowance; each allowance must fit within the shared amount.',
+    stepReviewTitle: 'Review Pocket rules', stepReviewBody: 'Check the people, recipient addresses and limits before asking the owner wallet to sign.', createAndSign: 'Create and review in wallet', edit: 'Change', ownerInputNote: 'The owner wallet needs a plain CKB cell for the policy and transaction fee.',
+    activePocket: 'Pocket', protectedBalance: 'Protected balance', availableSpend: 'Potentially spendable above occupied capacity', sharedRemaining: 'Shared allowance remaining', sharedUsedOf: '{{used}} used of {{total}} CKB',
+    allowanceAuthority: 'Shared spending authority', delegatePermissions: 'Spending permissions', remaining: 'Remaining', maxPayment: 'Maximum per payment', recipient: 'Approved recipient', active: 'Active', revoked: 'Revoked',
+    ownerNext: 'Manage this Pocket', ownerDescription: 'Add funds, change one delegate’s permission, or recover supported funds.', delegateNext: 'Make a payment', delegateDescription: 'Payments go only to the approved recipient and reduce both personal and shared authority.',
+    pay: 'Pay', paymentAmount: 'Payment amount (CKB)', reviewPayment: 'Review payment', ownerControls: 'Owner controls', fund: 'Add funds', depositAmount: 'Amount to add (CKB)', revoke: 'Revoke permission', closePocket: 'Close and recover', sweep: 'Recover late deposit', reconcile: 'Check transaction status',
+    transactionReview: 'Review transaction', actionPay: 'Payment', actionGenesis: 'Pocket creation', actionDeposit: 'Add funds', actionRevoke: 'Revoke permission', actionClose: 'Close Pocket', actionSweep: 'Recover late deposit',
+    signer: 'Signing wallet', actualFee: 'Network fee', amount: 'Amount', target: 'Recipient', network: 'Network', continueWallet: 'Continue to wallet', cancel: 'Cancel', confirm: 'Confirm',
+    preparing: 'Preparing transaction…', walletApproval: 'Approve in your wallet', submitting: 'Checking and submitting transaction…', outcome: 'Transaction outcome',
+    statusCommitted: 'Confirmed', statusPending: 'Pending', statusProposed: 'Proposed', statusUncertain: 'Outcome unknown', statusRejected: 'Rejected', statusFailed: 'Failed',
+    pudgeBroadcastTitle: 'Send signed transaction to Pudge?', pudgeBroadcastBody: 'The signed transaction will be sent to the configured Pudge RPC. The RPC receives these bytes and could relay them. Continue only if you intend to broadcast this transaction.', sendToPudge: 'Send to Pudge',
+    readonlyAction: 'Transactions are disabled in Pudge read-only mode.', unresolvedTitle: 'Check the previous transaction first', unresolvedBody: 'The previous transaction outcome is unknown. Check its status before preparing another action.',
+    unsupportedTitle: 'Unsupported Cells remain on chain', unsupportedBody: 'These data-bearing or typed Cells are not included in supported recovery. They have not been recovered.',
+    closedTitle: 'Pocket closed', closedBody: 'Supported funds were sent to the owner. The policy retains terminal capacity; this is not spendable balance.', terminalCapacity: 'Policy terminal capacity', terminalCapacityHint: 'This capacity remains locked by the policy. It is not spendable balance.', lateFunds: 'Late funds are present and can be recovered by the owner.',
+    history: 'Recent transactions', noHistory: 'No transactions yet.', explorer: 'View on Pudge Explorer', details: 'Details', hideDetails: 'Hide details', technical: 'Technical details',
+    rename: 'Edit participant', save: 'Save', exportNames: 'Export names', importNames: 'Import names', importFile: 'Choose participant file', metadataNote: 'Names and descriptions are local annotations. They do not grant wallet access.',
+    unknownRole: 'This wallet has no permission in this Pocket.', ownerOnly: 'Connect the owner wallet for this action.', delegateOnly: 'Connect a registered delegate wallet to pay.',
+    errors: 'Please review the highlighted fields.', minAmount: 'Enter a valid CKB amount with up to 8 decimal places.',
+    copied: 'Copied', close: 'Close', legacyHelp: 'Open the original HTML fallback',
+    localDisclosure: 'Wallet signing and chain checks use the existing QuotaCell backend. This interface does not hold keys.',
+    occupiedDisclosure: 'Cell capacity is reserved by the on-chain Cell. It is separate from spending authority.',
+    feeDisclosure: 'The fee shown here comes from the transaction prepared by the backend.',
+    noWallet: 'Connect a supported CKB testnet wallet.', stateUnavailable: 'Could not load live Pocket state from the backend.',
+    appIdentity: 'Application identity', policyId: 'Pocket policy', txId: 'Transaction', ownerActionConfirm: 'Review this owner action before signing.',
+    depositMinimum: 'A deposit must be at least 73 CKB to cover one supported fund Cell.', closeConsequences: 'Closing sends the supported fund Cells to the owner. The policy keeps its 134 CKB terminal capacity. Unsupported Cells are not recovered.', revokeConsequences: 'This wallet will no longer be able to make new payments. Past payments cannot be reversed.', continueToReview: 'Prepare transaction', inputs: 'Inputs', outputs: 'Outputs', discardSignature: 'Discard signed transaction',
+    walletDisconnectedError: 'Wallet disconnected. Connect again to continue.', unsupportedWalletError: 'This prototype has verified UTXO Global Wallet signing only.', signingSchemeError: 'QCN4 needs a CKB secp256k1 wallet account.', wrongNetworkError: 'Select CKB testnet in the wallet, then connect again.', publicKeyError: 'The wallet did not provide a compressed CKB secp256k1 public key.', walletLockError: 'The connected address does not match the supported CKB lock.', walletChangedError: 'The wallet changed while signing. No transaction was submitted.', differentWalletsError: 'Each person must connect a different wallet.',
+    submitUnknown: 'The response was interrupted. Check the existing transaction status before trying another action.', submitSuccess: 'Transaction {{state}} · {{hash}}', participantEmpty: 'Delegate', paymentBoundsError: 'This payment is outside the current personal or shared allowance.',
+    connectToSeeActions: 'Connect a wallet to see its permissions', closedStatus: 'Closed', allowanceExplanation: 'Two independent permissions draw from this shared total.', connectToContinue: 'Connect your Pocket wallet', usedOf: 'used of', perPaymentHint: 'This is a limit, not a balance.', sharedAuthorityHint: 'Deposits do not restore spent authority.', permissionRevokedMessage: 'The owner revoked this wallet’s spending permission.', sharedRelationship: 'Both permissions count against one shared allowance.', publicKey: 'Wallet public key', used: 'Used', typedCell: 'Typed Cell', dataCell: 'Data-bearing Cell', bytes: 'bytes', participantNames: 'Participant names', metadataSaveError: 'Could not save local participant names in this browser.', metadataImportError: 'Could not import the participant file.', indexerTip: 'Indexer snapshot', loadingState: 'Loading live Pocket state…', actionFailed: 'The action could not be completed.', feeError: 'The network fee could not be verified.', pocketStateError: 'Pocket state changed. Refresh and review the current state.', ownerCellError: 'The connected owner wallet needs a plain cell with enough capacity for Pocket creation.', walletCanceledError: 'Wallet approval was canceled. No transaction was submitted.', recipientPolicyError: 'The approved recipient no longer matches the live Pocket rules.', inputChangedError: 'A required Cell changed or the signing request expired. Refresh and review before continuing.', metadataLocal: 'Names saved on this device', checkedStatus: 'Transaction status checked', noUncertainTransactions: 'No unresolved transaction was found.', recoveredAmount: 'Supported funds returned', signerMismatch: 'Connect the wallet that owns this transaction intent before signing.', reconnectSigner: 'Connect the correct wallet',
+    reconnect: 'Reconnect wallet', connectAllPeopleError: 'Connect the owner and both delegates before continuing.', differentRecipientsError: 'Each delegate needs a different approved recipient.', recipientMustBeDifferentError: 'Approved recipients must differ from the owner and delegate wallets.', paymentEffect: 'This payment reduces the delegate’s remaining limit and the shared allowance.', depositConsequences: 'Adding funds increases protected balance. It does not restore spent spending authority.', sweepConsequences: 'Only supported late deposits are sent to the owner. Unsupported Cells remain on chain.', standardRecipientError: 'Enter a standard CKB testnet address for the approved recipient.',
+  } },
+  'zh-Hans': { translation: {
+    brand: 'QuotaCell', connected: '已连接', disconnected: '连接钱包', refresh: '刷新', refreshing: '正在刷新…',
+    networkLocal: '隔离本地链', networkPudge: 'Pudge 测试网', networkLocalShort: '本地', networkPudgeShort: 'Pudge', readOnly: '只读', language: '语言', english: 'English', chinese: '简体中文',
+    loadError: '无法读取 Pocket 状态', retry: '重试', fallback: '旧版 HTML',
+    emptyTitle: '创建共享 Pocket', emptyBody: '为两个独立钱包设置支出权限，共用一项累计额度，并由所有者管理。', createPocket: '创建 Pocket',
+    setup: '设置 Pocket', participants: '参与者', spendingRules: '支出规则', review: '确认信息', back: '返回', next: '继续',
+    stepPeopleTitle: '连接三位参与者', stepPeopleBody: '每位参与者连接自己的 CKB 测试网钱包。私钥保留在钱包中。', owner: 'Pocket 所有者', delegateOne: '获授权支出人 1', delegateTwo: '获授权支出人 2',
+    connect: '连接钱包', reconnectOwner: '连接所有者钱包以签名', registered: '钱包已登记', name: '显示名称', description: '说明（可选）', nameLocal: '仅保存在此浏览器',
+    stepRulesTitle: '设置共享支出规则', stepRulesBody: '两位支出人共用一项累计额度。之后添加资金不会恢复已使用的权限。', sharedAllowance: '共享累计支出上限', personalAllowance: '个人支出上限', perPayment: '单笔支付上限', approvedRecipient: '获准收款地址',
+    termsHint: '金额单位为 CKB。现有 QCN4 策略固定支持两位支出人。', termsError: '请检查金额。单笔上限至少为 61 CKB，且不能超过个人额度；每个人的额度不能超过共享额度。',
+    stepReviewTitle: '确认 Pocket 规则', stepReviewBody: '在所有者钱包签名前，检查参与者、收款地址和各项额度。', createAndSign: '创建并在钱包中确认', edit: '修改', ownerInputNote: '所有者钱包需要一个普通 CKB Cell，用于创建策略并支付手续费。',
+    activePocket: 'Pocket', protectedBalance: '受保护资金余额', availableSpend: '扣除 Cell 占用容量后可用于支付的金额', sharedRemaining: '共享额度剩余', sharedUsedOf: '已用 {{used}}，共 {{total}} CKB',
+    allowanceAuthority: '共享支出权限', delegatePermissions: '支出权限', remaining: '剩余', maxPayment: '单笔支付上限', recipient: '获准收款人', active: '有效', revoked: '已撤销',
+    ownerNext: '管理此 Pocket', ownerDescription: '添加资金、撤销某一位支出人的权限，或取回受支持的资金。', delegateNext: '发起支付', delegateDescription: '支付只会发送到获准收款地址，并同时扣减个人和共享额度。',
+    pay: '支付', paymentAmount: '支付金额（CKB）', reviewPayment: '确认支付', ownerControls: '所有者控制', fund: '添加资金', depositAmount: '添加金额（CKB）', revoke: '撤销支出权限', closePocket: '关闭并取回资金', sweep: '取回后续到账', reconcile: '查询交易状态',
+    transactionReview: '交易确认', actionPay: '支付', actionGenesis: '创建 Pocket', actionDeposit: '添加资金', actionRevoke: '撤销权限', actionClose: '关闭 Pocket', actionSweep: '取回后续到账',
+    signer: '签名钱包', actualFee: '网络手续费', amount: '金额', target: '收款人', network: '网络', continueWallet: '继续并打开钱包', cancel: '取消', confirm: '确认',
+    preparing: '正在准备交易…', walletApproval: '请在钱包中批准', submitting: '正在验证并提交交易…', outcome: '交易结果',
+    statusCommitted: '已确认', statusPending: '待处理', statusProposed: '已提交', statusUncertain: '结果待确认', statusRejected: '已拒绝', statusFailed: '失败',
+    pudgeBroadcastTitle: '将已签名交易发送到 Pudge？', pudgeBroadcastBody: '已签名的交易将发送到配置的 Pudge RPC。该 RPC 会收到这些数据，并可能转发交易。仅在确实要广播此交易时继续。', sendToPudge: '发送到 Pudge',
+    readonlyAction: 'Pudge 只读模式已禁用交易。', unresolvedTitle: '请先检查上一笔交易', unresolvedBody: '上一笔交易结果尚不确定。确认状态后再准备其他操作。',
+    unsupportedTitle: '链上仍有暂不支持的 Cell', unsupportedBody: '这些含数据或带类型脚本的 Cell 不计入受支持的取回金额，也尚未取回。',
+    closedTitle: 'Pocket 已关闭', closedBody: '受支持的资金已发送给所有者。策略 Cell 保留终止容量，该容量不是可支出余额。', terminalCapacity: '策略终止容量', terminalCapacityHint: '这部分容量仍由策略占用，不能用于支付。', lateFunds: '检测到后续到账资金，所有者可以取回。',
+    history: '最近交易', noHistory: '暂无交易。', explorer: '在 Pudge 浏览器查看', details: '详情', hideDetails: '收起详情', technical: '技术详情',
+    rename: '编辑参与者', save: '保存', exportNames: '导出名称', importNames: '导入名称', importFile: '选择参与者文件', metadataNote: '名称和说明仅为本地备注，不会赋予钱包访问权限。',
+    unknownRole: '此钱包在该 Pocket 中没有权限。', ownerOnly: '请连接所有者钱包以执行此操作。', delegateOnly: '请连接已登记的支出人钱包以支付。',
+    errors: '请检查标出的字段。', minAmount: '请输入有效的 CKB 金额，最多 8 位小数。',
+    copied: '已复制', close: '关闭', legacyHelp: '打开原始 HTML 备用界面',
+    localDisclosure: '钱包签名和链上验证仍由现有 QuotaCell 后端处理。此界面不会持有私钥。',
+    occupiedDisclosure: 'Cell 占用容量由链上 Cell 锁定，与支出权限相互独立。',
+    feeDisclosure: '此处手续费来自后端准备的实际交易。',
+    noWallet: '请连接受支持的 CKB 测试网钱包。', stateUnavailable: '无法从后端读取实时 Pocket 状态。',
+    appIdentity: '应用身份', policyId: 'Pocket 策略', txId: '交易', ownerActionConfirm: '签名前请确认此所有者操作。',
+    depositMinimum: '存款至少为 73 CKB，以满足一个受支持资金 Cell 的容量要求。', closeConsequences: '关闭后，受支持的资金 Cell 将发送给所有者。策略 Cell 保留 134 CKB 终止容量。暂不支持的 Cell 不会被取回。', revokeConsequences: '此钱包将无法再发起新支付。已完成的支付无法撤销。', continueToReview: '准备交易', inputs: '输入', outputs: '输出', discardSignature: '丢弃已签名交易',
+    walletDisconnectedError: '钱包已断开。请重新连接后继续。', unsupportedWalletError: '当前原型仅验证了 UTXO Global Wallet 签名。', signingSchemeError: 'QCN4 需要 CKB secp256k1 钱包账户。', wrongNetworkError: '请在钱包中选择 CKB 测试网，然后重新连接。', publicKeyError: '钱包未提供压缩格式的 CKB secp256k1 公钥。', walletLockError: '连接的钱包地址与受支持的 CKB 锁不匹配。', walletChangedError: '签名期间钱包账户发生变化。未提交交易。', differentWalletsError: '每位参与者都必须连接不同的钱包。',
+    submitUnknown: '响应中断。请先查询现有交易状态，再进行其他操作。', submitSuccess: '交易状态：{{state}} · {{hash}}', participantEmpty: '支出人', paymentBoundsError: '此支付金额超出当前个人或共享额度。',
+    connectToSeeActions: '连接钱包以查看对应权限', closedStatus: '已关闭', allowanceExplanation: '两项独立权限共同计入此共享额度。', connectToContinue: '连接 Pocket 钱包', usedOf: '已用，共', perPaymentHint: '这是额度上限，不是账户余额。', sharedAuthorityHint: '后续存款不会恢复已使用的权限。', permissionRevokedMessage: '所有者已撤销此钱包的支出权限。', sharedRelationship: '两项支出权限共用一个累计上限。', publicKey: '钱包公钥', used: '已用', typedCell: '带类型脚本的 Cell', dataCell: '含数据的 Cell', bytes: '字节', participantNames: '参与者名称', metadataSaveError: '无法在此浏览器保存参与者名称。', metadataImportError: '无法导入参与者文件。', indexerTip: '索引器快照', loadingState: '正在读取实时 Pocket 状态…', actionFailed: '无法完成此操作。', feeError: '无法验证网络手续费。', pocketStateError: 'Pocket 状态已变化。请刷新并检查当前状态。', ownerCellError: '所有者钱包需要一个容量充足的普通 Cell 才能创建 Pocket。', walletCanceledError: '钱包操作已取消。未提交交易。', recipientPolicyError: '获准收款人已与当前 Pocket 规则不一致。', inputChangedError: '所需 Cell 已变化或签名请求已过期。请刷新并检查后继续。', metadataLocal: '名称已保存在此设备', checkedStatus: '已查询交易状态', noUncertainTransactions: '未发现结果待确认的交易。', recoveredAmount: '已返还的受支持资金', signerMismatch: '请连接拥有此交易权限的钱包后再签名。', reconnectSigner: '连接正确的钱包',
+    reconnect: '重新连接钱包', connectAllPeopleError: '请先连接所有者和两位支出人的钱包。', differentRecipientsError: '两位支出人必须使用不同的获准收款地址。', recipientMustBeDifferentError: '获准收款地址必须与所有者及支出人的钱包地址不同。', paymentEffect: '此笔支付会同时扣减支出人的剩余额度和共享额度。', depositConsequences: '添加资金会增加受保护资金，但不会恢复已使用的支出权限。', sweepConsequences: '只有受支持的后续到账资金会发送给所有者。暂不支持的 Cell 仍留在链上。', standardRecipientError: '请输入标准的 CKB 测试网收款地址。',
+  } },
+};
+
+const stored = localStorage.getItem('quotacell:locale');
+void i18n.use(initReactI18next).init({ resources, lng: stored === 'zh-Hans' ? 'zh-Hans' : 'en', fallbackLng: 'en', interpolation: { escapeValue: false } });
+if (typeof document !== 'undefined') document.documentElement.lang = stored === 'zh-Hans' ? 'zh-CN' : 'en';
+i18n.on('languageChanged', (locale) => {
+  try { localStorage.setItem('quotacell:locale', locale === 'zh-Hans' ? 'zh-Hans' : 'en'); } catch { /* A blocked storage API does not affect the selected language. */ }
+  if (typeof document !== 'undefined') document.documentElement.lang = locale === 'zh-Hans' ? 'zh-CN' : 'en';
+});
+
+export default i18n;

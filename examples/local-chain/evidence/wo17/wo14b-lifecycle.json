@@ -1,0 +1,43 @@
+{
+  "result": "PASS",
+  "lifecycle": [
+    "creation",
+    "funding",
+    "alice payment",
+    "ben payment",
+    "separate delegate revocations",
+    "application and CKB-VM negative tests",
+    "recovery",
+    "late deposit",
+    "sweep",
+    "node and server restart/reopen"
+  ],
+  "react": [
+    "empty onboarding",
+    "active role-aware view",
+    "closed recovery view",
+    "mobile overflow checks"
+  ],
+  "revokedPaymentVm": [
+    {
+      "role": "alice",
+      "result": "REJECTED_BY_CKB_VM",
+      "rpcError": {
+        "code": -302,
+        "message": "TransactionFailedToVerify: Script(TransactionScriptError { source: Inputs[0].Type, cause: ValidationFailure: see error code 17 on page https://nervosnetwork.github.io/ckb-script-error-codes/by-data-hash/d03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e.html#17 })",
+        "data": "Error { kind: Script, inner: TransactionScriptError { source: Inputs[0].Type, cause: ValidationFailure: see error code 17 on page https://nervosnetwork.github.io/ckb-script-error-codes/by-data-hash/d03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e.html#17 } }"
+      }
+    },
+    {
+      "role": "ben",
+      "result": "REJECTED_BY_CKB_VM",
+      "rpcError": {
+        "code": -302,
+        "message": "TransactionFailedToVerify: Script(TransactionScriptError { source: Inputs[0].Type, cause: ValidationFailure: see error code 17 on page https://nervosnetwork.github.io/ckb-script-error-codes/by-data-hash/d03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e.html#17 })",
+        "data": "Error { kind: Script, inner: TransactionScriptError { source: Inputs[0].Type, cause: ValidationFailure: see error code 17 on page https://nervosnetwork.github.io/ckb-script-error-codes/by-data-hash/d03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e.html#17 } }"
+      }
+    }
+  ],
+  "genesis": "0x564fc9599eb26a84fecef0844a0b02e36a7de324e0d2c8c464339ccaae9f1a42",
+  "pocket": "0x1855e3e92685ee38e84ed97a762ab3890649c5c29906c1bb387c25826e27737e"
+}

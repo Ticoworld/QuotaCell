@@ -1,5 +1,7 @@
 # Windows Pudge startup and manual acceptance
 
+> The native WO17 React experience and current startup commands are documented in [WO17_WINDOWS.md](WO17_WINDOWS.md). This file preserves the earlier WO16 instructions and acceptance notes.
+
 From a PowerShell window in the repository root, install the pinned dependencies with `npm ci --prefix examples/local-chain`. Node 22 with `--experimental-strip-types` is required. The current checkout must contain `evidence/wo15/pudge-deployment.json`; keep that file unchanged. No private keys are required by the server.
 
 Check the public deployment outpoint using a read-only RPC request:
