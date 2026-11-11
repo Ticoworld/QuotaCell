@@ -265,7 +265,23 @@
 
   .dialog-overlay { position: fixed; z-index: 50; inset: 0; background: rgba(8,16,32,.48); animation: overlay-in .12s ease-out; }
   .dialog-content { position: fixed; z-index: 51; inset: 50% auto auto 50%; width: min(540px, calc(100vw - 30px)); max-height: min(86vh, 850px); overflow-y: auto; transform: translate(-50%,-50%); padding: 23px; color: var(--ink); background: #fff; border: 1px solid #d9e1ec; border-radius: 12px; box-shadow: 0 24px 70px #0713293d; animation: dialog-in .14s ease-out; }
-  ccc-connector { z-index: 70; }
+  ccc-connector {
+    z-index: 70;
+    color: var(--ink);
+    --background: #fff;
+    --divider: var(--line);
+    --icon-primary: var(--blue);
+    --icon-secondary: var(--muted);
+    --tip-color: var(--muted);
+    --tip-color-hover: var(--navy);
+    --btn-primary: #eef3fb;
+    --btn-primary-hover: #e2ebf8;
+    --btn-secondary: #eef3fb;
+    --btn-secondary-hover: #e2ebf8;
+    --btn-color: var(--navy);
+    --btn-color-hover: var(--navy);
+  }
+  .wallet-connection-alert { width: min(calc(100% - 48px), 1040px); margin: 16px auto 0; }
   .dialog-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
   .dialog-symbol { width: 31px; height: 31px; display: grid; place-items: center; color: var(--blue); background: var(--blue-wash); border-radius: 8px; }
   .dialog-symbol svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
