@@ -2,6 +2,8 @@
 import * as c from '@ckb-ccc/core';
 import {DatabaseSync} from 'node:sqlite';
 import {observePublicTransaction,submitPublicTransaction} from './pocket_public_tx.mjs';
+import {recoverCreation,submitDurableCreation} from './pocket_creation_recovery.mjs';
+import {callRpc} from './pocket_rpc_retry.mjs';
 import {verifyNetwork} from './pocket_network.mjs';
 import {parseCkb,recipientArgs} from './pocket_input.mjs';
 import {buildGenesis} from './pocket_genesis.mjs';
@@ -28,7 +30,7 @@ const optional=async name=>{try{return await load(name);}catch(e){if(e.code==='E
 const [runtime,profile,deployment]=await Promise.all([load('runtime'),load('evidence/node-profile'),optional('deployment')]);
 let initial=developmentSigner?await optional('context'):null;
 let actors=developmentSigner?await optional('actors'):null;
-const descriptor=await optional('pocket');
+let descriptor=await optional('pocket');
 if(!initial&&descriptor){initial=descriptor.initial;actors=descriptor.actors;}
 assert(Boolean(initial)===Boolean(actors),'Development context and actors must be supplied together');
 const environment=deployment||initial;
@@ -44,8 +46,10 @@ const script=s=>({code_hash:s.codeHash,hash_type:s.hashType,args:s.args});
 const raw=tx=>({version:num(tx.version),cell_deps:tx.cellDeps.map(d=>({out_point:point(d.outPoint),dep_type:d.depType==='depGroup'?'dep_group':d.depType})),header_deps:[],inputs:tx.inputs.map(i=>({since:num(i.since),previous_output:point(i.previousOutput)})),outputs:tx.outputs.map(o=>({capacity:num(o.capacity),lock:script(o.lock),type:o.type?script(o.type):null})),outputs_data:tx.outputsData,witnesses:tx.witnesses});
 let rid=0;
 async function rpc(method,params=[]){
- const res=await fetch(runtime.url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:++rid,method,params}),signal:AbortSignal.timeout(15000)});
- const x=await res.json();if(x.error)throw Object.assign(new Error(JSON.stringify(x.error)),{rpc:x.error});return x.result;
+ return callRpc(method,async()=>{
+  const res=await fetch(runtime.url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:++rid,method,params}),signal:AbortSignal.timeout(method==='get_live_cell'?30000:15000)});
+  const x=await res.json();if(x.error)throw Object.assign(new Error(JSON.stringify(x.error)),{rpc:x.error,retryable:false});return x.result;
+ });
 }
 async function live(p){const x=await rpc('get_live_cell',[point(p),true]);assert.equal(x.status,'live','Input is stale');return {...x,outPoint:p};}
 async function verifyEnvironment(){
@@ -56,13 +60,14 @@ async function verifyEnvironment(){
  for(const [i,n] of ['Kdata','Kcode'].entries()){const x=await live(members[i]);assert.equal(c.hashCkb(buf(x.cell.data.content)),hashes[n]);if(n==='Kcode'){const t=x.cell.output.type;assert(t);assert.equal(c.Script.from({codeHash:t.code_hash,hashType:t.hash_type,args:t.args}).hash(),K);}}
  assert.deepEqual(environment.allDeps,[environment.kdep,...['A','F','Q'].map(n=>({outPoint:environment.deployed[n],depType:'code'}))]);
 }
-await verifyEnvironment();
 const db=new DatabaseSync(path.join(run,'working-pocket.sqlite'));
 db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS intents (id TEXT PRIMARY KEY, genesis TEXT NOT NULL, pocket TEXT NOT NULL, actor TEXT NOT NULL, recipient TEXT NOT NULL, amount TEXT NOT NULL, tx_hash TEXT NOT NULL, signed TEXT NOT NULL, state TEXT NOT NULL, created TEXT NOT NULL)");
 if(!db.prepare('PRAGMA table_info(intents)').all().some(x=>x.name==='operation'))db.exec("ALTER TABLE intents ADD COLUMN operation TEXT NOT NULL DEFAULT 'pay'");
-const insert=db.prepare('INSERT INTO intents (id,genesis,pocket,actor,recipient,amount,tx_hash,signed,state,created,operation) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+if(!db.prepare('PRAGMA table_info(intents)').all().some(x=>x.name==='recovery_json'))db.exec('ALTER TABLE intents ADD COLUMN recovery_json TEXT');
+const insert=db.prepare('INSERT INTO intents (id,genesis,pocket,actor,recipient,amount,tx_hash,signed,state,created,operation,recovery_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
 const rows=()=>db.prepare('SELECT * FROM intents ORDER BY rowid').all();
 const update=db.prepare('UPDATE intents SET state=? WHERE id=?');
+await verifyEnvironment();
 let busy=false;
 const requests=new Map();
 const walletBundle=(await build({entryPoints:[path.join(here,'working_pocket_wallet.mjs')],bundle:true,write:false,platform:'browser',format:'iife',target:'chrome110'})).outputFiles[0].contents;
@@ -113,13 +118,19 @@ async function snapshot(){
  const delegates=['alice','ben'].map((role,i)=>{if(closed)return {role,limit:'0',used:'0',perPayment:'0',enabled:false,recipient:'',publicKey:''};const o=158+154*i;return {role,limit:u(o+106).toString(),used:u(o+122).toString(),perPayment:u(o+138).toString(),enabled:Boolean(s[7]&(1<<i)),recipient:c.Script.fromBytes(s.subarray(o+33,o+106)).args,publicKey:hex(s.subarray(o,o+33))};});
  return {state,p,f,fs,unresolved,closed,view:{unsupportedFunds:state.unsupportedFunds||[],networkMode,indexedTip,pocket:c.Script.from(initial.Q).hash(),genesis:profile.genesisHeader.hash,owner:actors.owner.publicKey,policyOutpoint:state.policy,fundShannons:fs.reduce((n,x)=>n+BigInt(x.cell.output.capacity),0n).toString(),fundOccupiedShannons:(BigInt(fs.length)*7300000000n).toString(),sharedLimit:closed?'0':u(8).toString(),sharedUsed:closed?'0':u(24).toString(),delegates,closed,hasFund:!!f,policyCapacity:p.cell.output.capacity,history:rows().map(({id,tx_hash,state,amount,recipient,created,actor,operation})=>({id,tx_hash,state,amount,recipient,created,actor,operation})),unresolved}};
 }
+async function creationRecoveryState(){
+ const item=rows().findLast(x=>x.operation==='genesis');if(!item)return null;
+ const recovered=await recoverCreation({item,operationInProgress:busy,observe:async row=>{const result=await observePublicTransaction({rpc,hash:row.tx_hash,signed:JSON.parse(row.signed),priorState:row.state});update.run(result.state,row.id);return result;},descriptorMatches:value=>!descriptor||JSON.stringify(descriptor)===JSON.stringify(value),writeDescriptor:async value=>{if(!descriptor){const file=path.join(run,'pocket.json'),temp=file+'.tmp';await fs.writeFile(temp,JSON.stringify(value));await fs.rename(temp,file);descriptor=value;}initial=value.initial;actors=value.actors;}});
+ if(recovered.ready)return null;
+ return {empty:false,recoveryRequired:true,unresolved:true,genesis:profile.genesisHeader.hash,networkMode,creationRecovery:{txHash:item.tx_hash,state:recovered.outcome.state,reason:recovered.outcome.reason||'',recoveryAvailable:!!item.recovery_json}};
+}
 const lockFor=publicKey=>c.Script.from({codeHash:K,hashType:'type',args:c.hashCkb(buf(publicKey)).slice(0,42)});
 async function selectedFee(){if(networkMode==='isolated')return 2000n;const f=await rpc('get_fee_rate_statistics',['0x65']);assert(f?.median,'Fee statistics unavailable');const fee=BigInt(f.median)*8n;assert(fee>0n&&fee<=1000000n,'Current fee exceeds policy bound');return fee;}
 async function transactionFee(tx){let total=0n;for(const i of tx.inputs){const cell=await live(i.previousOutput);total+=BigInt(cell.cell.output.capacity);}return (total-tx.outputs.reduce((sum,o)=>sum+o.capacity,0n)).toString();}
 async function prepareGenesis(body){
  assert(!busy,'Another action is in progress');busy=true;
  try{
-  assert(!initial,'A Pocket is already open');assert.match(body.id||'',/^[0-9a-f-]{36}$/);
+  assert(!initial&&!rows().some(x=>x.operation==='genesis'),'A Pocket creation already exists');assert.match(body.id||'',/^[0-9a-f-]{36}$/);
   assert(!requests.has(body.id),'Intent already exists');assert(requests.size<128,'Too many outstanding signing requests');
   await verifyEnvironment();
   const found=networkMode==='isolated'?await discoverPlainCells({rpc,lock:lockFor(body.publicKey)}):await discoverIndexed({rpc,lock:lockFor(body.publicKey)});
@@ -160,12 +171,13 @@ async function submitExternal(body){
   for(const p of request.points)await live(p);
   const prepared=c.Transaction.fromBytes(request.bytes),signed=c.Transaction.fromBytes(body.transaction);
   verifyWalletTransaction({prepared,signed,message:request.message,publicKey:request.publicKey,position:request.position});
-  const signedRaw=raw(signed);if(networkMode==='pudge'){const f=await rpc('get_fee_rate_statistics',['0x65']);const minimum=(BigInt(signed.toBytes().length)*BigInt(f.median)+999n)/1000n;assert(BigInt(await transactionFee(signed))>=minimum,'Fee below current median');}await rpc('dry_run_transaction',[signedRaw]);
-  db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');insert.run(body.id,profile.genesisHeader.hash,request.pocket,request.publicKey,request.recipient,request.amount,signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),request.operation);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
-  if(request.operation==='genesis'){await fs.writeFile(path.join(run,'pocket.json.tmp'),JSON.stringify({initial:request.next,actors:request.identities}));await fs.rename(path.join(run,'pocket.json.tmp'),path.join(run,'pocket.json'));initial=request.next;actors=request.identities;}
-  if(networkMode==='pudge'){const outcome=await submitPublicTransaction({rpc,hash:signed.hash(),signed:signedRaw,enabled:process.env.QUOTACELL_PUDGE_BROADCAST==='1'});update.run(outcome.state,body.id);return {txHash:signed.hash(),...outcome};}
-  try{assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash());}catch(e){return {txHash:signed.hash(),state:'uncertain',error:e.message};}
-  for(let i=0;i<20;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));if(await canonicalCommit(await rpc('get_transaction',[signed.hash()]))){update.run('committed',body.id);return {txHash:signed.hash(),state:'committed'};}}
+  const signedRaw=raw(signed);if(networkMode==='pudge'){const f=await rpc('get_fee_rate_statistics',['0x65']);const minimum=(BigInt(signed.toBytes().length)*BigInt(f.median)+999n)/1000n;assert(BigInt(await transactionFee(signed))>=minimum,'Fee below current median');}
+  const recovery=request.operation==='genesis'?JSON.stringify({initial:request.next,actors:request.identities}):null;
+  const persistIntent=()=>{db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');if(request.operation==='genesis')assert(!rows().some(x=>x.operation==='genesis'),'A Pocket creation already exists');insert.run(body.id,profile.genesisHeader.hash,request.pocket,request.publicKey,request.recipient,request.amount,signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),request.operation,recovery);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}};
+  const submitted=await submitDurableCreation({persistIntent,dryRun:()=>rpc('dry_run_transaction',[signedRaw]),submit:async()=>networkMode==='pudge'?submitPublicTransaction({rpc,hash:signed.hash(),signed:signedRaw,enabled:process.env.QUOTACELL_PUDGE_BROADCAST==='1'}):(assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash()),{state:'submitted'})});
+  if(submitted.state==='uncertain'){update.run('uncertain',body.id);return {txHash:signed.hash(),...submitted};}
+  if(networkMode==='pudge'){update.run(submitted.state,body.id);return {txHash:signed.hash(),...submitted};}
+  for(let i=0;i<20;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));if(await canonicalCommit(await rpc('get_transaction',[signed.hash()]))){update.run('committed',body.id);if(request.operation==='genesis'){const d={initial:request.next,actors:request.identities};await fs.writeFile(path.join(run,'pocket.json.tmp'),JSON.stringify(d));await fs.rename(path.join(run,'pocket.json.tmp'),path.join(run,'pocket.json'));initial=d.initial;actors=d.actors;}return {txHash:signed.hash(),state:'committed'};}}
   return {txHash:signed.hash(),state:'uncertain'};
  }finally{busy=false;}
 }
@@ -187,7 +199,7 @@ async function pay(body){
   const signed=await signWithCkbWallet({signer,prepared:tx,actorLock:lock,publicKey:signer.publicKey,message:info.message,position:1});
   for(const p of [snap.state.policy,snap.state.seeds[body.role],...snap.state.funds||[snap.state.fund]])await live(p);
   const signedRaw=raw(signed);await rpc('dry_run_transaction',[signedRaw]);
-  db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');insert.run(body.id,profile.genesisHeader.hash,snap.view.pocket,signer.publicKey,body.recipient,amount.toString(),signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),'pay');db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+  db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');insert.run(body.id,profile.genesisHeader.hash,snap.view.pocket,signer.publicKey,body.recipient,amount.toString(),signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),'pay',null);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
   try{assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash());}catch(e){return {txHash:signed.hash(),state:'uncertain',error:e.message};}
   for(let i=0;i<20;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));const result=await rpc('get_transaction',[signed.hash()]);if(await canonicalCommit(result)){update.run('committed',body.id);return {txHash:signed.hash(),state:'committed'};}}
   return {txHash:signed.hash(),state:'uncertain'};
@@ -231,7 +243,7 @@ async function ownerAction(body,external=false){
   const secret=await load('keys/owner'),signer=new c.SignerCkbPrivateKey(client,secret.privateKey);assert.equal(signer.publicKey,actors.owner.publicKey);
   const signed=await signWithCkbWallet({signer,prepared:tx,actorLock:ownerLock,publicKey:signer.publicKey,message:info.message,position});for(const p of inputs)await live(p);
   const signedRaw=raw(signed);await rpc('dry_run_transaction',[signedRaw]);
-  db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');insert.run(body.id,profile.genesisHeader.hash,snap.view.pocket,signer.publicKey,actors.owner.lock.args,amount.toString(),signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),op);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+  db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');insert.run(body.id,profile.genesisHeader.hash,snap.view.pocket,signer.publicKey,actors.owner.lock.args,amount.toString(),signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),op,null);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
   try{assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash());}catch(e){return {txHash:signed.hash(),state:'uncertain',error:e.message};}
   for(let i=0;i<20;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));const result=await rpc('get_transaction',[signed.hash()]);if(await canonicalCommit(result)){update.run('committed',body.id);return {txHash:signed.hash(),state:'committed'};}}
   return {txHash:signed.hash(),state:'uncertain'};
@@ -249,8 +261,8 @@ const server=http.createServer(async(req,res)=>{
    const call=JSON.parse(body);assert(['get_fee_rate_statistics','get_tip_header','get_live_cell','get_transaction','get_header','get_block_hash','get_consensus'].includes(call.method),'RPC method unavailable');
    const result=await rpc(call.method,call.params||[]);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:call.id,result}));return;
   }
-  if(req.method==='GET'&&req.url==='/api/state'){const s=initial?await snapshot():{view:{empty:true,genesis:profile.genesisHeader.hash,developmentSigner,networkMode}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(s.view));return;}
-  if(req.method==='POST'&&networkMode==='pudge-readonly'&&req.url!=='/api/ckb')throw new Error('Pudge transactions are disabled pending dependency and wallet qualification');
+  if(req.method==='GET'&&req.url==='/api/state'){const recovery=await creationRecoveryState();const s=recovery?{view:recovery}:initial?await snapshot():{view:{empty:true,genesis:profile.genesisHeader.hash,developmentSigner,networkMode}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(s.view));return;}
+  if(req.method==='POST'&&networkMode==='pudge-readonly'&&!['/api/ckb','/api/reconcile'].includes(req.url))throw new Error('Pudge transactions are disabled pending dependency and wallet qualification');
   if(req.method==='POST'&&['/api/external/genesis','/api/external/prepare','/api/external/owner','/api/external/submit'].includes(req.url)){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');let body='';for await(const chunk of req){body+=chunk;assert(body.length<210000);}
    const input=JSON.parse(body);const result=await (req.url.endsWith('/genesis')?prepareGenesis(input):req.url.endsWith('/owner')?ownerAction(input,true):req.url.endsWith('/prepare')?prepareExternal(input):submitExternal(input));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));return;
@@ -265,7 +277,7 @@ const server=http.createServer(async(req,res)=>{
   }
   if(req.method==='POST'&&req.url==='/api/reconcile'){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');assert(!busy,'Another action is in progress');busy=true;
-   try{await verifyEnvironment();const outcomes=[];if(networkMode==='pudge'){for(const item of rows()){const result=await observePublicTransaction({rpc,hash:item.tx_hash,signed:JSON.parse(item.signed),priorState:item.state});update.run(result.state,item.id);outcomes.push({txHash:item.tx_hash,...result});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));return;}for(const item of rows().filter(x=>x.state!=='committed')){let tx=await rpc('get_transaction',[item.tx_hash]);if(['pending','proposed'].includes(tx?.tx_status?.status)){for(let i=0;i<8;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));tx=await rpc('get_transaction',[item.tx_hash]);if(await canonicalCommit(tx))break;}}if(await canonicalCommit(tx))update.run('committed',item.id);outcomes.push({txHash:item.tx_hash,status:tx?.tx_status?.status||'unknown'});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));}finally{busy=false;}return;
+   try{await verifyEnvironment();const outcomes=[];if(networkMode.startsWith('pudge')){for(const item of rows()){const result=await observePublicTransaction({rpc,hash:item.tx_hash,signed:JSON.parse(item.signed),priorState:item.state});update.run(result.state,item.id);outcomes.push({txHash:item.tx_hash,...result});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));return;}for(const item of rows().filter(x=>x.state!=='committed')){let tx=await rpc('get_transaction',[item.tx_hash]);if(['pending','proposed'].includes(tx?.tx_status?.status)){for(let i=0;i<8;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));tx=await rpc('get_transaction',[item.tx_hash]);if(await canonicalCommit(tx))break;}}if(await canonicalCommit(tx))update.run('committed',item.id);outcomes.push({txHash:item.tx_hash,status:tx?.tx_status?.status||'unknown'});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));}finally{busy=false;}return;
   }
   res.writeHead(404);res.end('Not found');
  }catch(e){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:e.message}));}

@@ -284,7 +284,8 @@ function App() {
       </div>
     </header>
 
-    {state?.empty ? showCreation ? <CreationFlow pudgeReadOnly={pudgeReadOnly} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => setShowCreation(false)}/> : <main className="empty-pocket-page"><div className="empty-cell-mark" aria-hidden="true"><CellMark/></div><h1>{t('emptyTitle')}</h1><p>{t('emptyBody')}</p><button className="primary-button" type="button" onClick={() => setShowCreation(true)}>{t('createPocket')} <span aria-hidden="true">→</span></button></main>
+    {state?.creationRecovery ? <main className="loading-page"><section className="load-error" role="alert"><h1>{t('creationRecoveryTitle')}</h1><p>{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
+      : state?.empty ? showCreation ? <CreationFlow pudgeReadOnly={pudgeReadOnly} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => setShowCreation(false)}/> : <main className="empty-pocket-page"><div className="empty-cell-mark" aria-hidden="true"><CellMark/></div><h1>{t('emptyTitle')}</h1><p>{t('emptyBody')}</p><button className="primary-button" type="button" onClick={() => setShowCreation(true)}>{t('createPocket')} <span aria-hidden="true">→</span></button></main>
       : state && !state.empty ? <main id="home" className="app-page">
         <div className="pocket-heading"><div><h1>{state.pocket ? t('activePocket') : t('brand')}</h1><p>{identity ? displayIdentityRole : t('connectToSeeActions')}</p></div><span className={closed ? 'state-mark state-closed' : 'state-mark'}>{closed ? t('closedStatus') : t('active')}</span></div>
 

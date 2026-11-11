@@ -33,6 +33,8 @@ export type PocketState = {
   empty?: boolean;
   closed?: boolean;
   unresolved?: boolean;
+  recoveryRequired?: boolean;
+  creationRecovery?: { txHash: string; state: string; reason?: string; recoveryAvailable: boolean };
   networkMode: string;
   genesis: string;
   pocket?: string;

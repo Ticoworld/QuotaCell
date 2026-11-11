@@ -1,0 +1,110 @@
+{
+  "workOrder": "WO18A",
+  "verdict": "PARTIAL",
+  "observedDate": "2026-11-11",
+  "source": {
+    "repository": "Ticoworld/QuotaCell",
+    "branch": "codex/wo15-pudge-qualification",
+    "baseCommit": "0694c96f0ac166eae5e176df31787bbe1c9f53e",
+    "mainModified": false
+  },
+  "workspace": {
+    "originalCheckout": "C:\\Users\\timot\\.codex\\worktrees\\wo14b-working-pocket\\QuotaCell",
+    "permanentCheckout": "C:\\Users\\timot\\Desktop\\2026\\CKB\\QuotaCell\\app",
+    "permanentCheckoutHasGitDirectory": true,
+    "gitObjectAlternates": false,
+    "desktopInsideOneDrive": false,
+    "originalWorktreeTrackedChanges": false,
+    "runtime": "C:\\Users\\timot\\Desktop\\2026\\CKB\\QuotaCell\\local-state\\wo18-pudge-acceptance-20261111",
+    "migrationDatabaseSnapshot": {
+      "path": "working-pocket.sqlite",
+      "sha256": "ee26b42e50e7ff9755d9328d57ace2f4d628cc5a8584b2d7a374bc8cefaad903",
+      "integrityCheck": "ok",
+      "intentCount": 0
+    },
+    "runtimeFiles": [
+      {"path":"deployment.json","bytes":1745,"sha256":"5a3d295a1ae9aa3398f7a0c12e5b25094abe343f0eae7d4df09447035f8ea1e1"},
+      {"path":"evidence/node-profile.json","bytes":95,"sha256":"6fd29d20742741e80cbc3efe261db178c548477cf6359bbfa4c1a388420b5aca"},
+      {"path":"runtime-primary-20261111.json","bytes":34,"sha256":"9b98cf55646ae21d06b81aa6452bfa1615072023aabf1e2bc00211d55abf8301"},
+      {"path":"runtime.json","bytes":38,"sha256":"26e9236e741cee0aaaaf99581e16e582a75b7cb13eaeaff28a527fcf475be1ad"},
+      {"path":"migration-source/working-pocket.sqlite","bytes":4096,"sha256":"d872a52e869261dc4cf51c6a70fd85736916c38e14fc5d704cd8f74a406c4942"},
+      {"path":"migration-source/working-pocket.sqlite-shm","bytes":32768,"sha256":"5d92071ba24a2b04fd29f25f3957bd969a0c6884d6aeb20449813302eb6703c0"},
+      {"path":"migration-source/working-pocket.sqlite-wal","bytes":16512,"sha256":"93e814e0ed89f2d5b3002d7dec949777657bc46a836affbe6c406aeac97e2c4f"}
+    ]
+  },
+  "gates": {
+    "A": "PASS",
+    "B": "PASS",
+    "C": "PARTIAL",
+    "D": "NOT_STARTED",
+    "E": "NOT_STARTED",
+    "F": "NOT_STARTED",
+    "G": "NOT_STARTED",
+    "H": "NOT_STARTED"
+  },
+  "pudge": {
+    "network": "ckb_testnet",
+    "genesis": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+    "pairedTipObservation": {
+      "primary": {
+        "utc": "2026-11-11T12:32:34.750Z",
+        "url": "https://testnet.ckb.dev/",
+        "tipHeight": "0x15f6668",
+        "tipHash": "0xe8ed8fb8d88b373a415e8cd0f2f1f24f95e18e333567c27ef0433fc60aa4d8e4",
+        "indexerHeight": "0x15f6668",
+        "indexerHash": "0xe8ed8fb8d88b373a415e8cd0f2f1f24f95e18e333567c27ef0433fc60aa4d8e4",
+        "feeMedian": "0x81c6"
+      },
+      "alternate": {
+        "utc": "2026-11-11T12:32:37.650Z",
+        "url": "https://testnet.ckbapp.dev/",
+        "tipHeight": "0x15f6668",
+        "tipHash": "0xe8ed8fb8d88b373a415e8cd0f2f1f24f95e18e333567c27ef0433fc60aa4d8e4",
+        "indexerHeight": "0x15f6668",
+        "indexerHash": "0xe8ed8fb8d88b373a415e8cd0f2f1f24f95e18e333567c27ef0433fc60aa4d8e4",
+        "feeMedian": "0x81c6"
+      },
+      "operatorIndependenceVerified": false
+    },
+    "dependencies": {
+      "KDepGroup": {"outpoint":"0xf8de3bb47d055cdf460d93a2a6e1b05f7432f9777c8c474abf4eec1d4aee5d37:0","live":true,"dataHash":"0xf66ca3517241864672b7f47d093aec4d6d4d07824068993eacd728eb9078e236","bytes":76},
+      "KData": {"outpoint":"0x8f8c79eb6671709633fe6a46de93c0fedc9c1b8a6527a18d3983879542635c9f:3","live":true,"dataHash":"0x9799bee251b975b82c45a02154ce28cec89c5853ecc14d12b7b8cccfc19e0af4","bytes":1048576},
+      "KCode": {"outpoint":"0x8f8c79eb6671709633fe6a46de93c0fedc9c1b8a6527a18d3983879542635c9f:1","live":true,"dataHash":"0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649","bytes":52048},
+      "A": {"outpoint":"0xb4f171c9c9caf7401f54a8e56225ae21d95032150a87a4678eac3f66a3137b93:0","live":true,"dataHash":"0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1","bytes":1216},
+      "F": {"outpoint":"0xb4f171c9c9caf7401f54a8e56225ae21d95032150a87a4678eac3f66a3137b93:1","live":true,"dataHash":"0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a","bytes":27360},
+      "Q": {"outpoint":"0xd6654da12e92d44a37b9c48a7b27db325fa3e68cc50f3e17ce74a791523c00d0:0","live":true,"dataHash":"0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e","bytes":23600,"capacityCKB":23661,"txStatus":"committed","canonicalBlockHash":"0xa04b7b4746537d9c7e6237caf81cbf15fff82f3e29fd4240dd7a479414b97b65","canonicalBlockHeight":"0x15f33da"}
+    },
+    "signedBytesSent": false,
+    "publicTransactionsCreated": false
+  },
+  "startup": {
+    "frontendUrl": "http://127.0.0.1:5173/",
+    "backendUrl": "http://127.0.0.1:4173/",
+    "networkMode": "pudge-readonly",
+    "developmentSigner": false,
+    "publicBroadcastEnabled": false,
+    "backendStartPassed": true,
+    "cleanStopPassed": true,
+    "samePathRestartPassed": true,
+    "apiGenesis": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+    "apiConsensus": "ckb_testnet",
+    "creationRouteStatus": 400,
+    "journalIntents": 0
+  },
+  "regressions": {
+    "frontendBuild": "PASS",
+    "creationRecoveryFaultTest": "PASS",
+    "rpcRetryTest": "PASS",
+    "publicTransactionStateTest": "PASS",
+    "isolatedLifecycle": "PASS",
+    "isolatedLifecycleRun": "examples/local-chain/.local/wo18a-lifecycle-regression-11-20261111",
+    "publicPocketLifecycle": "NOT_RUN"
+  },
+  "realWallet": {
+    "utxoGlobalConnected": false,
+    "ownerIdentityVerified": false,
+    "delegateIdentitiesVerified": false,
+    "signaturesRequested": 0,
+    "publicBroadcasts": 0
+  }
+}
