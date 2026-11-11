@@ -94,10 +94,11 @@
   "regressions": {
     "frontendBuild": "PASS",
     "creationRecoveryFaultTest": "PASS",
+    "creationRecoveryTestScope": "SQLite-backed helper tests including child-process exit after durable intent and close/reopen recovery; complete HTTP backend restart with a populated public journal remains untested",
     "rpcRetryTest": "PASS",
     "publicTransactionStateTest": "PASS",
     "isolatedLifecycle": "PASS",
-    "isolatedLifecycleRun": "examples/local-chain/.local/wo18a-lifecycle-regression-11-20261111",
+    "isolatedLifecycleRun": "examples/local-chain/.local/wo18a-lifecycle-regression-17-20261111",
     "publicPocketLifecycle": "NOT_RUN"
   },
   "realWallet": {

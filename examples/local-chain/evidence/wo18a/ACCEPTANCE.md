@@ -34,7 +34,9 @@ WO18A completed the permanent checkout migration, public creation recovery harde
 
 The prior creation path could send signed bytes to public `dry_run_transaction` before a durable intent existed, and it wrote the Pocket descriptor separately from the SQLite journal. A crash could therefore leave insufficient recovery state or make the app look empty.
 
-The updated public path commits the exact signed transaction and provisional `{initial, actors}` recovery payload together in one SQLite intent transaction before any signed bytes leave the app. Dry run and public submission follow that durable write. The server never automatically resends. On startup or state refresh, a journaled creation is observed by hash; an unresolved, rejected, conflicting, missing-payload or descriptor-conflict state is shown as recovery-required rather than as an empty Pocket. A descriptor is materialized only after a canonical commit is observed. Reconciliation in either Pudge mode is observation-only. An in-progress creation is not concurrently reconciled, and an already committed creation does not block unrelated owner actions.
+The updated public path commits the exact signed transaction and provisional `{initial, actors}` recovery payload together in one SQLite intent transaction before any signed bytes leave the app. Dry run and public submission follow that durable write. The server never automatically resends. On startup or state refresh, a journaled creation is observed by hash; an unresolved, rejected, conflicting, missing-payload or descriptor-conflict state is shown as recovery-required rather than as an empty Pocket. A descriptor is materialized only after a canonical commit is observed. Even a previously committed creation is rechecked for canonical status before recovery completes. Reconciliation in either Pudge mode is observation-only. An in-progress creation is not concurrently reconciled, and an already committed creation does not block unrelated owner actions.
+
+A creation row with a confirmed `rejected` outcome remains blocked from replacement creation. The app does not currently offer an explicit operator resolution flow to clear that known rejection; it fails closed and requires a separately reviewed recovery procedure. Unknown, pending and conflicting outcomes also remain blocked.
 
 One bounded retry is applied only to idempotent RPC reads. `dry_run_transaction` and `send_transaction` remain single-attempt. `get_live_cell` has a 30-second timeout for the large standard-script dependency Cell.
 
@@ -43,12 +45,13 @@ The QCN4 contract bytes, deployed code Cell, signature verification checks and p
 ## Verification
 
 - `node examples/local-chain/pocket_rpc_retry_test.mjs`: PASS. Read-only retry bound, JSON-RPC errors, and single-attempt dry-run/submission behavior.
-- `node examples/local-chain/pocket_creation_recovery_test.mjs`: PASS. Faults at intent persistence, after intent, before/during/after dry run, before/after submission, plus pending, committed, rejected, conflicting, unknown, in-progress and descriptor-conflict recovery states.
+- `node examples/local-chain/pocket_creation_recovery_test.mjs`: PASS. Uses a temporary SQLite database, a child process that exits immediately after durable intent commit, and close/reopen fault stages for intent persistence, before/during/after dry run, before/after submission, accepted submission with lost response, unknown/pending/rejected/conflicting outcomes, canonical revalidation, descriptor-write failure/retry and no-rebroadcast behavior. It tests the durable recovery helper and database behavior; it does not kill and restart the complete HTTP backend with a populated journal.
 - `node examples/local-chain/wo15d_public_tx_test.mjs`: PASS. Public submission opt-in and pending, committed, rejected, conflict, uncertain, interruption and reorganization outcomes.
 - `npm run build` in `frontend`: PASS.
 - `node --experimental-strip-types examples/local-chain/wo14b_lifecycle_test.mjs examples/local-chain/.local/wo18a-lifecycle-regression-11-20261111`: PASS on a fresh isolated CKB node after the recovery and RPC changes. Creation, funding, two simulated delegate payments, separate revocations, both Q VM error-17 rejections, recovery, late deposit/sweep, active and terminal restart, and React mobile checks passed. The machine result is in that ignored run directory; it is isolated-chain proof only.
 - Pudge React/API startup: PASS. `GET /api/state` returned empty state, expected Pudge genesis and `developmentSigner: false`; proxied `get_consensus` returned `ckb_testnet`; the external creation route returned HTTP 400 in read-only mode. Backend stop/restart reused the same persistent runtime and healthy empty journal.
 - Actual React read-only screen: [pudge-readonly-empty.png](screenshots/pudge-readonly-empty.png). It shows the application in `pudge-readonly`; no extension was connected.
+- The source commit tested by these checks is recorded in `verification.json` as `testedCommit`; public acceptance remains unfinished.
 
 ## Pudge observations
 

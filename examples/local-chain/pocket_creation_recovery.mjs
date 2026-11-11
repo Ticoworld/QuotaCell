@@ -15,9 +15,8 @@ export async function submitDurableCreation({persistIntent,dryRun,submit,checkpo
 }
 
 export async function recoverCreation({item,observe,writeDescriptor,descriptorMatches=()=>true,operationInProgress=false}){
- if(operationInProgress&&item.state!=='committed')return {ready:false,outcome:{state:item.state,reason:'Creation operation is still in progress'}};
- let outcome={state:item.state};
- if(item.state!=='committed')outcome=await observe(item);
+ if(operationInProgress)return {ready:false,outcome:{state:item.state,reason:'Creation operation is still in progress'}};
+ let outcome=await observe(item);
  if(outcome.state!=='committed')return {ready:false,outcome};
  let recovery=null;
  try{recovery=item.recovery_json?JSON.parse(item.recovery_json):null;}catch{}
