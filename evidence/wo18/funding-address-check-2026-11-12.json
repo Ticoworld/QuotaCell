@@ -57,5 +57,41 @@
     "indexedCells": 0,
     "eligiblePlainCells": []
   },
-  "observation": "Both configured RPC endpoints returned the same owner and delegate cell results. The endpoints' independent infrastructure ownership is not established. No transaction was prepared, signed, or broadcast by this check."
+  "faucetClaims": [
+    {
+      "delegate": 1,
+      "address": "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqf9p5exe6u80k0zvsuf8p0dq4ns9a523wgzpjny4",
+      "transactionHash": "0xb9aeff4fe723d292ea79de9d00e6a8f26fea20e04644b969ebfeb4de53a9088a",
+      "blockHash": "0x0ad53d40315b385ca6ad169610561bcd8e0c98206febc4dbe4cad1ca62810852",
+      "blockNumber": "0x15f8f3c",
+      "outputIndex": 0,
+      "capacityCkb": "10000.00000000",
+      "plainCell": true,
+      "liveCellStatus": "live",
+      "rpcStatus": "committed",
+      "rpcVerification": [
+        "https://testnet.ckbapp.dev/",
+        "https://testnet.ckb.dev/"
+      ],
+      "explorerUrl": "https://pudge.explorer.nervos.org/transaction/0xb9aeff4fe723d292ea79de9d00e6a8f26fea20e04644b969ebfeb4de53a9088a"
+    },
+    {
+      "delegate": 2,
+      "address": "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0l3wsypwa27e0zjw7ca0v3z50muelafzqq5askx",
+      "transactionHash": "0x34c584883213396b2be095f6e1d371ef02942ed52adee794443671dc66944dd5",
+      "blockHash": "0x2d2e8659fffbee7ca68de73c9e3aba87ae548e6f47d4af7bd503db5c7398d3a8",
+      "blockNumber": "0x15f8f46",
+      "outputIndex": 0,
+      "capacityCkb": "10000.00000000",
+      "plainCell": true,
+      "liveCellStatus": "live",
+      "rpcStatus": "committed",
+      "rpcVerification": [
+        "https://testnet.ckbapp.dev/",
+        "https://testnet.ckb.dev/"
+      ],
+      "explorerUrl": "https://pudge.explorer.nervos.org/transaction/0x34c584883213396b2be095f6e1d371ef02942ed52adee794443671dc66944dd5"
+    }
+  ],
+  "observation": "Both configured RPC endpoints returned the same owner and delegate cell results and later reported both faucet claims committed. The endpoints' independent infrastructure ownership is not established. The original address check prepared no transaction. The faucet transactions are testnet funding only; no QuotaCell Pocket transaction was prepared, signed, or broadcast."
 }
