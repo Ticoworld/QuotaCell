@@ -1,0 +1,85 @@
+{
+  "workOrder": "WO18",
+  "gate": "D",
+  "checkedAtUtc": "2026-11-12",
+  "sourceCommit": "bb70eb90b410c0c1f26c89819c023fd2ff9f6bdd",
+  "network": "ckb_testnet",
+  "genesis": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+  "observations": {
+    "https://testnet.ckbapp.dev/": {
+      "tipHeight": "0x15f955a",
+      "tipHash": "0xba55124bd6eda2a6a13a6d34093cc34035c195c927cf389d9cd32d05e5414237",
+      "indexerHeight": "0x15f955a",
+      "indexerHash": "0xba55124bd6eda2a6a13a6d34093cc34035c195c927cf389d9cd32d05e5414237",
+      "feeMedianShannonsPer1000Bytes": "33222"
+    },
+    "https://testnet.ckb.dev/": {
+      "tipHeight": "0x15f955c",
+      "tipHash": "0x1260296100b218dd7eb0112f435839c1db0178230936e6820134281908631cad",
+      "indexerHeight": "0x15f955c",
+      "indexerHash": "0x1260296100b218dd7eb0112f435839c1db0178230936e6820134281908631cad",
+      "feeMedianShannonsPer1000Bytes": "33222"
+    },
+    "endpointAssessment": "Both endpoints independently reported the expected network and genesis, and each node tip matched its own indexer tip. Their tips differed by two blocks during this observation. Infrastructure operator independence is not established."
+  },
+  "eligiblePlainCells": [
+    {
+      "role": "owner",
+      "outPoint": "0x97d3e78286547e06c342db1007c041b4aabb927dea943aa760d28ff61ec02670:0",
+      "capacityCkb": "10000",
+      "lockArgs": "0x36ef38ed06300fa0f357f1f360b897c476c5c4f9"
+    },
+    {
+      "role": "owner",
+      "outPoint": "0x1a2f6ba55e70400d20694c121065efa357062388d6401cb091858138e4b85bb1:0",
+      "capacityCkb": "100000",
+      "lockArgs": "0x36ef38ed06300fa0f357f1f360b897c476c5c4f9"
+    },
+    {
+      "role": "owner",
+      "outPoint": "0xd6654da12e92d44a37b9c48a7b27db325fa3e68cc50f3e17ce74a791523c00d0:1",
+      "capacityCkb": "76338.85169784",
+      "lockArgs": "0x36ef38ed06300fa0f357f1f360b897c476c5c4f9",
+      "note": "This is the owner's plain change output at index 1. The deployed Q code Cell at index 0 is excluded and remains live."
+    },
+    {
+      "role": "delegate1",
+      "outPoint": "0xb9aeff4fe723d292ea79de9d00e6a8f26fea20e04644b969ebfeb4de53a9088a:0",
+      "capacityCkb": "10000",
+      "lockArgs": "0x250d326ceb877d9e264389385ed056702f68a8b9"
+    },
+    {
+      "role": "delegate2",
+      "outPoint": "0x34c584883213396b2be095f6e1d371ef02942ed52adee794443671dc66944dd5:0",
+      "capacityCkb": "10000",
+      "lockArgs": "0xff8ba040bbaaf65e293bd8ebd91151fbe67fd488"
+    }
+  ],
+  "cellChecks": "Every listed outpoint was live and plain (no type script, empty data), its funding transaction was committed and canonical, and its lock matched the corresponding participant identity on both RPCs.",
+  "budget": {
+    "activePolicyCapacityCkb": "600",
+    "initialProtectedFundCkb": "256",
+    "sharedAllowanceCkb": "122",
+    "delegate1PersonalAllowanceCkb": "122",
+    "delegate2PersonalAllowanceCkb": "122",
+    "perPaymentMaximumCkb": "61",
+    "firstTwoRecipientOutputsCkb": ["61", "61"],
+    "protectedCapacityAfterTwoPaymentsCkb": "134",
+    "minimumProtectedCapacityForThirdAttemptCkb": "134",
+    "minimumProtectedChangeAfterValidPaymentCkb": "73",
+    "delegateFeeInputMinimumCkb": "61 plus actual network fee per payment",
+    "currentSelectedFeeReserveShannons": "265776",
+    "currentFeeMedianShannonsPer1000Bytes": "33222",
+    "expectedTransactionFees": "Exact fees require serialized transactions and will be shown during transaction review; no transaction has been prepared.",
+    "sharedCapRejection": "After two distinct 61 CKB payments, used=122 and each delegate has personal remaining=61 of 122. A third 61 CKB request passes per-payment and personal limits but fails the shared counter. Do not submit a deliberately invalid public transaction; qualify the rejection in the UI/local Q VM test path."
+  },
+  "recipients": {
+    "configured": 2,
+    "requiredRecipientFunding": "0 CKB; recipients only need valid standard CKB locks",
+    "validation": "Both distinct recipients were accepted on the Review screen. Their full public addresses are browser-local and were not independently captured as text in this read-only check."
+  },
+  "transactionsPrepared": false,
+  "transactionsSigned": false,
+  "transactionsBroadcast": false,
+  "qCodeCellSpent": false
+}
