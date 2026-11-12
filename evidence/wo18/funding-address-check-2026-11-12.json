@@ -1,0 +1,61 @@
+{
+  "checkedDate": "2026-11-12",
+  "sourceCommit": "5c002e8bf0d650b3aa6ef2d0edd7d5031895c1b9",
+  "network": "ckb_testnet",
+  "genesis": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+  "endpoints": [
+    {
+      "url": "https://testnet.ckbapp.dev/",
+      "tipHeight": "0x15f8d64",
+      "tipHash": "0x532de23f9d18e64ba37dab7503cbf559eed814d70e2b76daa5d4eded8619b809",
+      "feeMedian": "0x81c6"
+    },
+    {
+      "url": "https://testnet.ckb.dev/",
+      "tipHeight": "0x15f8d66",
+      "tipHash": "0x9f7074bb1edd1b3ee739c9a0b28f5a52a77c66431f8d59a1390277709e67612c",
+      "feeMedian": "0x81c6"
+    }
+  ],
+  "owner": {
+    "address": "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfkauuw6p3sp7s0x4l37dst397ywmzuf7gzldwps",
+    "lockArgs": "0x36ef38ed06300fa0f357f1f360b897c476c5c4f9",
+    "eligiblePlainCells": [
+      {
+        "outPoint": "0x97d3e78286547e06c342db1007c041b4aabb927dea943aa760d28ff61ec02670:0",
+        "capacityCkb": "10000.00000000"
+      },
+      {
+        "outPoint": "0x1a2f6ba55e70400d20694c121065efa357062388d6401cb091858138e4b85bb1:0",
+        "capacityCkb": "100000.00000000"
+      },
+      {
+        "outPoint": "0xd6654da12e92d44a37b9c48a7b27db325fa3e68cc50f3e17ce74a791523c00d0:1",
+        "capacityCkb": "76338.85169784"
+      }
+    ],
+    "eligiblePlainCapacityCkb": "186338.85169784",
+    "creationBuilderMinimumInputCkb": "661.00002000",
+    "creationInputAvailable": true,
+    "excludedCells": [
+      {
+        "outPoint": "0xd6654da12e92d44a37b9c48a7b27db325fa3e68cc50f3e17ce74a791523c00d0:0",
+        "capacityCkb": "23661.00000000",
+        "reason": "Deployed Q code Cell; must not be used as an ordinary fee input"
+      }
+    ]
+  },
+  "delegate1": {
+    "address": "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqf9p5exe6u80k0zvsuf8p0dq4ns9a523wgzpjny4",
+    "lockArgs": "0x250d326ceb877d9e264389385ed056702f68a8b9",
+    "indexedCells": 0,
+    "eligiblePlainCells": []
+  },
+  "delegate2": {
+    "address": "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0l3wsypwa27e0zjw7ca0v3z50muelafzqq5askx",
+    "lockArgs": "0xff8ba040bbaaf65e293bd8ebd91151fbe67fd488",
+    "indexedCells": 0,
+    "eligiblePlainCells": []
+  },
+  "observation": "Both configured RPC endpoints returned the same owner and delegate cell results. The endpoints' independent infrastructure ownership is not established. No transaction was prepared, signed, or broadcast by this check."
+}
