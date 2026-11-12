@@ -119,6 +119,7 @@ function App() {
     const onVisible = () => { if (document.visibilityState === 'visible') void syncIdentity(); };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisible);
+    void syncIdentity();
     return () => {
       active = false;
       stopWatching();
