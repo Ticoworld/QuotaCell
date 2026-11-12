@@ -9,6 +9,7 @@ type Signer = {
   signOnlyTransaction(transaction: unknown): Promise<{ toHex(): string }>;
   signType?: string;
   provider?: { getNetwork?: () => Promise<string> };
+  onReplaced?: (listener: () => void) => () => void;
 };
 
 export class CkbWalletSession {
@@ -83,6 +84,10 @@ export class CkbWalletSession {
     const after = await this.identity();
     if (signer !== this.signer || before.publicKey !== after.publicKey) throw new Error('Wallet account changed while signing. No transaction was submitted.');
     return signed.toHex();
+  }
+
+  onAccountOrNetworkChange(listener: () => void) {
+    return this.signer?.onReplaced?.(listener) ?? (() => undefined);
   }
 
   disconnect() {

@@ -93,6 +93,41 @@ function App() {
   useEffect(() => () => wallet.disconnect(), []);
 
   useEffect(() => {
+    if (!identity) return;
+    let active = true;
+    let checking = false;
+    const syncIdentity = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const current = await wallet.identity();
+        if (!active) return;
+        if (current.publicKey.toLowerCase() !== identity.publicKey.toLowerCase() || current.address !== identity.address) {
+          setIdentity(current);
+          setIdentityError('');
+        }
+      } catch (cause) {
+        if (!active) return;
+        const message = cause instanceof Error ? cause.message : String(cause);
+        wallet.disconnect();
+        setIdentity(null);
+        setIdentityError(localizedConnectionError(message, t));
+      } finally { checking = false; }
+    };
+    const stopWatching = wallet.onAccountOrNetworkChange(() => window.setTimeout(() => void syncIdentity(), 0));
+    const onFocus = () => void syncIdentity();
+    const onVisible = () => { if (document.visibilityState === 'visible') void syncIdentity(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      active = false;
+      stopWatching();
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [identity?.publicKey, identity?.address, t]);
+
+  useEffect(() => {
     if (!state?.pocket || !state.genesis || state.empty) { setMetadata({}); return; }
     try { setMetadata(loadMetadata(state.genesis, state.pocket)); }
     catch { setMetadata({}); }
