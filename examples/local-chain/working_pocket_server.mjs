@@ -167,14 +167,20 @@ async function submitExternal(body){
   if(networkMode==='pudge')assert.equal(process.env.QUOTACELL_PUDGE_BROADCAST,'1','Pudge broadcasting is disabled');
   const request=requests.get(body.id);assert(request,'Unknown or expired signing request');requests.delete(body.id);assert(Date.now()<request.expires,'Signing request expired');
   assert.match(body.transaction||'',/^0x[0-9a-f]+$/i);assert(body.transaction.length<200000,'Signed transaction too large');
-  await verifyEnvironment();if(request.operation!=='genesis'){const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain');assert.equal(snap.view.pocket,request.pocket);}else assert(!initial,'A Pocket is already open');
-  for(const p of request.points)await live(p);
   const prepared=c.Transaction.fromBytes(request.bytes),signed=c.Transaction.fromBytes(body.transaction);
   verifyWalletTransaction({prepared,signed,message:request.message,publicKey:request.publicKey,position:request.position});
-  const signedRaw=raw(signed);if(networkMode==='pudge'){const f=await rpc('get_fee_rate_statistics',['0x65']);const minimum=(BigInt(signed.toBytes().length)*BigInt(f.median)+999n)/1000n;assert(BigInt(await transactionFee(signed))>=minimum,'Fee below current median');}
+  const signedRaw=raw(signed);
+  if(request.operation==='genesis')assert(!initial,'A Pocket is already open');
   const recovery=request.operation==='genesis'?JSON.stringify({initial:request.next,actors:request.identities}):null;
   const persistIntent=()=>{db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');if(request.operation==='genesis')assert(!rows().some(x=>x.operation==='genesis'),'A Pocket creation already exists');insert.run(body.id,profile.genesisHeader.hash,request.pocket,request.publicKey,request.recipient,request.amount,signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),request.operation,recovery);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}};
-  const submitted=await submitDurableCreation({persistIntent,dryRun:()=>rpc('dry_run_transaction',[signedRaw]),submit:async()=>networkMode==='pudge'?submitPublicTransaction({rpc,hash:signed.hash(),signed:signedRaw,enabled:process.env.QUOTACELL_PUDGE_BROADCAST==='1'}):(assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash()),{state:'submitted'})});
+  const dryRun=async()=>{
+   await verifyEnvironment();
+   if(request.operation!=='genesis'){const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain');assert.equal(snap.view.pocket,request.pocket);}
+   for(const p of request.points)await live(p);
+   if(networkMode==='pudge'){const f=await rpc('get_fee_rate_statistics',['0x65']);const minimum=(BigInt(signed.toBytes().length)*BigInt(f.median)+999n)/1000n;assert(BigInt(await transactionFee(signed))>=minimum,'Fee below current median');}
+   await rpc('dry_run_transaction',[signedRaw]);
+  };
+  const submitted=await submitDurableCreation({persistIntent,dryRun,submit:async()=>networkMode==='pudge'?submitPublicTransaction({rpc,hash:signed.hash(),signed:signedRaw,enabled:process.env.QUOTACELL_PUDGE_BROADCAST==='1'}):(assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash()),{state:'submitted'})});
   if(submitted.state==='uncertain'){update.run('uncertain',body.id);return {txHash:signed.hash(),...submitted};}
   if(networkMode==='pudge'){update.run(submitted.state,body.id);return {txHash:signed.hash(),...submitted};}
   for(let i=0;i<20;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));if(await canonicalCommit(await rpc('get_transaction',[signed.hash()]))){update.run('committed',body.id);if(request.operation==='genesis'){const d={initial:request.next,actors:request.identities};await fs.writeFile(path.join(run,'pocket.json.tmp'),JSON.stringify(d));await fs.rename(path.join(run,'pocket.json.tmp'),path.join(run,'pocket.json'));initial=d.initial;actors=d.actors;}return {txHash:signed.hash(),state:'committed'};}}
