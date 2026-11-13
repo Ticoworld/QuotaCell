@@ -37,8 +37,17 @@ const batch=await withIndexedTipRetry(async()=>{
 assert.equal(batch,'consistent snapshot');
 assert.equal(batchCalls,2,'A moving multi-scan indexer snapshot should retry the whole scan set');
 
+let aheadCalls=0;
+const caughtUp=await withIndexedTipRetry(async()=>{
+ aheadCalls++;
+ if(aheadCalls===1)throw Error('Indexer is ahead of node tip');
+ return 'node caught up';
+},{attempts:2,delayMs:0});
+assert.equal(caughtUp,'node caught up');
+assert.equal(aheadCalls,2,'An indexer briefly ahead of the node should retry without weakening tip checks');
+
 let batchNetworkCalls=0;
 await assert.rejects(withIndexedTipRetry(async()=>{batchNetworkCalls++;throw Error('Wrong network');}),/Wrong network/);
 assert.equal(batchNetworkCalls,1,'Non-tip failures must not retry a multi-scan snapshot');
 
-console.log('Indexed discovery retries transient tip drift and coherent snapshot scans while preserving fail-closed validation');
+console.log('Indexed discovery retries bounded tip drift and coherent snapshot scans while preserving fail-closed validation');
