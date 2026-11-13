@@ -10,8 +10,9 @@ export async function discoverIndexed({rpc,lock,policy,expected,includeUnsupport
  assert((await rpc('get_consensus')).id==='ckb_testnet','Wrong network');
  assert.equal(await rpc('get_block_hash',['0x0']),PUDGE_GENESIS,'Wrong network genesis');
  const tip=await rpc('get_tip_header'),indexed=await rpc('get_indexer_tip');
- assert(indexed && indexed.block_number===tip.number && indexed.block_hash===tip.hash,'Indexer lag or chain-tip mismatch');
- assert.equal(await rpc('get_block_hash',[tip.number]),tip.hash,'Noncanonical indexed tip');
+ assert(indexed&&/^0x[0-9a-f]+$/i.test(indexed.block_number)&&/^0x[0-9a-f]{64}$/i.test(indexed.block_hash),'Invalid indexer tip');
+ assert(BigInt(indexed.block_number)<=BigInt(tip.number),'Indexer is ahead of node tip');
+ assert.equal(await rpc('get_block_hash',[indexed.block_number]),indexed.block_hash,'Noncanonical indexed tip');
  assert(Number.isSafeInteger(maxPages)&&maxPages>0&&Number.isSafeInteger(pageSize)&&pageSize>0&&pageSize<=1000,'Invalid pagination bounds');
  const type=policy?'type':'lock',target=script(policy||lock);
  if(policy)assert(target.codeHash===Q&&target.hashType==='data2'&&/^0x[0-9a-f]{64}$/i.test(target.args),'Invalid QCN4 policy identity');
@@ -21,6 +22,7 @@ export async function discoverIndexed({rpc,lock,policy,expected,includeUnsupport
   const result=await rpc('get_cells',args);assert(result&&Array.isArray(result.objects)&&typeof result.last_cursor==='string','Invalid indexer response');
   for(const item of result.objects){
    const point=item.out_point;assert(point&&/^0x[0-9a-f]{64}$/i.test(point.tx_hash)&&/^0x[0-9a-f]+$/i.test(point.index),'Invalid outpoint');
+   assert(BigInt(item.block_number)<=BigInt(indexed.block_number),'Indexer returned a Cell beyond its snapshot tip');
    const id=point.tx_hash+':'+point.index;assert(!seen.has(id),'Duplicate indexer outpoint');seen.add(id);
    const live=await rpc('get_live_cell',[point,true]);assert.equal(live.status,'live','Stale indexed cell');
    assert.deepEqual(live.cell.output,item.output,'Indexer output mismatch');assert.equal(live.cell.data.content,item.output_data,'Indexer data mismatch');
@@ -37,9 +39,21 @@ export async function discoverIndexed({rpc,lock,policy,expected,includeUnsupport
  }
  assert(finished,'Indexer pagination limit exceeded');
  const end=await rpc('get_indexer_tip');assert.deepEqual(end,indexed,'Indexer tip changed during scan');
- const nodeEnd=await rpc('get_tip_header');assert.equal(nodeEnd.hash,tip.hash,'Node tip changed during scan');
- assert.equal(await rpc('get_block_hash',[tip.number]),tip.hash,'Chain reorganized during scan');
+ assert.equal(await rpc('get_block_hash',[indexed.block_number]),indexed.block_hash,'Chain reorganized during scan');
  for(const item of [...cells,...unsupported]){const current=await rpc('get_live_cell',[item.outPoint,true]);assert.equal(current.status,'live','Cell became stale');assert.deepEqual(current.cell,item.cell,'Cell changed during scan');}
  if(policy)assert.equal(cells.length,1,cells.length?'Ambiguous live policy':'Policy not found');
  return {cells,unsupported,indexedTip:indexed,genesis:PUDGE_GENESIS};
+}
+
+const transientTipDrift=['Indexer lag or chain-tip mismatch','Indexer tip changed during scan','Node tip changed during scan','Chain reorganized during scan'];
+const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+export async function discoverIndexedWithRetry(options,{attempts=3,delayMs=250}={}){
+ assert(Number.isSafeInteger(attempts)&&attempts>0,'Invalid discovery retry count');
+ for(let attempt=1;;attempt++){
+  try{return await discoverIndexed(options);}
+  catch(error){
+   if(!transientTipDrift.some(message=>error.message.startsWith(message))||attempt>=attempts)throw error;
+   await delay(delayMs*attempt);
+  }
+ }
 }

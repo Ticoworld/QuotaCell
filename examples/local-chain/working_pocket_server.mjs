@@ -7,7 +7,7 @@ import {callRpc} from './pocket_rpc_retry.mjs';
 import {verifyNetwork} from './pocket_network.mjs';
 import {parseCkb,recipientArgs} from './pocket_input.mjs';
 import {buildGenesis} from './pocket_genesis.mjs';
-import {discoverIndexed} from './pocket_indexed_discovery.mjs';
+import {discoverIndexed,discoverIndexedWithRetry} from './pocket_indexed_discovery.mjs';
 import {discoverPolicy} from './pocket_discovery.mjs';
 import {discoverPlainCells} from './pocket_cell_discovery.mjs';
 import {buildPayment} from './pocket_payment.ts';
@@ -133,7 +133,7 @@ async function prepareGenesis(body){
   assert(!initial&&!rows().some(x=>x.operation==='genesis'),'A Pocket creation already exists');assert.match(body.id||'',/^[0-9a-f-]{36}$/);
   assert(!requests.has(body.id),'Intent already exists');assert(requests.size<128,'Too many outstanding signing requests');
   await verifyEnvironment();
-  const found=networkMode==='isolated'?await discoverPlainCells({rpc,lock:lockFor(body.publicKey)}):await discoverIndexed({rpc,lock:lockFor(body.publicKey)});
+  const found=networkMode==='isolated'?await discoverPlainCells({rpc,lock:lockFor(body.publicKey)}):await discoverIndexedWithRetry({rpc,lock:lockFor(body.publicKey)});
   const candidate=found.cells.find(x=>BigInt(x.cell.output.capacity)>=66100002000n);assert(candidate,'Owner needs a plain cell covering policy capacity and change');
   const ownerInput=await live({txHash:candidate.outPoint.tx_hash,index:Number(BigInt(candidate.outPoint.index))});
   const built=buildGenesis({ownerPublicKey:body.publicKey,delegates:body.delegates,sharedLimit:body.sharedLimit,ownerInput,deps:environment.allDeps,fee:await selectedFee()});

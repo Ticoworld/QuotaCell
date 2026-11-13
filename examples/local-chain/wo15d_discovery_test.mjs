@@ -23,7 +23,7 @@ const duplicate=structuredClone(actor);duplicate.outPoint.txHash='0x'+'55'.repea
 for(const [name,override,pattern] of [
  ['stale',async(m,p,next)=>m==='get_live_cell'?{status:'dead'}:next(m,p),/Stale/],
  ['wrong script',async(m,p,next)=>{const v=await next(m,p);if(m==='get_cells'&&v.objects.length)v.objects[0].output.lock.args='0x'+'00'.repeat(20);return v},/mismatch/],
- ['lag',async(m,p,next)=>m==='get_indexer_tip'?{block_number:'0x63',block_hash:tip.hash}:next(m,p),/lag/],
+ ['noncanonical indexed snapshot',async(m,p,next)=>m==='get_block_hash'&&p[0]==='0x63'?'0x'+'00'.repeat(32):m==='get_indexer_tip'?{block_number:'0x63',block_hash:tip.hash}:next(m,p),/Noncanonical indexed tip/],
  ['wrong network',async(m,p,next)=>m==='get_consensus'?{id:'ckb'}:next(m,p),/Wrong network/],
  ['rpc failure',async(m,p,next)=>{if(m==='get_cells')throw Error('RPC interrupted');return next(m,p)},/RPC interrupted/],
  ['tip changed',async(m,p,next)=>{const v=await next(m,p);if(m==='get_block_hash'&&p[0]==='0x64')return '0x'+'00'.repeat(32);return v},/Noncanonical/]
