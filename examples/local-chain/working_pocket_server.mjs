@@ -86,7 +86,8 @@ async function snapshot(){
    const results=await Promise.all([initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map((lock,i)=>discoverPlainCells({rpc,lock,includeUnsupported:i===0})));[fundCells,ownerCells,aliceCells,benCells]=results.map(r=>r.cells);unsupportedFunds=results[0].unsupported;
   }else{
    const results=await withIndexedTipRetry(async()=>{
-    const scans=[discoverIndexed({rpc,policy:initial.Q,expected:initial.expected}),...[initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map((lock,i)=>discoverIndexed({rpc,lock,includeUnsupported:i===0}))];
+    const indexedSnapshot=await rpc('get_indexer_tip');
+    const scans=[discoverIndexed({rpc,policy:initial.Q,expected:initial.expected,indexedSnapshot}),...[initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map((lock,i)=>discoverIndexed({rpc,lock,includeUnsupported:i===0,indexedSnapshot}))];
     const found=await Promise.all(scans),tip=found[0].indexedTip;for(const result of found)assert.deepEqual(result.indexedTip,tip,'Indexed snapshots differ');return found;
    });
    indexedTip=results[0].indexedTip;

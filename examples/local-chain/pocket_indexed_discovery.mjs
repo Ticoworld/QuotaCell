@@ -6,10 +6,10 @@ import {PUDGE_GENESIS} from './pocket_network.mjs';
 const Q='0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e';
 const script=s=>c.Script.from({codeHash:s.code_hash??s.codeHash,hashType:s.hash_type??s.hashType,args:s.args});
 const raw=s=>({code_hash:s.codeHash,hash_type:s.hashType,args:s.args});
-export async function discoverIndexed({rpc,lock,policy,expected,includeUnsupported=false,maxPages=100,pageSize=100}){
+export async function discoverIndexed({rpc,lock,policy,expected,includeUnsupported=false,maxPages=100,pageSize=100,indexedSnapshot}){
  assert((await rpc('get_consensus')).id==='ckb_testnet','Wrong network');
  assert.equal(await rpc('get_block_hash',['0x0']),PUDGE_GENESIS,'Wrong network genesis');
- const tip=await rpc('get_tip_header'),indexed=await rpc('get_indexer_tip');
+ const tip=await rpc('get_tip_header'),indexed=indexedSnapshot||await rpc('get_indexer_tip');
  assert(indexed&&/^0x[0-9a-f]+$/i.test(indexed.block_number)&&/^0x[0-9a-f]{64}$/i.test(indexed.block_hash),'Invalid indexer tip');
  assert(BigInt(indexed.block_number)<=BigInt(tip.number),'Indexer is ahead of node tip');
  assert.equal(await rpc('get_block_hash',[indexed.block_number]),indexed.block_hash,'Noncanonical indexed tip');
@@ -38,7 +38,6 @@ export async function discoverIndexed({rpc,lock,policy,expected,includeUnsupport
   assert(result.last_cursor!=='0x'&&result.last_cursor!==cursor,'Indexer cursor did not advance');cursor=result.last_cursor;
  }
  assert(finished,'Indexer pagination limit exceeded');
- const end=await rpc('get_indexer_tip');assert.deepEqual(end,indexed,'Indexer tip changed during scan');
  assert.equal(await rpc('get_block_hash',[indexed.block_number]),indexed.block_hash,'Chain reorganized during scan');
  for(const item of [...cells,...unsupported]){const current=await rpc('get_live_cell',[item.outPoint,true]);assert.equal(current.status,'live','Cell became stale');assert.deepEqual(current.cell,item.cell,'Cell changed during scan');}
  if(policy)assert.equal(cells.length,1,cells.length?'Ambiguous live policy':'Policy not found');

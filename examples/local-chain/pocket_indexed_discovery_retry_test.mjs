@@ -19,7 +19,7 @@ const rpc=async(method,params=[])=>{
 
 const result=await discoverIndexedWithRetry({rpc,lock:{codeHash:'0x'+'22'.repeat(32),hashType:'type',args:'0x'}});
 assert.equal(result.indexedTip.block_hash,indexedTip.block_hash);
-assert.equal(cellsCalls,2,'A moving indexer tip should restart the complete scan once');
+assert.equal(cellsCalls,1,'A canonical indexer snapshot remains valid when the indexer advances during the scan');
 
 let consensusCalls=0;
 await assert.rejects(discoverIndexedWithRetry({rpc:async method=>{
