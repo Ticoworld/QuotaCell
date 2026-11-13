@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import './i18n';
 import './style.css';
 import { formatCkb, progressPercent, shortHash } from './amount';
-import { getPocketState, prepareGenesis, prepareOwnerAction, preparePayment, reconcile, submitTransaction } from './api';
+import { checkPudgeTransaction, getPocketState, prepareGenesis, prepareOwnerAction, preparePayment, reconcile, submitTransaction } from './api';
 import { CreationFlow, type People } from './CreationFlow';
 import { importMetadata, loadMetadata, saveMetadata, exportMetadata } from './metadata';
 import type { HistoryItem, PocketMetadata, PocketState, PreparedTransaction, TransactionResult, WalletIdentity } from './domain';
@@ -16,7 +16,16 @@ import { OperationDialog, type Intent, type Operation } from './OperationDialog'
 const wallet = new CkbWalletSession();
 type ActorRole = 'owner' | 'alice' | 'ben' | 'unrecognized';
 type SignedPending = { transaction: string; hash: string };
+type TransactionNotice = { state: string; hash?: string; detail?: string };
 type Participant = { publicKey: string; fallback: string; role: 'owner' | 'alice' | 'ben' };
+const PENDING_TRANSACTION_KEY = 'quotacell.pending-pudge-transaction';
+
+function restorePendingTransaction(): TransactionNotice | null {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(PENDING_TRANSACTION_KEY) || 'null') as TransactionNotice | null;
+    return value && /^0x[0-9a-f]{64}$/i.test(value.hash || '') ? value : null;
+  } catch { return null; }
+}
 
 function actorRole(identity: WalletIdentity | null, state: PocketState | null): ActorRole | null {
   if (!identity || !state || state.empty) return null;
@@ -66,7 +75,7 @@ function App() {
   const [prepared, setPrepared] = useState<PreparedTransaction | null>(null);
   const [working, setWorking] = useState(false);
   const [operationError, setOperationError] = useState('');
-  const [transactionNotice, setTransactionNotice] = useState<{ state: string; hash?: string; detail?: string } | null>(null);
+  const [transactionNotice, setTransactionNotice] = useState<TransactionNotice | null>(() => restorePendingTransaction());
   const [pendingSigned, setPendingSigned] = useState<SignedPending | null>(null);
   const [pendingPeople, setPendingPeople] = useState<People | null>(null);
   const [showCreation, setShowCreation] = useState(false);
@@ -74,6 +83,7 @@ function App() {
   const [recipientAddresses, setRecipientAddresses] = useState<Record<string, string>>({});
   const [editPerson, setEditPerson] = useState<Participant | null>(null);
   const [reconcileBusy, setReconcileBusy] = useState(false);
+  const [noticeCheckBusy, setNoticeCheckBusy] = useState(false);
 
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true);
@@ -91,6 +101,12 @@ function App() {
 
   useEffect(() => { void refresh(); const timer = window.setInterval(() => void refresh(true), 15000); return () => window.clearInterval(timer); }, [refresh]);
   useEffect(() => () => wallet.disconnect(), []);
+  useEffect(() => {
+    if (!transactionNotice?.hash) return;
+    try {
+      sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(transactionNotice));
+    } catch { /* Session storage is optional; the notice remains visible in this tab. */ }
+  }, [transactionNotice]);
 
   useEffect(() => {
     if (!identity) return;
@@ -170,6 +186,12 @@ function App() {
   const pudge = Boolean(state?.networkMode?.startsWith('pudge'));
   const pudgeReadOnly = state?.networkMode === 'pudge-readonly';
   const explorerEnabled = pudge;
+  const noticeRecorded = Boolean(transactionNotice?.hash && history.some((item) => item.tx_hash.toLowerCase() === transactionNotice.hash?.toLowerCase()));
+  const clientTransactionUnresolved = Boolean(transactionNotice?.hash && (
+    ['uncertain', 'pending', 'proposed', 'submitted'].includes(transactionNotice.state) ||
+    (transactionNotice.state === 'committed' && !noticeRecorded)
+  ));
+  const actionsBlocked = Boolean(state?.unresolved || clientTransactionUnresolved);
 
   const labelFor = (publicKey: string | undefined, fallback: string) => metadata[publicKey || '']?.name?.trim() || fallback;
   const descriptionFor = (publicKey: string | undefined) => metadata[publicKey || '']?.description?.trim() || '';
@@ -209,6 +231,7 @@ function App() {
   };
   const prepareOperation = async (body: Record<string, unknown>) => {
     if (!intent || !identity) throw new Error(t('connect'));
+    if (actionsBlocked) throw new Error(t('unresolvedBody'));
     setWorking(true); setOperationError('');
     try {
       const request = intent.operation === 'pay' ? await preparePayment(body) : await prepareOwnerAction(body);
@@ -235,6 +258,11 @@ function App() {
 
   const submitSigned = async (transaction: string, hash?: string) => {
     if (!prepared) return;
+    if (pudge && hash) {
+      const notice = { state: 'uncertain', hash, detail: t('submitUnknown') };
+      try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
+      setTransactionNotice(notice);
+    }
     setWorking(true); setOperationError('');
     try {
       const result: TransactionResult = await submitTransaction(prepared.id, transaction);
@@ -243,7 +271,7 @@ function App() {
       await refresh(true);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      setTransactionNotice({ state: 'uncertain', hash, detail: t('submitUnknown') });
+      setTransactionNotice({ state: 'uncertain', hash, detail: `${t('submitUnknown')} ${message}` });
       setOperationError(localizedError(message, t));
       setPrepared(null); setIntent(null); setPendingSigned(null);
       await refresh(true);
@@ -277,12 +305,38 @@ function App() {
     try {
       const result = await reconcile();
       const unresolved = result.outcomes.find((outcome) => outcome.state === 'uncertain' || outcome.status === 'unknown');
-      setTransactionNotice(unresolved ? { state: 'uncertain', hash: unresolved.txHash } : { state: 'checked' });
+      const localOutcome = transactionNotice?.hash && result.outcomes.find((outcome) => outcome.txHash.toLowerCase() === transactionNotice.hash?.toLowerCase());
+      setTransactionNotice(localOutcome
+        ? { state: localOutcome.state || localOutcome.status || 'uncertain', hash: localOutcome.txHash }
+        : transactionNotice?.hash
+          ? { ...transactionNotice, state: 'uncertain', detail: t('txNotInJournal') }
+          : unresolved ? { state: 'uncertain', hash: unresolved.txHash } : { state: 'checked' });
       await refresh(true);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       setTransactionNotice({ state: 'error', detail: localizedError(message, t) });
     } finally { setReconcileBusy(false); }
+  };
+
+  const checkNoticeStatus = async () => {
+    if (!transactionNotice?.hash) return;
+    setNoticeCheckBusy(true);
+    try {
+      const result = await checkPudgeTransaction(transactionNotice.hash);
+      const status = result.status || 'unknown';
+      const detail = status === 'committed'
+        ? `${t('statusCommitted')} · ${t('blockNumber')} ${result.blockNumber || '—'}`
+        : status === 'pending' ? t('statusPending')
+          : status === 'proposed' ? t('statusProposed')
+            : status === 'rejected' ? `${t('statusRejected')}: ${result.reason || '—'}`
+              : status === 'uncertain' ? `${t('statusCheckFailed')} ${result.reason || ''}`
+                : t('txStillUnknown');
+      setTransactionNotice({ state: status, hash: transactionNotice.hash, detail });
+      if (status === 'committed') await refresh(true);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setTransactionNotice({ state: 'uncertain', hash: transactionNotice.hash, detail: `${t('statusCheckFailed')} ${message}` });
+    } finally { setNoticeCheckBusy(false); }
   };
 
   const saveName = (person: Participant, name: string, description: string) => {
@@ -332,7 +386,7 @@ function App() {
       : state && !state.empty ? <main id="home" className="app-page mx-auto w-[min(100%-2rem,64rem)] py-6 sm:py-8">
         <div className="pocket-heading mb-5 flex items-start justify-between gap-4"><div className="min-w-0"><h1 className="m-0 text-2xl font-bold text-navy sm:text-[28px]">{state.pocket ? t('activePocket') : t('brand')}</h1><p className="mt-1 text-xs text-slate-600 sm:text-sm">{identity ? displayIdentityRole : t('connectToSeeActions')}</p></div><span className={closed ? 'state-mark state-closed' : 'state-mark'}>{closed ? t('closedStatus') : t('active')}</span></div>
 
-        {transactionNotice && <div className={`transaction-notice mb-4 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3.5 ${transactionNotice.state === 'uncertain' || transactionNotice.state === 'error' ? 'notice-warning border-amber-200 bg-amber-50' : ''}`} role="status" aria-live="polite"><span className="notice-marker grid size-6 shrink-0 place-items-center rounded-full bg-success text-xs font-bold text-white" aria-hidden="true">{transactionNotice.state === 'uncertain' || transactionNotice.state === 'error' ? '!' : '✓'}</span><div className="min-w-0 flex-1"><strong className="text-sm font-semibold text-slate-800">{noticeTitle}</strong><p className="mt-1 break-words text-xs leading-5 text-slate-600">{transactionNotice.detail || (transactionNotice.hash ? <>{t('txId')}: <code dir="ltr">{shortHash(transactionNotice.hash, 14, 10)}</code> · {transactionNotice.state}</> : t('noUncertainTransactions'))}</p></div><button type="button" className="text-button rounded p-1 text-slate-500 hover:bg-white/70" onClick={() => setTransactionNotice(null)} aria-label={t('close')}>×</button></div>}
+        {transactionNotice && <div className={`transaction-notice mb-4 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3.5 ${['uncertain', 'error', 'rejected'].includes(transactionNotice.state) ? 'notice-warning border-amber-200 bg-amber-50' : ''}`} role="status" aria-live="polite"><span className="notice-marker grid size-6 shrink-0 place-items-center rounded-full bg-success text-xs font-bold text-white" aria-hidden="true">{['uncertain', 'error', 'rejected'].includes(transactionNotice.state) ? '!' : '✓'}</span><div className="min-w-0 flex-1"><strong className="text-sm font-semibold text-slate-800">{noticeTitle}</strong><p className="mt-1 break-words text-xs leading-5 text-slate-600">{transactionNotice.detail || (transactionNotice.hash ? transactionNotice.state : t('noUncertainTransactions'))}</p>{transactionNotice.hash && <div className="mt-2 grid gap-1.5"><code className="break-all text-[11px] text-slate-700" dir="ltr">{transactionNotice.hash}</code>{pudge && <a className="text-xs text-blue underline" href={explorerUrl(transactionNotice.hash)} target="_blank" rel="noreferrer">{t('explorer')}</a>}</div>}</div>{pudge && transactionNotice.hash && ['uncertain', 'pending', 'proposed', 'submitted'].includes(transactionNotice.state) && <button type="button" className="secondary-button shrink-0" disabled={noticeCheckBusy} onClick={() => void checkNoticeStatus()}>{noticeCheckBusy ? t('checkingStatus') : t('checkStatus')}</button>}<button type="button" className="text-button rounded p-1 text-slate-500 hover:bg-white/70" onClick={() => { setTransactionNotice(null); try { sessionStorage.removeItem(PENDING_TRANSACTION_KEY); } catch { /* Session storage is optional. */ } }} aria-label={t('close')}>×</button></div>}
 
         {state.unresolved && <section className="unresolved-banner mb-4 flex flex-col items-start justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center" role="alert"><div><strong className="text-sm font-semibold text-amber-950">{t('unresolvedTitle')}</strong><p className="mt-1 text-xs leading-5 text-amber-900">{t('unresolvedBody')}</p></div><button type="button" className="secondary-button shrink-0" disabled={reconcileBusy || pudgeReadOnly} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section>}
 
@@ -344,14 +398,14 @@ function App() {
         {!identity && <section className="connect-prompt mb-6 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div><h2 className="mb-1 text-base font-semibold text-navy">{t('connectToContinue')}</h2><p className="m-0 max-w-xl text-xs leading-5 text-slate-600">{t('localDisclosure')}</p></div><button className="primary-button w-full sm:w-auto" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')} <span aria-hidden="true">→</span></button></section>}
         {identity && role === 'unrecognized' && <p className="role-message" role="status">{t('unknownRole')}</p>}
 
-        {identity && role === 'owner' && !closed && <section className="owner-actions mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div className="section-title"><div><h2 className="text-base font-semibold text-navy">{t('ownerControls')}</h2><p className="mt-1 text-xs text-slate-600">{t('ownerDescription')}</p></div></div><div className="owner-action-list flex w-full flex-wrap gap-2 sm:w-auto"><button className="secondary-button flex-1 sm:flex-none" disabled={pudgeReadOnly || state.unresolved} onClick={() => beginOperation('deposit')}>{t('fund')}</button>{state.hasFund && <button className="secondary-button flex-1 sm:flex-none" disabled={pudgeReadOnly || state.unresolved} onClick={() => beginOperation('close')}>{t('closePocket')}</button>}</div></section>}
-        {identity && role === 'owner' && closed && state.hasFund && <section className="owner-actions late-funds mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center"><div><h2 className="text-sm font-semibold text-amber-950">{t('lateFunds')}</h2><p className="mt-1 text-sm tabular-nums text-amber-900">{formatCkb(funds)} CKB</p></div><button className="primary-button" disabled={pudgeReadOnly || state.unresolved} onClick={() => beginOperation('sweep')}>{t('sweep')} <span aria-hidden="true">→</span></button></section>}
+        {identity && role === 'owner' && !closed && <section className="owner-actions mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div className="section-title"><div><h2 className="text-base font-semibold text-navy">{t('ownerControls')}</h2><p className="mt-1 text-xs text-slate-600">{t('ownerDescription')}</p></div></div><div className="owner-action-list flex w-full flex-wrap gap-2 sm:w-auto"><button className="secondary-button flex-1 sm:flex-none" disabled={pudgeReadOnly || actionsBlocked} onClick={() => beginOperation('deposit')}>{t('fund')}</button>{state.hasFund && <button className="secondary-button flex-1 sm:flex-none" disabled={pudgeReadOnly || actionsBlocked} onClick={() => beginOperation('close')}>{t('closePocket')}</button>}</div></section>}
+        {identity && role === 'owner' && closed && state.hasFund && <section className="owner-actions late-funds mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center"><div><h2 className="text-sm font-semibold text-amber-950">{t('lateFunds')}</h2><p className="mt-1 text-sm tabular-nums text-amber-900">{formatCkb(funds)} CKB</p></div><button className="primary-button" disabled={pudgeReadOnly || actionsBlocked} onClick={() => beginOperation('sweep')}>{t('sweep')} <span aria-hidden="true">→</span></button></section>}
 
         {identity && (role === 'alice' || role === 'ben') && activeDelegate && !closed && <section className="delegate-focus mb-7 rounded-lg border border-t-[3px] border-t-blue border-line bg-white p-4 sm:p-5">
           <div className="delegate-focus-heading flex items-start justify-between gap-3"><div className="flex min-w-0 items-start gap-2.5"><span className={`permission-dot mt-2 size-2 shrink-0 rounded-full ${activeDelegate.enabled ? 'bg-emerald-600' : 'is-revoked bg-red-600'}`} aria-hidden="true"/><div className="min-w-0"><h2 className="m-0 text-lg font-semibold text-navy">{labelFor(activeDelegate.publicKey, role === 'alice' ? t('delegateOne') : t('delegateTwo'))}</h2>{descriptionFor(activeDelegate.publicKey) && <p className="mt-1 text-xs text-slate-600">{descriptionFor(activeDelegate.publicKey)}</p>}</div></div><span className={activeDelegate.enabled ? 'permission-status' : 'permission-status is-revoked'}>{activeDelegate.enabled ? t('active') : t('revoked')}</span></div>
           <div className="delegate-summary mt-5 grid grid-cols-2 gap-3 border-y border-slate-100 py-4 sm:grid-cols-3 sm:gap-4"><div className="min-w-0"><span className="text-xs font-medium text-slate-600">{t('remaining')}</span><strong className="my-1 block break-words text-xl font-semibold tabular-nums text-navy">{formatCkb(BigInt(activeDelegate.limit) > BigInt(activeDelegate.used) ? BigInt(activeDelegate.limit) - BigInt(activeDelegate.used) : 0n)} <i className="text-xs font-normal not-italic text-slate-500">CKB</i></strong><small className="text-[11px] leading-4 text-slate-500">{formatCkb(activeDelegate.used)} {t('usedOf')} {formatCkb(activeDelegate.limit)} CKB</small></div><div className="min-w-0"><span className="text-xs font-medium text-slate-600">{t('maxPayment')}</span><strong className="my-1 block break-words text-xl font-semibold tabular-nums text-navy">{formatCkb(activeDelegate.perPayment)} <i className="text-xs font-normal not-italic text-slate-500">CKB</i></strong><small className="text-[11px] leading-4 text-slate-500">{t('perPaymentHint')}</small></div><div className="col-span-2 min-w-0 border-t border-slate-100 pt-3 sm:col-span-1 sm:border-0 sm:pt-0"><span className="text-xs font-medium text-slate-600">{t('sharedRemaining')}</span><strong className="my-1 block break-words text-xl font-semibold tabular-nums text-navy">{formatCkb(sharedRemaining)} <i className="text-xs font-normal not-italic text-slate-500">CKB</i></strong><small className="text-[11px] leading-4 text-slate-500">{t('sharedAuthorityHint')}</small></div></div>
           <div className="approved-recipient mt-3 flex flex-col gap-1 border-t border-slate-100 pt-3 sm:flex-row sm:justify-between sm:gap-4"><span className="text-xs font-medium text-slate-600">{t('recipient')}</span><code className="min-w-0 break-all text-left text-xs text-slate-700 sm:max-w-[70%] sm:text-right" dir="ltr" title={recipientAddress(activeDelegate.recipient)}>{recipientAddress(activeDelegate.recipient)}</code></div>
-          {activeDelegate.enabled && <button className="primary-button pay-button mt-4 min-w-40" disabled={pudgeReadOnly || state.unresolved || !state.hasFund} onClick={() => beginOperation('pay', activeDelegate.role)}>{t('pay')} <span aria-hidden="true">→</span></button>}
+          {activeDelegate.enabled && <button className="primary-button pay-button mt-4 min-w-40" disabled={pudgeReadOnly || actionsBlocked || !state.hasFund} onClick={() => beginOperation('pay', activeDelegate.role)}>{t('pay')} <span aria-hidden="true">→</span></button>}
           {!activeDelegate.enabled && <p className="revoked-message" role="status">{t('permissionRevokedMessage')}</p>}
         </section>}
 
@@ -363,7 +417,7 @@ function App() {
             return <article className="permission-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t border-line px-3 py-3 first:border-0 sm:grid-cols-[minmax(0,1.5fr)_minmax(120px,.8fr)_auto] sm:gap-4 sm:px-4">
               <div className="permission-person"><div className="participant-mark" aria-hidden="true">{index + 1}</div><div><div className="permission-name"><h3>{name}</h3><span className={delegate.enabled ? 'permission-status' : 'permission-status is-revoked'}>{delegate.enabled ? t('active') : t('revoked')}</span><button type="button" className="text-button edit-name" onClick={() => setEditPerson({ publicKey: delegate.publicKey, role: delegate.role, fallback: name })}>{t('rename')}</button></div>{descriptionFor(delegate.publicKey) && <p>{descriptionFor(delegate.publicKey)}</p>}<span className="permission-subline">{formatCkb(remaining)} / {formatCkb(delegate.limit)} CKB · {t('maxPayment').toLowerCase()} {formatCkb(delegate.perPayment)} CKB</span></div></div>
               <div className="permission-recipient"><span>{t('recipient')}</span><code dir="ltr" title={recipientAddress(delegate.recipient)}>{shortHash(recipientAddress(delegate.recipient), 18, 8)}</code></div>
-              <div className="permission-actions"><details className="participant-inspector"><summary>{t('details')}</summary><div><span>{t('publicKey')}</span><code dir="ltr">{delegate.publicKey}</code><span>{t('recipient')}</span><code dir="ltr">{recipientAddress(delegate.recipient)}</code><span>{t('used')}</span><code>{formatCkb(delegate.used)} CKB</code></div></details><button type="button" className="text-button revoke-button" disabled={!delegate.enabled || state.unresolved || pudgeReadOnly || closed} onClick={() => beginOperation('revoke', delegate.role, name)}>{t('revoke')}</button></div>
+              <div className="permission-actions"><details className="participant-inspector"><summary>{t('details')}</summary><div><span>{t('publicKey')}</span><code dir="ltr">{delegate.publicKey}</code><span>{t('recipient')}</span><code dir="ltr">{recipientAddress(delegate.recipient)}</code><span>{t('used')}</span><code>{formatCkb(delegate.used)} CKB</code></div></details><button type="button" className="text-button revoke-button" disabled={!delegate.enabled || actionsBlocked || pudgeReadOnly || closed} onClick={() => beginOperation('revoke', delegate.role, name)}>{t('revoke')}</button></div>
             </article>;
           })}</div>
         </section>}
