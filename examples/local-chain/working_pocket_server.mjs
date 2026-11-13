@@ -7,7 +7,7 @@ import {callRpc} from './pocket_rpc_retry.mjs';
 import {verifyNetwork} from './pocket_network.mjs';
 import {parseCkb,recipientArgs} from './pocket_input.mjs';
 import {buildGenesis} from './pocket_genesis.mjs';
-import {discoverIndexed,discoverIndexedWithRetry} from './pocket_indexed_discovery.mjs';
+import {discoverIndexed,discoverIndexedWithRetry,withIndexedTipRetry} from './pocket_indexed_discovery.mjs';
 import {discoverPolicy} from './pocket_discovery.mjs';
 import {discoverPlainCells} from './pocket_cell_discovery.mjs';
 import {buildPayment} from './pocket_payment.ts';
@@ -85,8 +85,11 @@ async function snapshot(){
    found=await discoverPolicy({rpc,policy:initial.Q,expected:initial.expected});
    const results=await Promise.all([initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map((lock,i)=>discoverPlainCells({rpc,lock,includeUnsupported:i===0})));[fundCells,ownerCells,aliceCells,benCells]=results.map(r=>r.cells);unsupportedFunds=results[0].unsupported;
   }else{
-   const results=await Promise.all([discoverIndexed({rpc,policy:initial.Q,expected:initial.expected}),...[initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map((lock,i)=>discoverIndexed({rpc,lock,includeUnsupported:i===0}))]);
-   indexedTip=results[0].indexedTip;for(const r of results)assert.deepEqual(r.indexedTip,indexedTip,'Indexed snapshots differ');
+   const results=await withIndexedTipRetry(async()=>{
+    const scans=[discoverIndexed({rpc,policy:initial.Q,expected:initial.expected}),...[initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map((lock,i)=>discoverIndexed({rpc,lock,includeUnsupported:i===0}))];
+    const found=await Promise.all(scans),tip=found[0].indexedTip;for(const result of found)assert.deepEqual(result.indexedTip,tip,'Indexed snapshots differ');return found;
+   });
+   indexedTip=results[0].indexedTip;
    found=results[0].cells[0];[fundCells,ownerCells,aliceCells,benCells]=results.slice(1).map(r=>r.cells);unsupportedFunds=results[1].unsupported;
   }
   state.policy={txHash:found.outPoint.tx_hash,index:Number(BigInt(found.outPoint.index))};
