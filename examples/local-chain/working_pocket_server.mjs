@@ -1,7 +1,7 @@
 // Disposable local development only. Never use with real keys or funds.
 import * as c from '@ckb-ccc/core';
 import {DatabaseSync} from 'node:sqlite';
-import {observePublicTransaction,submitPublicTransaction} from './pocket_public_tx.mjs';
+import {observePublicTransaction,rebroadcastExistingTransaction,submitPublicTransaction} from './pocket_public_tx.mjs';
 import {recoverCreation,submitDurableCreation} from './pocket_creation_recovery.mjs';
 import {callRpc} from './pocket_rpc_retry.mjs';
 import {verifyNetwork} from './pocket_network.mjs';
@@ -191,6 +191,22 @@ async function submitExternal(body){
   return {txHash:signed.hash(),state:'uncertain'};
  }finally{busy=false;}
 }
+async function retryExternal(body){
+ assert(!busy,'Another action is in progress');busy=true;
+ try{
+  assert.equal(networkMode,'pudge','Same-transaction retry is only available on Pudge');
+  assert.equal(process.env.QUOTACELL_PUDGE_BROADCAST,'1','Pudge broadcasting is disabled');
+  assert.match(body.approvedHash||'',/^0x[0-9a-f]{64}$/i,'Invalid approved transaction hash');
+  const item=rows().find(row=>row.tx_hash.toLowerCase()===body.approvedHash.toLowerCase());
+  assert(item&&item.operation==='deposit','No journaled deposit matches this transaction');
+  assert(['uncertain','submitted'].includes(item.state),'Transaction is not retryable');
+  await verifyEnvironment();
+  const signed=JSON.parse(item.signed);
+  const result=await rebroadcastExistingTransaction({rpc,hash:item.tx_hash,signed,priorState:item.state,enabled:true,dryRun:()=>rpc('dry_run_transaction',[signed])});
+  update.run(result.state,item.id);
+  return {txHash:item.tx_hash,...result};
+ }finally{busy=false;}
+}
 async function pay(body){
  assert(developmentSigner,'Development signer is disabled');
  if(busy)throw new Error('Another action is in progress');busy=true;
@@ -273,9 +289,9 @@ const server=http.createServer(async(req,res)=>{
   }
   if(req.method==='GET'&&req.url==='/api/state'){const recovery=await creationRecoveryState();const s=recovery?{view:recovery}:initial?await snapshot():{view:{empty:true,genesis:profile.genesisHeader.hash,developmentSigner,networkMode}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(s.view));return;}
   if(req.method==='POST'&&networkMode==='pudge-readonly'&&!['/api/ckb','/api/reconcile'].includes(req.url))throw new Error('Pudge transactions are disabled pending dependency and wallet qualification');
-  if(req.method==='POST'&&['/api/external/genesis','/api/external/prepare','/api/external/owner','/api/external/submit'].includes(req.url)){
+  if(req.method==='POST'&&['/api/external/genesis','/api/external/prepare','/api/external/owner','/api/external/submit','/api/external/retry'].includes(req.url)){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');let body='';for await(const chunk of req){body+=chunk;assert(body.length<210000);}
-   const input=JSON.parse(body);const result=await (req.url.endsWith('/genesis')?prepareGenesis(input):req.url.endsWith('/owner')?ownerAction(input,true):req.url.endsWith('/prepare')?prepareExternal(input):submitExternal(input));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));return;
+   const input=JSON.parse(body);const result=await (req.url.endsWith('/genesis')?prepareGenesis(input):req.url.endsWith('/owner')?ownerAction(input,true):req.url.endsWith('/prepare')?prepareExternal(input):req.url.endsWith('/retry')?retryExternal(input):submitExternal(input));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));return;
   }
   if(req.method==='POST'&&req.url==='/api/pay'){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');let body='';for await(const chunk of req){body+=chunk;assert(body.length<4096);}

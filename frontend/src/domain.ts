@@ -70,4 +70,6 @@ export type TransactionResult = {
   txHash: string;
   state: string;
   error?: string;
+  reason?: string;
+  phase?: string;
 };

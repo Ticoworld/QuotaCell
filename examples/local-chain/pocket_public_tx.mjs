@@ -19,3 +19,11 @@ export async function submitPublicTransaction({rpc,hash,signed,enabled}){
  try{const accepted=await rpc('send_transaction',[signed]);if(accepted!==hash)return {state:'uncertain',reason:'Node returned a different transaction hash'};return {state:'submitted'};}
  catch(e){return {state:'uncertain',reason:e.message};}
 }
+
+export async function rebroadcastExistingTransaction({rpc,hash,signed,priorState,dryRun,enabled}){
+ if(enabled!==true)throw Error('Pudge broadcast is not explicitly enabled');
+ const observed=await observePublicTransaction({rpc,hash,signed,priorState});
+ if(observed.state!=='uncertain'||observed.reason!=='Transaction not found')return observed;
+ try{await dryRun();}catch(e){return {state:'uncertain',phase:'dry-run',reason:e.message};}
+ return submitPublicTransaction({rpc,hash,signed,enabled});
+}

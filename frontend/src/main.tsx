@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import './i18n';
 import './style.css';
 import { formatCkb, progressPercent, shortHash } from './amount';
-import { checkPudgeTransaction, getPocketState, prepareGenesis, prepareOwnerAction, preparePayment, reconcile, submitTransaction } from './api';
+import { checkPudgeTransaction, getPocketState, prepareGenesis, prepareOwnerAction, preparePayment, reconcile, retryJournaledDeposit, submitTransaction } from './api';
 import { CreationFlow, type People } from './CreationFlow';
 import { importMetadata, loadMetadata, saveMetadata, exportMetadata } from './metadata';
 import type { HistoryItem, PocketMetadata, PocketState, PreparedTransaction, TransactionResult, WalletIdentity } from './domain';
@@ -84,6 +84,8 @@ function App() {
   const [editPerson, setEditPerson] = useState<Participant | null>(null);
   const [reconcileBusy, setReconcileBusy] = useState(false);
   const [noticeCheckBusy, setNoticeCheckBusy] = useState(false);
+  const [retryBusy, setRetryBusy] = useState(false);
+  const [retryDialogOpen, setRetryDialogOpen] = useState(false);
 
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true);
@@ -185,6 +187,7 @@ function App() {
   const history = state?.history || [];
   const pudge = Boolean(state?.networkMode?.startsWith('pudge'));
   const pudgeReadOnly = state?.networkMode === 'pudge-readonly';
+  const retryableDeposit = Boolean(role === 'owner' && pudge && transactionNotice?.hash && history.some((item) => item.tx_hash.toLowerCase() === transactionNotice.hash?.toLowerCase() && item.operation === 'deposit' && ['uncertain', 'submitted'].includes(item.state)));
   const explorerEnabled = pudge;
   const noticeRecorded = Boolean(transactionNotice?.hash && history.some((item) => item.tx_hash.toLowerCase() === transactionNotice.hash?.toLowerCase()));
   const clientTransactionUnresolved = Boolean(transactionNotice?.hash && (
@@ -339,6 +342,19 @@ function App() {
     } finally { setNoticeCheckBusy(false); }
   };
 
+  const retrySameDeposit = async () => {
+    if (!transactionNotice?.hash || !retryableDeposit) return;
+    setRetryBusy(true);
+    try {
+      const result = await retryJournaledDeposit(transactionNotice.hash);
+      setTransactionNotice({ state: result.state, hash: result.txHash || transactionNotice.hash, detail: result.reason || result.error || (result.state === 'submitted' ? t('sameTxSubmitted') : '') });
+      await refresh(true);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setTransactionNotice({ state: 'uncertain', hash: transactionNotice.hash, detail: `${t('statusCheckFailed')} ${message}` });
+    } finally { setRetryBusy(false); setRetryDialogOpen(false); }
+  };
+
   const saveName = (person: Participant, name: string, description: string) => {
     if (!state?.genesis || !state.pocket) return;
     const next = { ...metadata, [person.publicKey]: { name: name.trim().slice(0, 32), description: description.trim().slice(0, 72) } };
@@ -386,7 +402,7 @@ function App() {
       : state && !state.empty ? <main id="home" className="app-page mx-auto w-[min(100%-2rem,64rem)] py-6 sm:py-8">
         <div className="pocket-heading mb-5 flex items-start justify-between gap-4"><div className="min-w-0"><h1 className="m-0 text-2xl font-bold text-navy sm:text-[28px]">{state.pocket ? t('activePocket') : t('brand')}</h1><p className="mt-1 text-xs text-slate-600 sm:text-sm">{identity ? displayIdentityRole : t('connectToSeeActions')}</p></div><span className={closed ? 'state-mark state-closed' : 'state-mark'}>{closed ? t('closedStatus') : t('active')}</span></div>
 
-        {transactionNotice && <div className={`transaction-notice mb-4 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3.5 ${['uncertain', 'error', 'rejected'].includes(transactionNotice.state) ? 'notice-warning border-amber-200 bg-amber-50' : ''}`} role="status" aria-live="polite"><span className="notice-marker grid size-6 shrink-0 place-items-center rounded-full bg-success text-xs font-bold text-white" aria-hidden="true">{['uncertain', 'error', 'rejected'].includes(transactionNotice.state) ? '!' : '✓'}</span><div className="min-w-0 flex-1"><strong className="text-sm font-semibold text-slate-800">{noticeTitle}</strong><p className="mt-1 break-words text-xs leading-5 text-slate-600">{transactionNotice.detail || (transactionNotice.hash ? transactionNotice.state : t('noUncertainTransactions'))}</p>{transactionNotice.hash && <div className="mt-2 grid gap-1.5"><code className="break-all text-[11px] text-slate-700" dir="ltr">{transactionNotice.hash}</code>{pudge && <a className="text-xs text-blue underline" href={explorerUrl(transactionNotice.hash)} target="_blank" rel="noreferrer">{t('explorer')}</a>}</div>}</div>{pudge && transactionNotice.hash && ['uncertain', 'pending', 'proposed', 'submitted'].includes(transactionNotice.state) && <button type="button" className="secondary-button shrink-0" disabled={noticeCheckBusy} onClick={() => void checkNoticeStatus()}>{noticeCheckBusy ? t('checkingStatus') : t('checkStatus')}</button>}<button type="button" className="text-button rounded p-1 text-slate-500 hover:bg-white/70" onClick={() => { setTransactionNotice(null); try { sessionStorage.removeItem(PENDING_TRANSACTION_KEY); } catch { /* Session storage is optional. */ } }} aria-label={t('close')}>×</button></div>}
+        {transactionNotice && <div className={`transaction-notice mb-4 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3.5 ${['uncertain', 'error', 'rejected'].includes(transactionNotice.state) ? 'notice-warning border-amber-200 bg-amber-50' : ''}`} role="status" aria-live="polite"><span className="notice-marker grid size-6 shrink-0 place-items-center rounded-full bg-success text-xs font-bold text-white" aria-hidden="true">{['uncertain', 'error', 'rejected'].includes(transactionNotice.state) ? '!' : '✓'}</span><div className="min-w-0 flex-1"><strong className="text-sm font-semibold text-slate-800">{noticeTitle}</strong><p className="mt-1 break-words text-xs leading-5 text-slate-600">{transactionNotice.detail || (transactionNotice.hash ? transactionNotice.state : t('noUncertainTransactions'))}</p>{transactionNotice.hash && <div className="mt-2 grid gap-1.5"><code className="break-all text-[11px] text-slate-700" dir="ltr">{transactionNotice.hash}</code>{pudge && <a className="text-xs text-blue underline" href={explorerUrl(transactionNotice.hash)} target="_blank" rel="noreferrer">{t('explorer')}</a>}</div>}</div>{pudge && transactionNotice.hash && ['uncertain', 'pending', 'proposed', 'submitted'].includes(transactionNotice.state) && <button type="button" className="secondary-button shrink-0" disabled={noticeCheckBusy} onClick={() => void checkNoticeStatus()}>{noticeCheckBusy ? t('checkingStatus') : t('checkStatus')}</button>}{retryableDeposit && ['uncertain', 'unknown', 'submitted'].includes(transactionNotice.state) && <button type="button" className="secondary-button shrink-0" disabled={retryBusy} onClick={() => setRetryDialogOpen(true)}>{t('retrySameTransaction')}</button>}<button type="button" className="text-button rounded p-1 text-slate-500 hover:bg-white/70" onClick={() => { setTransactionNotice(null); try { sessionStorage.removeItem(PENDING_TRANSACTION_KEY); } catch { /* Session storage is optional. */ } }} aria-label={t('close')}>×</button></div>}
 
         {state.unresolved && <section className="unresolved-banner mb-4 flex flex-col items-start justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center" role="alert"><div><strong className="text-sm font-semibold text-amber-950">{t('unresolvedTitle')}</strong><p className="mt-1 text-xs leading-5 text-amber-900">{t('unresolvedBody')}</p></div><button type="button" className="secondary-button shrink-0" disabled={reconcileBusy || pudgeReadOnly} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section>}
 
@@ -450,6 +466,14 @@ function App() {
         <span className="dialog-symbol warning-symbol mb-3 grid size-8 place-items-center rounded-lg border border-amber-200 bg-amber-50 font-bold text-amber-800" aria-hidden="true">!</span><AlertDialog.Title className="dialog-title text-xl font-semibold text-navy">{t('pudgeBroadcastTitle')}</AlertDialog.Title><AlertDialog.Description className="dialog-description mb-4 mt-1.5 block text-xs leading-5 text-slate-600">{t('pudgeBroadcastBody')}</AlertDialog.Description>
         {pendingSigned && <div className="signed-hash grid gap-1.5 rounded-md border border-line bg-slate-50 p-3"><span className="text-[11px] text-slate-500">{t('txId')}</span><code className="break-all text-xs text-slate-700" dir="ltr">{pendingSigned.hash}</code></div>}
         <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2"><AlertDialog.Cancel asChild><button className="secondary-button" disabled={working}>{t('discardSignature')}</button></AlertDialog.Cancel><AlertDialog.Action asChild><button className="primary-button" disabled={working || pudgeReadOnly} onClick={(event) => { event.preventDefault(); if (pendingSigned) void submitSigned(pendingSigned.transaction, pendingSigned.hash); }}>{working ? t('submitting') : t('sendToPudge')}</button></AlertDialog.Action></div>
+      </AlertDialog.Content></AlertDialog.Portal>
+    </AlertDialog.Root>
+
+    <AlertDialog.Root open={retryDialogOpen} onOpenChange={(open) => { if (!retryBusy) setRetryDialogOpen(open); }}>
+      <AlertDialog.Portal><AlertDialog.Overlay className="dialog-overlay fixed inset-0 z-[60] bg-slate-950/55 backdrop-blur-[1px]"/><AlertDialog.Content className="dialog-content alert-dialog fixed left-1/2 top-1/2 z-[61] max-h-[min(88dvh,850px)] w-[min(500px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6" aria-modal="true">
+        <span className="dialog-symbol warning-symbol mb-3 grid size-8 place-items-center rounded-lg border border-amber-200 bg-amber-50 font-bold text-amber-800" aria-hidden="true">!</span><AlertDialog.Title className="dialog-title text-xl font-semibold text-navy">{t('retrySameTransactionTitle')}</AlertDialog.Title><AlertDialog.Description className="dialog-description mb-4 mt-1.5 block text-xs leading-5 text-slate-600">{t('retrySameTransactionBody')}</AlertDialog.Description>
+        {transactionNotice?.hash && <div className="rounded-md border border-slate-200 bg-slate-50 p-3"><span className="text-[11px] text-slate-500">{t('txId')}</span><code className="mt-1 block break-all text-xs text-slate-700" dir="ltr">{transactionNotice.hash}</code></div>}
+        <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2"><AlertDialog.Cancel asChild><button className="secondary-button" disabled={retryBusy}>{t('cancel')}</button></AlertDialog.Cancel><AlertDialog.Action asChild><button className="primary-button" disabled={retryBusy} onClick={(event) => { event.preventDefault(); void retrySameDeposit(); }}>{retryBusy ? t('submitting') : t('retrySameTransaction')}</button></AlertDialog.Action></div>
       </AlertDialog.Content></AlertDialog.Portal>
     </AlertDialog.Root>
   </>;
