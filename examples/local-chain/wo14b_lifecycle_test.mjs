@@ -166,6 +166,38 @@ try{
    }
    await p.locator('#pay').click();await committed(p);
   }
+  const sharedLimitVmCheck=async()=>{
+   const descriptor=JSON.parse(await fs.readFile(path.join(run,'pocket.json')));
+   const discovered=await discoverPolicy({rpc,policy:descriptor.initial.Q,expected:descriptor.initial.expected});
+   const policy=await live(point(discovered.outPoint.tx_hash,Number(BigInt(discovered.outPoint.index))));
+   const actual=Buffer.from(policy.cell.data.content.slice(2),'hex');
+   const read128=(buffer,offset)=>buffer.readBigUInt64LE(offset)+(buffer.readBigUInt64LE(offset+8)<<64n);
+   const write128=(buffer,offset,value)=>{buffer.writeBigUInt64LE(value&((1n<<64n)-1n),offset);buffer.writeBigUInt64LE(value>>64n,offset+8);};
+   const amount=61n*CKB,sharedLimit=read128(actual,8),sharedUsed=read128(actual,24),aliceLimit=read128(actual,264),aliceUsed=read128(actual,280),benUsed=read128(actual,434);
+   assert(sharedUsed+amount>sharedLimit,'The negative payment must exceed only the shared allowance');
+   assert(aliceUsed+amount<=aliceLimit,'The negative payment must remain within Alice personal allowance');
+   const actorMatches=await discoverPlainCells({rpc,lock:descriptor.actors.alice.lock,includeUnsupported:true});
+   const actorCandidate=actorMatches.cells.find(cell=>BigInt(cell.cell.output.capacity)>=6100000000n);assert(actorCandidate,'Alice seed cell missing');
+   const actor=await live(point(actorCandidate.outPoint.tx_hash,Number(BigInt(actorCandidate.outPoint.index))));
+   const fundMatches=await discoverPlainCells({rpc,lock:descriptor.initial.F,includeUnsupported:true});
+   const funds=await Promise.all(fundMatches.cells.map(cell=>live(point(cell.outPoint.tx_hash,Number(BigInt(cell.outPoint.index))))));
+   const spoofed=structuredClone(policy),builderState=Buffer.from(actual);
+   builderState.fill(0,24,40);builderState.fill(0,280,296);builderState.fill(0,434,450);spoofed.cell.data.content='0x'+builderState.toString('hex');
+   const unsigned=buildPayment({policy:spoofed,actor,funds,deps,delegate:0,amount,fee:2000n});
+   const overLimitState=Buffer.from(unsigned.outputsData[0].slice(2),'hex');
+   write128(overLimitState,24,sharedUsed+amount);write128(overLimitState,280,aliceUsed+amount);write128(overLimitState,434,benUsed);
+   unsigned.outputsData[0]='0x'+overLimitState.toString('hex');
+   assert.equal(read128(overLimitState,280)+read128(overLimitState,434),read128(overLimitState,24));
+   assert(read128(overLimitState,24)>sharedLimit,'The signed output must exceed the unchanged shared limit');
+   const privateKey=await pages[1].evaluate(()=>window.name),signer=new c.SignerCkbPrivateKey(client,'0x'+privateKey),signed=await signer.signOnlyTransaction(unsigned);
+   let failure;try{await rpc('dry_run_transaction',[raw(signed)]);}catch(error){failure=error;}
+   assert(failure?.rpc,'Over-limit payment unexpectedly passed CKB-VM dry-run');
+   const detail=JSON.stringify(failure.rpc);
+   assert.match(detail,/TransactionFailedToVerify.*TransactionScriptError.*Inputs\[0\]\.Type.*ValidationFailure/i,`Shared-limit rejection did not come from Q type-script validation: ${detail}`);
+   console.log(`CKB-VM shared allowance payment rejected without broadcast: ${detail}`);
+   return {result:'REJECTED_BY_CKB_VM',rpcError:failure.rpc,sharedUsed:sharedUsed.toString(),sharedLimit:sharedLimit.toString(),attemptedAmount:amount.toString()};
+  };
+  const sharedLimitVmResult=await sharedLimitVmCheck();
 const current=JSON.parse(await fs.readFile(path.join(run,'pocket.json')));const localIndexerRpc=async(method,params=[])=>method==='get_consensus'?{id:'ckb_testnet'}:method==='get_block_hash'&&params[0]==='0x0'?PUDGE_GENESIS:rpc(method,params);
   let indexed;for(let i=0;i<100;i++){try{indexed=await discoverIndexed({rpc:localIndexerRpc,policy:current.initial.Q,expected:current.initial.expected});break;}catch(e){if(!/lag or chain-tip mismatch/.test(e.message))throw e;await sleep(100);}}
   assert.equal(indexed?.cells.length,1);const indexFunds=await discoverIndexed({rpc:localIndexerRpc,lock:current.initial.F});assert.equal(indexFunds.cells.length,1);const indexOwner=await discoverIndexed({rpc:localIndexerRpc,lock:current.actors.owner.lock});assert(indexOwner.cells.length>=1);console.log('isolated node indexer discovery PASS');
@@ -196,7 +228,7 @@ const current=JSON.parse(await fs.readFile(path.join(run,'pocket.json')));const 
   assert.equal(reopened.closed,true,JSON.stringify(reopened));assert.equal(reopened.hasFund,false);assert.equal(reopened.sharedUsed,'0');assert.equal(reopened.history.length,10);
    await ownerPage.reload();await ownerPage.waitForFunction(()=>document.querySelector('#availability').textContent==='Closed');await ownerPage.screenshot({path:path.join(run,'closed.png'),fullPage:true});await reactScreenshot('closed');await reactScreenshot('closed',390);await reactScreenshot('closed',320);assert(await reactPage.locator('.allowance-metric').getByText('134 CKB',{exact:true}).count(),'Closed Pocket view must show retained terminal capacity as CKB, not a duplicate Closed card');
   for(const name of ['actors.json','context.json','keys'])await assert.rejects(fs.access(path.join(run,name)),{code:'ENOENT'});
-   const evidence={result:'PASS',lifecycle:['creation','funding','alice payment','ben payment','separate delegate revocations','application and CKB-VM negative tests','recovery','late deposit','sweep','node and server restart/reopen'],react:['empty onboarding','active role-aware view','closed recovery view','mobile overflow checks'],revokedPaymentVm:vmResults,genesis:state.genesis,pocket:reopened.pocket};await fs.writeFile(path.join(run,'evidence/wo14b-lifecycle.json'),JSON.stringify(evidence,null,2)+'\n');console.log(JSON.stringify(evidence));
+   const evidence={result:'PASS',lifecycle:['creation','funding','alice payment','ben payment','shared-limit CKB-VM rejection','separate delegate revocations','application and CKB-VM negative tests','recovery','late deposit','sweep','node and server restart/reopen'],react:['empty onboarding','active role-aware view','closed recovery view','mobile overflow checks'],sharedAllowanceVm:sharedLimitVmResult,revokedPaymentVm:vmResults,genesis:state.genesis,pocket:reopened.pocket};await fs.writeFile(path.join(run,'evidence/wo14b-lifecycle.json'),JSON.stringify(evidence,null,2)+'\n');console.log(JSON.stringify(evidence));
 
  }finally{app.kill();}
  }finally{await browser.close();frontend?.kill();node.kill();}
