@@ -5,13 +5,17 @@ export async function submitDurableCreation({persistIntent,dryRun,submit,checkpo
   await checkpoint('before-dry-run');
   await dryRun();
   await checkpoint('after-dry-run');
- }catch(error){return {state:'uncertain',phase:'dry-run',error:error.message};}
+ }catch(error){await checkpoint('dry-run-failed');return {state:'uncertain',phase:'dry-run',error:error.message};}
  try{
   await checkpoint('before-submit');
   const result=await submit();
   await checkpoint('after-submit');
+  if(result?.state==='uncertain'){
+   await checkpoint('submit-uncertain');
+   return {...result,phase:result.phase||'submit'};
+  }
   return result;
- }catch(error){return {state:'uncertain',phase:'submit',error:error.message};}
+ }catch(error){await checkpoint('submit-uncertain');return {state:'uncertain',phase:'submit',error:error.message};}
 }
 
 export async function recoverCreation({item,observe,writeDescriptor,descriptorMatches=()=>true,operationInProgress=false}){

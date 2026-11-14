@@ -20,10 +20,16 @@ export async function submitPublicTransaction({rpc,hash,signed,enabled}){
  catch(e){return {state:'uncertain',reason:e.message};}
 }
 
-export async function rebroadcastExistingTransaction({rpc,hash,signed,priorState,dryRun,enabled}){
+export async function rebroadcastExistingTransaction({rpc,hash,signed,priorState,dryRun,enabled,checkpoint=async()=>{}}){
  if(enabled!==true)throw Error('Pudge broadcast is not explicitly enabled');
+ await checkpoint('retry-observation');
  const observed=await observePublicTransaction({rpc,hash,signed,priorState});
  if(observed.state!=='uncertain'||observed.reason!=='Transaction not found')return observed;
- try{await dryRun();}catch(e){return {state:'uncertain',phase:'dry-run',reason:e.message};}
- return submitPublicTransaction({rpc,hash,signed,enabled});
+ await checkpoint('before-dry-run');
+ try{await dryRun();await checkpoint('after-dry-run');}catch(e){await checkpoint('dry-run-failed');return {state:'uncertain',phase:'dry-run',reason:e.message};}
+ await checkpoint('before-submit');
+ const result=await submitPublicTransaction({rpc,hash,signed,enabled});
+ await checkpoint('after-submit');
+ if(result.state==='uncertain'){await checkpoint('submit-uncertain');return {...result,phase:'submit'};}
+ return result;
 }

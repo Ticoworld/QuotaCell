@@ -102,10 +102,11 @@ try{
     }finally{await stopBackend(child);}
 
     const check=new DatabaseSync(path.join(run,'working-pocket.sqlite'));
-    const item=check.prepare("SELECT tx_hash,state,recovery_json FROM intents WHERE operation='genesis'").get();
+    const item=check.prepare("SELECT tx_hash,state,recovery_json,phase FROM intents WHERE operation='genesis'").get();
     assert.equal(item.tx_hash,txHash);
     assert.equal(item.state,'uncertain');
     assert.equal(item.recovery_json,recovery);
+    assert.equal(item.phase,'legacy-unknown');
     check.close();
   }
 

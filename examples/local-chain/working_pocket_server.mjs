@@ -36,6 +36,8 @@ assert(Boolean(initial)===Boolean(actors),'Development context and actors must b
 const environment=deployment||initial;
 assert(environment,'A public deployment.json is required when no development Pocket exists');
 const networkMode=process.env.QUOTACELL_NETWORK||'isolated';
+const rpcUrl=process.env.QUOTACELL_TEST_RPC_PROXY||runtime.url;
+assert(!process.env.QUOTACELL_TEST_RPC_PROXY||networkMode==='isolated','The test RPC proxy is restricted to isolated chains');
 const K='0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 const hashes={A:'0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1',F:'0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a',Q:'0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e',Kcode:'0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',Kdata:'0x9799bee251b975b82c45a02154ce28cec89c5853ecc14d12b7b8cccfc19e0af4'};
 const buf=h=>Buffer.from(h.slice(2),'hex');
@@ -47,13 +49,13 @@ const raw=tx=>({version:num(tx.version),cell_deps:tx.cellDeps.map(d=>({out_point
 let rid=0;
 async function rpc(method,params=[]){
  return callRpc(method,async()=>{
-  const res=await fetch(runtime.url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:++rid,method,params}),signal:AbortSignal.timeout(method==='get_live_cell'?30000:15000)});
+  const res=await fetch(rpcUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:++rid,method,params}),signal:AbortSignal.timeout(method==='get_live_cell'?30000:15000)});
   const x=await res.json();if(x.error)throw Object.assign(new Error(JSON.stringify(x.error)),{rpc:x.error,retryable:false});return x.result;
  });
 }
 async function live(p){const x=await rpc('get_live_cell',[point(p),true]);assert.equal(x.status,'live','Input is stale');return {...x,outPoint:p};}
 async function verifyEnvironment(){
- await verifyNetwork({mode:networkMode,url:runtime.url,rpc,expectedGenesis:profile.genesisHeader.hash,developmentSigner});
+ await verifyNetwork({mode:networkMode,url:rpcUrl,rpc,expectedGenesis:profile.genesisHeader.hash,developmentSigner});
  for(const n of ['A','F','Q']){const x=await live(environment.deployed[n]);assert.equal(c.hashCkb(buf(x.cell.data.content)),hashes[n],`Wrong ${n} dependency`);}
  const group=await live(environment.kdep.outPoint),data=buf(group.cell.data.content);assert.equal(data.length,76);assert.equal(data.readUInt32LE(0),2,'Invalid K dependency group');
  const members=[0,1].map(j=>({txHash:hex(data.subarray(4+j*36,36+j*36)),index:data.readUInt32LE(36+j*36)}));
@@ -61,18 +63,20 @@ async function verifyEnvironment(){
  assert.deepEqual(environment.allDeps,[environment.kdep,...['A','F','Q'].map(n=>({outPoint:environment.deployed[n],depType:'code'}))]);
 }
 const db=new DatabaseSync(path.join(run,'working-pocket.sqlite'));
-db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS intents (id TEXT PRIMARY KEY, genesis TEXT NOT NULL, pocket TEXT NOT NULL, actor TEXT NOT NULL, recipient TEXT NOT NULL, amount TEXT NOT NULL, tx_hash TEXT NOT NULL, signed TEXT NOT NULL, state TEXT NOT NULL, created TEXT NOT NULL)");
+db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS intents (id TEXT PRIMARY KEY, genesis TEXT NOT NULL, pocket TEXT NOT NULL, actor TEXT NOT NULL, recipient TEXT NOT NULL, amount TEXT NOT NULL, tx_hash TEXT NOT NULL, signed TEXT NOT NULL, state TEXT NOT NULL, created TEXT NOT NULL, phase TEXT NOT NULL DEFAULT 'intent-persisted')");
 if(!db.prepare('PRAGMA table_info(intents)').all().some(x=>x.name==='operation'))db.exec("ALTER TABLE intents ADD COLUMN operation TEXT NOT NULL DEFAULT 'pay'");
 if(!db.prepare('PRAGMA table_info(intents)').all().some(x=>x.name==='recovery_json'))db.exec('ALTER TABLE intents ADD COLUMN recovery_json TEXT');
-const insert=db.prepare('INSERT INTO intents (id,genesis,pocket,actor,recipient,amount,tx_hash,signed,state,created,operation,recovery_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
+if(!db.prepare('PRAGMA table_info(intents)').all().some(x=>x.name==='phase'))db.exec("ALTER TABLE intents ADD COLUMN phase TEXT NOT NULL DEFAULT 'legacy-unknown'");
+const insert=db.prepare('INSERT INTO intents (id,genesis,pocket,actor,recipient,amount,tx_hash,signed,state,created,phase,operation,recovery_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
 const rows=()=>db.prepare('SELECT * FROM intents ORDER BY rowid').all();
 const update=db.prepare('UPDATE intents SET state=? WHERE id=?');
+const updatePhase=db.prepare('UPDATE intents SET phase=? WHERE id=?');
 await verifyEnvironment();
 let busy=false;
 const requests=new Map();
 const walletBundle=(await build({entryPoints:[path.join(here,'working_pocket_wallet.mjs')],bundle:true,write:false,platform:'browser',format:'iife',target:'chrome110'})).outputFiles[0].contents;
 async function canonicalCommit(tx){if(tx?.tx_status?.status!=='committed')return false;const header=await rpc('get_header',[tx.tx_status.block_hash]);return !!header && await rpc('get_block_hash',[header.number])===header.hash;}
-async function snapshot(){
+async function snapshot({currentIntent}={}){
  assert(initial&&actors,'No Pocket is open');
  const state=structuredClone(initial);let unresolved=false;
  let indexedTip=null;
@@ -99,7 +103,15 @@ async function snapshot(){
   state.ownerFee=points(ownerCells)[0];state.seeds.alice=points(aliceCells)[0];state.seeds.ben=points(benCells)[0];
  }
 
+ let skippedCurrentIntent=false;
  for(const item of rows()){
+  if(currentIntent&&item.id===currentIntent.id){
+   assert(!skippedCurrentIntent,'Duplicate current intent id');
+   assert.equal(item.tx_hash,currentIntent.txHash,'Persisted transaction hash changed');
+   assert.equal(item.signed,currentIntent.signedJson,'Persisted signed transaction changed');
+   assert.equal(item.operation,currentIntent.operation,'Persisted operation changed');
+   skippedCurrentIntent=true;continue;
+  }
   assert.equal(item.genesis,profile.genesisHeader.hash);assert.equal(item.pocket,c.Script.from(initial.Q).hash());
   if(initial.expected){if(networkMode==='pudge'){const result=await observePublicTransaction({rpc,hash:item.tx_hash,signed:JSON.parse(item.signed),priorState:item.state});update.run(result.state,item.id);if(result.state!=='committed')unresolved=true;}else{const tx=await rpc('get_transaction',[item.tx_hash]);if(await canonicalCommit(tx))update.run('committed',item.id);else unresolved=true;}continue;}
   if(item.operation==='genesis')continue;
@@ -113,6 +125,7 @@ async function snapshot(){
    else throw new Error('Unknown journal operation');
   }else{update.run('uncertain',item.id);unresolved=true;}
  }
+ if(currentIntent)assert(skippedCurrentIntent,'Current persisted intent is missing from the journal');
  const p=await live(state.policy),fs=await Promise.all((state.funds||[state.fund].filter(Boolean)).map(live)),f=fs[0]||null,s=buf(p.cell.data.content),closed=s.length===28;
  const ps=p.cell.output.type;assert(ps,'Missing policy type');const actualPolicy=c.Script.from({codeHash:ps.code_hash,hashType:ps.hash_type,args:ps.args});assert(actualPolicy.eq(c.Script.from(initial.Q)),'Policy identity mismatch');
  const pl=p.cell.output.lock;assert(c.Script.from({codeHash:pl.code_hash,hashType:pl.hash_type,args:pl.args}).eq(c.Script.from({codeHash:hashes.A,hashType:'data1',args:'0x'})),'Policy lock mismatch');
@@ -175,16 +188,23 @@ async function submitExternal(body){
   verifyWalletTransaction({prepared,signed,message:request.message,publicKey:request.publicKey,position:request.position});
   const signedRaw=raw(signed);
   if(request.operation==='genesis')assert(!initial,'A Pocket is already open');
+  if(request.operation!=='genesis'){
+   await verifyEnvironment();
+   const before=await snapshot();
+   assert(!before.unresolved,'An earlier outcome is uncertain');
+   assert.equal(before.view.pocket,request.pocket,'Pocket changed after transaction preparation');
+   for(const p of request.points)await live(p);
+  }
   const recovery=request.operation==='genesis'?JSON.stringify({initial:request.next,actors:request.identities}):null;
-  const persistIntent=()=>{db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');if(request.operation==='genesis')assert(!rows().some(x=>x.operation==='genesis'),'A Pocket creation already exists');insert.run(body.id,profile.genesisHeader.hash,request.pocket,request.publicKey,request.recipient,request.amount,signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),request.operation,recovery);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}};
+  const persistIntent=()=>{db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');if(request.operation==='genesis')assert(!rows().some(x=>x.operation==='genesis'),'A Pocket creation already exists');insert.run(body.id,profile.genesisHeader.hash,request.pocket,request.publicKey,request.recipient,request.amount,signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),'intent-persisted',request.operation,recovery);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}};
   const dryRun=async()=>{
    await verifyEnvironment();
-   if(request.operation!=='genesis'){const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain');assert.equal(snap.view.pocket,request.pocket);}
+   if(request.operation!=='genesis'){const snap=await snapshot({currentIntent:{id:body.id,txHash:signed.hash(),signedJson:JSON.stringify(signedRaw),operation:request.operation}});assert(!snap.unresolved,'An earlier outcome is uncertain');assert.equal(snap.view.pocket,request.pocket);}
    for(const p of request.points)await live(p);
    if(networkMode==='pudge'){const f=await rpc('get_fee_rate_statistics',['0x65']);const minimum=(BigInt(signed.toBytes().length)*BigInt(f.median)+999n)/1000n;assert(BigInt(await transactionFee(signed))>=minimum,'Fee below current median');}
    await rpc('dry_run_transaction',[signedRaw]);
   };
-  const submitted=await submitDurableCreation({persistIntent,dryRun,submit:async()=>networkMode==='pudge'?submitPublicTransaction({rpc,hash:signed.hash(),signed:signedRaw,enabled:process.env.QUOTACELL_PUDGE_BROADCAST==='1'}):(assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash()),{state:'submitted'})});
+  const submitted=await submitDurableCreation({persistIntent,dryRun,checkpoint:async phase=>updatePhase.run(phase,body.id),submit:async()=>networkMode==='pudge'?submitPublicTransaction({rpc,hash:signed.hash(),signed:signedRaw,enabled:process.env.QUOTACELL_PUDGE_BROADCAST==='1'}):(assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash()),{state:'submitted'})});
   if(submitted.state==='uncertain'){update.run('uncertain',body.id);return {txHash:signed.hash(),...submitted};}
   if(networkMode==='pudge'){update.run(submitted.state,body.id);return {txHash:signed.hash(),...submitted};}
   for(let i=0;i<20;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));if(await canonicalCommit(await rpc('get_transaction',[signed.hash()]))){update.run('committed',body.id);if(request.operation==='genesis'){const d={initial:request.next,actors:request.identities};await fs.writeFile(path.join(run,'pocket.json.tmp'),JSON.stringify(d));await fs.rename(path.join(run,'pocket.json.tmp'),path.join(run,'pocket.json'));initial=d.initial;actors=d.actors;}return {txHash:signed.hash(),state:'committed'};}}
@@ -202,7 +222,7 @@ async function retryExternal(body){
   assert(['uncertain','submitted'].includes(item.state),'Transaction is not retryable');
   await verifyEnvironment();
   const signed=JSON.parse(item.signed);
-  const result=await rebroadcastExistingTransaction({rpc,hash:item.tx_hash,signed,priorState:item.state,enabled:true,dryRun:()=>rpc('dry_run_transaction',[signed])});
+  const result=await rebroadcastExistingTransaction({rpc,hash:item.tx_hash,signed,priorState:item.state,enabled:true,dryRun:()=>rpc('dry_run_transaction',[signed]),checkpoint:phase=>updatePhase.run(phase,item.id)});
   update.run(result.state,item.id);
   return {txHash:item.tx_hash,...result};
  }finally{busy=false;}
