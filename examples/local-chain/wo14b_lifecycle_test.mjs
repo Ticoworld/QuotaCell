@@ -112,6 +112,18 @@ try{
    await reactPage.waitForFunction(async()=>{const response=await fetch('/api/state');const current=await response.json();return response.ok&&!current.empty&&!!current.pocket;},undefined,{timeout:45000});
    await reactPage.locator('.permission-row').nth(1).waitFor();assert.equal(await reactPage.locator('.permission-row').count(),2,'Owner must see both independent delegate permissions');assert.equal(await reactPage.locator('iframe').count(),0);
    await reactPage.getByText('Operations',{exact:true}).first().waitFor();await reactPage.screenshot({path:path.join(run,'react-owner-created.png'),fullPage:true});console.log('React native onboarding, 3 wallet registrations, server-built creation, wallet signing, and live owner state PASS');
+   await reactPage.locator('.revoke-button').first().click();await reactPage.locator('.dialog-content').waitFor();
+   await reactPage.route('**/api/state',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Stale indexed cell'})}));
+   await reactPage.evaluate(()=>document.querySelector('.refresh-button').click());
+   await reactPage.getByText('Live Pocket status could not be refreshed.',{exact:false}).waitFor();
+   assert.equal(await reactPage.locator('.dialog-content').count(),1,'A transient state refresh must not replace the open transaction dialog');
+   assert.equal(await reactPage.locator('.metrics').count(),1,'The last validated Pocket view must remain visible during a refresh failure');
+   assert.equal(await reactPage.locator('.load-error').count(),0,'A transient refresh failure must not show a false full-page Cell error');
+   assert.equal(await reactPage.locator('.revoke-button:not(:disabled)').count(),0,'Owner actions must pause while the displayed Pocket state is stale');
+   await reactPage.unroute('**/api/state');await reactPage.evaluate(()=>document.querySelector('.refresh-button').click());
+   await reactPage.getByText('Live Pocket status could not be refreshed.',{exact:false}).waitFor({state:'detached'});
+   await reactPage.keyboard.press('Escape');
+   console.log('React retains the last verified Pocket during transient refresh errors and pauses new actions PASS');
   for(const p of pages){await p.goto(appURL);await p.locator('#connectWallet').click();await p.getByText('UTXO Global Wallet',{exact:true}).first().click();await p.getByText('CKB',{exact:true}).first().click();await p.waitForFunction(()=>document.querySelector('#walletStatus').textContent.includes('Connected:'));}
   const terms={sharedLimit:String(250n*CKB),delegates:publicKeys.slice(1).map((publicKey,i)=>({publicKey,recipient:JSON.parse(JSON.stringify(lock(other[i].publicKey))),limit:String(200n*CKB),perPayment:String(100n*CKB)}))};
   const ownerPage=pages[0];await ownerPage.screenshot({path:path.join(run,'empty.png'),fullPage:true});

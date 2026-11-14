@@ -29,3 +29,8 @@ export async function recoverCreation({item,observe,writeDescriptor,descriptorMa
  await writeDescriptor(recovery);
  return {ready:true,outcome,recovery};
 }
+
+export function installedCreationMatches(item,descriptor){
+ if(!item?.recovery_json||!descriptor)return false;
+ try{return JSON.stringify(JSON.parse(item.recovery_json))===JSON.stringify(descriptor);}catch{return false;}
+}

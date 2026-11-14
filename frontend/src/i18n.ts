@@ -5,7 +5,7 @@ const resources = {
   en: { translation: {
     brand: 'QuotaCell', connected: 'Connected', disconnected: 'Connect wallet', refresh: 'Refresh', refreshing: 'Refreshing…',
     networkLocal: 'Isolated local chain', networkPudge: 'Pudge testnet', networkLocalShort: 'Local', networkPudgeShort: 'Pudge', readOnly: 'Read only', language: 'Language', english: 'English', chinese: '简体中文',
-    loadError: 'Pocket state is unavailable', retry: 'Try again', fallback: 'Legacy HTML',
+    loadError: 'Pocket state is unavailable', retry: 'Try again', fallback: 'Legacy HTML', stateRefreshPaused: 'Live Pocket status could not be refreshed. Actions are paused until a fresh check succeeds.',
     emptyTitle: 'Create a shared Pocket', emptyBody: 'Set spending permissions for two independent wallets, with one shared allowance and owner control.', createPocket: 'Create Pocket',
     setup: 'Set up your Pocket', participants: 'People', spendingRules: 'Spending rules', review: 'Review', back: 'Back', next: 'Continue',
     stepPeopleTitle: 'Connect the three people', stepPeopleBody: 'Each person connects their own CKB testnet wallet. Keys stay in the wallet.', owner: 'Pocket owner', delegateOne: 'Delegate 1', delegateTwo: 'Delegate 2',
@@ -47,7 +47,7 @@ const resources = {
   'zh-Hans': { translation: {
     brand: 'QuotaCell', connected: '已连接', disconnected: '连接钱包', refresh: '刷新', refreshing: '正在刷新…',
     networkLocal: '隔离本地链', networkPudge: 'Pudge 测试网', networkLocalShort: '本地', networkPudgeShort: 'Pudge', readOnly: '只读', language: '语言', english: 'English', chinese: '简体中文',
-    loadError: '无法读取 Pocket 状态', retry: '重试', fallback: '旧版 HTML',
+    loadError: '无法读取 Pocket 状态', retry: '重试', fallback: '旧版 HTML', stateRefreshPaused: '暂时无法刷新 Pocket 状态。成功获取最新状态前，所有操作都会暂停。',
     emptyTitle: '创建共享 Pocket', emptyBody: '为两个独立钱包设置支出权限，共用一项累计额度，并由所有者管理。', createPocket: '创建 Pocket',
     setup: '设置 Pocket', participants: '参与者', spendingRules: '支出规则', review: '确认信息', back: '返回', next: '继续',
     stepPeopleTitle: '连接三位参与者', stepPeopleBody: '每位参与者连接自己的 CKB 测试网钱包。私钥保留在钱包中。', owner: 'Pocket 所有者', delegateOne: '获授权支出人 1', delegateTwo: '获授权支出人 2',

@@ -5,13 +5,16 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {submitDurableCreation,recoverCreation} from './pocket_creation_recovery.mjs';
+import {submitDurableCreation,recoverCreation,installedCreationMatches} from './pocket_creation_recovery.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const testFile=fileURLToPath(import.meta.url);
 const childDb=process.argv[2]==='--crash-after-intent'?process.argv[3]:null;
 const schema="CREATE TABLE intents (id TEXT PRIMARY KEY, operation TEXT NOT NULL, tx_hash TEXT NOT NULL, signed TEXT NOT NULL, state TEXT NOT NULL, recovery_json TEXT NOT NULL)";
 const recovery=JSON.stringify({initial:{pocket:'p'},actors:{owner:'o'}});
+assert.equal(installedCreationMatches({recovery_json:recovery},JSON.parse(recovery)),true,'An exact durable creation descriptor is recognized without re-observing its old transaction');
+assert.equal(installedCreationMatches({recovery_json:recovery},{initial:{pocket:'other'}}),false,'A conflicting installed descriptor must not bypass recovery');
+assert.equal(installedCreationMatches({recovery_json:null},JSON.parse(recovery)),false,'A descriptor without a durable recovery record is not trusted');
 function dbAt(file){const db=new DatabaseSync(file);db.exec(schema);return db;}
 function durableRow(db,state='uncertain'){
  db.prepare('INSERT INTO intents (id,operation,tx_hash,signed,state,recovery_json) VALUES (?,?,?,?,?,?)').run('creation-1','genesis','0xabc','{"inputs":[]}',state,recovery);

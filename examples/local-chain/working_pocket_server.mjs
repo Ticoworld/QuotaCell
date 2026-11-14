@@ -2,7 +2,7 @@
 import * as c from '@ckb-ccc/core';
 import {DatabaseSync} from 'node:sqlite';
 import {observePublicTransaction,rebroadcastExistingTransaction,submitPublicTransaction} from './pocket_public_tx.mjs';
-import {recoverCreation,submitDurableCreation} from './pocket_creation_recovery.mjs';
+import {recoverCreation,submitDurableCreation,installedCreationMatches} from './pocket_creation_recovery.mjs';
 import {callRpc} from './pocket_rpc_retry.mjs';
 import {verifyNetwork} from './pocket_network.mjs';
 import {parseCkb,recipientArgs} from './pocket_input.mjs';
@@ -80,7 +80,7 @@ const walletBundle=(await build({entryPoints:[path.join(here,'working_pocket_wal
 async function canonicalCommit(tx){if(tx?.tx_status?.status!=='committed')return false;const header=await rpc('get_header',[tx.tx_status.block_hash]);return !!header && await rpc('get_block_hash',[header.number])===header.hash;}
 async function snapshot({currentIntent}={}){
  assert(initial&&actors,'No Pocket is open');
- const state=structuredClone(initial);let unresolved=false;
+ const state=structuredClone(initial);let unresolved=false,installedGenesis=null;
  let indexedTip=null;
  if(initial.expected){
   const expectedKeys=[initial.expected.ownerPublicKey,...initial.expected.delegates.map(d=>d.publicKey)];
@@ -120,7 +120,7 @@ async function snapshot({currentIntent}={}){
    skippedCurrentIntent=true;continue;
   }
   assert.equal(item.genesis,profile.genesisHeader.hash);assert.equal(item.pocket,c.Script.from(initial.Q).hash());
-  if(initial.expected){if(networkMode==='pudge'){const result=await observePublicTransaction({rpc,hash:item.tx_hash,signed:JSON.parse(item.signed),priorState:item.state});update.run(result.state,item.id);if(result.state!=='committed')unresolved=true;}else{const tx=await rpc('get_transaction',[item.tx_hash]);if(await canonicalCommit(tx))update.run('committed',item.id);else unresolved=true;}continue;}
+  if(initial.expected){if(networkMode==='pudge'&&item.operation==='genesis'&&installedCreationMatches(item,descriptor)){installedGenesis=item;continue;}if(networkMode==='pudge'){const result=await observePublicTransaction({rpc,hash:item.tx_hash,signed:JSON.parse(item.signed),priorState:item.state});update.run(result.state,item.id);if(result.state!=='committed')unresolved=true;}else{const tx=await rpc('get_transaction',[item.tx_hash]);if(await canonicalCommit(tx))update.run('committed',item.id);else unresolved=true;}continue;}
   if(item.operation==='genesis')continue;
   const tx=await rpc('get_transaction',[item.tx_hash]);const status=tx?.tx_status?.status||'unknown';
   if(status==='committed' && await canonicalCommit(tx)){
@@ -138,12 +138,14 @@ async function snapshot({currentIntent}={}){
  const pl=p.cell.output.lock;assert(c.Script.from({codeHash:pl.code_hash,hashType:pl.hash_type,args:pl.args}).eq(c.Script.from({codeHash:hashes.A,hashType:'data1',args:'0x'})),'Policy lock mismatch');
  for(const f of fs){const fl=f.cell.output.lock;const expected=c.Script.from({codeHash:hashes.F,hashType:'data1',args:actualPolicy.hash()});assert(c.Script.from({codeHash:fl.code_hash,hashType:fl.hash_type,args:fl.args}).eq(expected),'Fund policy identity mismatch');assert(!f.cell.output.type&&f.cell.data.content==='0x','Unsupported fund cell');}
  if(closed)assert.equal(s.subarray(0,8).toString('hex'),'5143543404000100');else {assert.equal(s.length,466);assert.equal(s.subarray(0,6).toString('hex'),'51434e340400');}
+ if(installedGenesis)update.run('committed',installedGenesis.id);
  const u=o=>s.readBigUInt64LE(o)+(s.readBigUInt64LE(o+8)<<64n);
  const delegates=['alice','ben'].map((role,i)=>{if(closed)return {role,limit:'0',used:'0',perPayment:'0',enabled:false,recipient:'',publicKey:''};const o=158+154*i;return {role,limit:u(o+106).toString(),used:u(o+122).toString(),perPayment:u(o+138).toString(),enabled:Boolean(s[7]&(1<<i)),recipient:c.Script.fromBytes(s.subarray(o+33,o+106)).args,publicKey:hex(s.subarray(o,o+33))};});
  return {state,p,f,fs,unresolved,closed,view:{unsupportedFunds:state.unsupportedFunds||[],networkMode,indexedTip,pocket:c.Script.from(initial.Q).hash(),genesis:profile.genesisHeader.hash,owner:actors.owner.publicKey,policyOutpoint:state.policy,fundShannons:fs.reduce((n,x)=>n+BigInt(x.cell.output.capacity),0n).toString(),fundOccupiedShannons:(BigInt(fs.length)*7300000000n).toString(),sharedLimit:closed?'0':u(8).toString(),sharedUsed:closed?'0':u(24).toString(),delegates,closed,hasFund:!!f,policyCapacity:p.cell.output.capacity,history:rows().map(({id,tx_hash,state,amount,recipient,created,actor,operation,phase})=>({id,tx_hash,state,amount,recipient,created,actor,operation,phase})),unresolved}};
 }
 async function creationRecoveryState(){
  const item=rows().findLast(x=>x.operation==='genesis');if(!item)return null;
+ if(initial&&actors&&installedCreationMatches(item,descriptor))return null;
  const recovered=await recoverCreation({item,operationInProgress:busy,observe:async row=>{const result=await observePublicTransaction({rpc,hash:row.tx_hash,signed:JSON.parse(row.signed),priorState:row.state});update.run(result.state,row.id);return result;},descriptorMatches:value=>!descriptor||JSON.stringify(descriptor)===JSON.stringify(value),writeDescriptor:async value=>{if(!descriptor){const file=path.join(run,'pocket.json'),temp=file+'.tmp';await fs.writeFile(temp,JSON.stringify(value));await fs.rename(temp,file);descriptor=value;}initial=value.initial;actors=value.actors;}});
  if(recovered.ready)return null;
  return {empty:false,recoveryRequired:true,unresolved:true,genesis:profile.genesisHeader.hash,networkMode,creationRecovery:{txHash:item.tx_hash,state:recovered.outcome.state,reason:recovered.outcome.reason||'',recoveryAvailable:!!item.recovery_json}};

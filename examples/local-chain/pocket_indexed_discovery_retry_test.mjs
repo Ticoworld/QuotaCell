@@ -46,6 +46,36 @@ const caughtUp=await withIndexedTipRetry(async()=>{
 assert.equal(caughtUp,'node caught up');
 assert.equal(aheadCalls,2,'An indexer briefly ahead of the node should retry without weakening tip checks');
 
+const cellBlock='0x'+'33'.repeat(32),lock={codeHash:'0x'+'44'.repeat(32),hashType:'type',args:'0x'};
+const output={capacity:'0x1',lock:{code_hash:lock.codeHash,hash_type:lock.hashType,args:lock.args},type:null};
+const indexedCell={out_point:{tx_hash:'0x'+'55'.repeat(32),index:'0x0'},block_number:'0x1',output,output_data:'0x'};
+let liveCalls=0;
+const staleRpc=async(method,params=[])=>{
+ if(method==='get_consensus')return {id:'ckb_testnet'};
+ if(method==='get_block_hash')return params[0]==='0x0'?PUDGE_GENESIS:params[0]==='0x1'?cellBlock:nodeTip.hash;
+ if(method==='get_tip_header')return nodeTip;
+ if(method==='get_indexer_tip')return {block_number:'0x1',block_hash:cellBlock};
+ if(method==='get_cells')return {objects:[indexedCell],last_cursor:'0x'};
+ if(method==='get_live_cell'){
+  liveCalls++;
+  if(liveCalls===1)return {status:'dead'};
+  return {status:'live',cell:{output,data:{content:'0x'}}};
+ }
+ if(method==='get_transaction')return {tx_status:{status:'committed',block_hash:cellBlock},transaction:{outputs:[output],outputs_data:['0x']}};
+ if(method==='get_header')return {number:'0x1',hash:cellBlock};
+ throw new Error(`Unexpected stale-indexer RPC method ${method}`);
+};
+const retriedScan=await discoverIndexedWithRetry({rpc:staleRpc,lock});
+assert.equal(retriedScan.cells.length,1,'The whole indexer scan should succeed after the indexer catches up');
+assert.equal(liveCalls,3,'A stale candidate must restart discovery and independently recheck the returned live Cell');
+
+let changedCalls=0;
+await assert.rejects(withIndexedTipRetry(async()=>{
+ changedCalls++;
+ throw Error('Cell changed during scan');
+},{attempts:3,delayMs:0}),/Cell changed during scan/);
+assert.equal(changedCalls,3,'Persistent cell changes remain fail-closed after bounded retries');
+
 let batchNetworkCalls=0;
 await assert.rejects(withIndexedTipRetry(async()=>{batchNetworkCalls++;throw Error('Wrong network');}),/Wrong network/);
 assert.equal(batchNetworkCalls,1,'Non-tip failures must not retry a multi-scan snapshot');

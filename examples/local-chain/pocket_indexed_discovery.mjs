@@ -44,7 +44,7 @@ export async function discoverIndexed({rpc,lock,policy,expected,includeUnsupport
  return {cells,unsupported,indexedTip:indexed,genesis:PUDGE_GENESIS};
 }
 
-const transientTipDrift=['Indexer lag or chain-tip mismatch','Indexer is ahead of node tip','Indexer tip changed during scan','Node tip changed during scan','Chain reorganized during scan'];
+const transientTipDrift=['Indexer lag or chain-tip mismatch','Indexer is ahead of node tip','Indexer tip changed during scan','Node tip changed during scan','Chain reorganized during scan','Stale indexed cell','Cell became stale','Cell changed during scan'];
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export async function withIndexedTipRetry(operation,{attempts=5,delayMs=250}={}){
  assert(Number.isSafeInteger(attempts)&&attempts>0,'Invalid discovery retry count');

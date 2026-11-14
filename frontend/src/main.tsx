@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -66,6 +66,8 @@ function localizedConnectionError(message: string, t: (key: string) => string): 
 function App() {
   const { t, i18n } = useTranslation();
   const [state, setState] = useState<PocketState | null>(null);
+  const lastGoodState = useRef<PocketState | null>(null);
+  const [stateStale, setStateStale] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [identity, setIdentity] = useState<WalletIdentity | null>(null);
   const [identityError, setIdentityError] = useState('');
@@ -91,12 +93,19 @@ function App() {
     if (!quiet) setRefreshing(true);
     try {
       const next = await getPocketState();
+      if (next.creationRecovery && lastGoodState.current && !lastGoodState.current.creationRecovery) {
+        setStateStale(true);
+        return null;
+      }
+      lastGoodState.current = next;
       setState(next);
+      setStateStale(false);
       setLoadError('');
       return next;
     } catch (cause) {
-      setState(null);
-      setLoadError(cause instanceof Error ? cause.message : String(cause));
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (lastGoodState.current) setStateStale(true);
+      else { setState(null); setLoadError(message); }
       return null;
     } finally { if (!quiet) setRefreshing(false); }
   }, []);
@@ -199,7 +208,7 @@ function App() {
     ['uncertain', 'pending', 'proposed', 'submitted'].includes(transactionNotice.state) ||
     (transactionNotice.state === 'committed' && !noticeRecorded)
   ));
-  const actionsBlocked = Boolean(state?.unresolved || clientTransactionUnresolved);
+  const actionsBlocked = Boolean(stateStale || state?.unresolved || clientTransactionUnresolved);
 
   const labelFor = (publicKey: string | undefined, fallback: string) => metadata[publicKey || '']?.name?.trim() || fallback;
   const descriptionFor = (publicKey: string | undefined) => metadata[publicKey || '']?.description?.trim() || '';
@@ -235,10 +244,12 @@ function App() {
   };
 
   const beginOperation = (operation: Operation, selectedRole?: 'alice' | 'ben', displayName?: string) => {
+    if (stateStale) return;
     setOperationError(''); setPrepared(null); setIntent({ operation, role: selectedRole, displayName });
   };
   const prepareOperation = async (body: Record<string, unknown>) => {
     if (!intent || !identity) throw new Error(t('connect'));
+    if (stateStale) throw new Error(t('stateRefreshPaused'));
     if (actionsBlocked) throw new Error(t('unresolvedBody'));
     setWorking(true); setOperationError('');
     try {
@@ -251,6 +262,7 @@ function App() {
   };
 
   const prepareCreation = async (body: unknown, people: People) => {
+    if (stateStale) throw new Error(t('stateRefreshPaused'));
     if (pudgeReadOnly) throw new Error(t('readonlyAction'));
     setWorking(true); setOperationError('');
     try {
@@ -293,6 +305,7 @@ function App() {
   };
 
   const signPrepared = async (request: PreparedTransaction) => {
+    if (stateStale) { setOperationError(t('stateRefreshPaused')); return; }
     setWorking(true); setOperationError('');
     try {
       if (!identity || request.publicKey.toLowerCase() !== identity.publicKey.toLowerCase()) throw new Error(t('signerMismatch'));
@@ -409,6 +422,7 @@ function App() {
     </header>
 
     {identityError && <div className="wallet-connection-alert inline-alert mx-auto mt-4 w-[min(calc(100%-2rem),64rem)] rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm leading-5 text-red-800" role="alert">{identityError}</div>}
+    {stateStale && <div className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)] rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900" role="status">{t('stateRefreshPaused')}</div>}
 
     {state?.creationRecovery ? <main className="loading-page mx-auto grid min-h-[55vh] w-[min(100%-2rem,64rem)] place-items-center text-slate-600"><section className="load-error w-full max-w-xl rounded-lg border border-red-200 bg-white p-5 shadow-sm" role="alert"><h1 className="text-lg font-semibold text-red-900">{t('creationRecoveryTitle')}</h1><p className="text-sm leading-6 text-slate-700">{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p className="break-all text-xs text-slate-600"><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
       : state?.empty ? showCreation ? <CreationFlow pudgeReadOnly={pudgeReadOnly} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => setShowCreation(false)}/> : <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><div className="empty-cell-mark mb-5 grid size-14 place-items-center rounded-xl border border-blue-100 bg-blue-wash text-blue"><CellMark/></div><h1 className="mb-2 max-w-2xl text-3xl font-bold leading-tight text-navy sm:text-4xl">{t('emptyTitle')}</h1><p className="mb-5 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">{t('emptyBody')}</p><button className="primary-button" type="button" onClick={() => setShowCreation(true)}>{t('createPocket')} <span aria-hidden="true">→</span></button></main>
