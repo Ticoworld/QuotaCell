@@ -59,7 +59,8 @@ function transactionFromRaw(x){
 function readRow(id){
  const db=new DatabaseSync(path.join(run,'working-pocket.sqlite'),{readOnly:true});
  db.exec('BEGIN');
- const row=db.prepare('SELECT id,state,tx_hash,signed,phase FROM intents WHERE id=?').get(id);
+ const columns=process.env.QUOTACELL_EXPECT_SELF_BLOCK==='1'?'id,state,tx_hash,signed':'id,state,tx_hash,signed,phase';
+ const row=db.prepare(`SELECT ${columns} FROM intents WHERE id=?`).get(id);
  db.exec('COMMIT');db.close();return row;
 }
 async function stopRunnerAndNode(closeProxyServer=true){
@@ -111,30 +112,32 @@ try{
  await waitFor(async()=>stdout.includes('Working Pocket isolated: '+origin), 'isolated backend startup');
  const actors=JSON.parse(await fs.readFile(path.join(run,'actors.json'),'utf8'));
 
- wrongNetwork=true;
- const wrongNetworkResult=await post(origin,'/api/external/owner',{id:'593c148e-28a7-4a51-a4a7-8316a1d773cb',operation:'deposit',amount:'256',publicKey:actors.owner.publicKey});
- wrongNetwork=false;assert.equal(wrongNetworkResult.status,400);assert.match(wrongNetworkResult.value.error,/Only isolated CKB dev chains/);
+ if(process.env.QUOTACELL_EXPECT_SELF_BLOCK!=='1'){
+  wrongNetwork=true;
+  const wrongNetworkResult=await post(origin,'/api/external/owner',{id:'593c148e-28a7-4a51-a4a7-8316a1d773cb',operation:'deposit',amount:'256',publicKey:actors.owner.publicKey});
+  wrongNetwork=false;assert.equal(wrongNetworkResult.status,400);assert.match(wrongNetworkResult.value.error,/Only isolated CKB dev chains/);
 
- const staleId='cda56a77-7fe5-44e9-90d1-a18a640a63d9';
- const staleRequest=await prepareOwner(origin,actors,'deposit','256',staleId);
- const staleSigned=await signPrepared(run,staleRequest,'owner');
- const staleTx=c.Transaction.fromBytes(staleRequest.transaction),staleInput=staleTx.inputs[0].previousOutput;
- staleOutPoint={txHash:staleInput.txHash,index:'0x'+BigInt(staleInput.index).toString(16)};
+  const staleId='cda56a77-7fe5-44e9-90d1-a18a640a63d9';
+  const staleRequest=await prepareOwner(origin,actors,'deposit','256',staleId);
+  const staleSigned=await signPrepared(run,staleRequest,'owner');
+  const staleTx=c.Transaction.fromBytes(staleRequest.transaction),staleInput=staleTx.inputs[0].previousOutput;
+  staleOutPoint={txHash:staleInput.txHash,index:'0x'+BigInt(staleInput.index).toString(16)};
   const sendsBeforeStale=counts.get('send_transaction')||0;
- const staleResult=await post(origin,'/api/external/submit',staleSigned);
+  const staleResult=await post(origin,'/api/external/submit',staleSigned);
   assert.equal(staleResult.status,400,JSON.stringify({response:staleResult,staleResponses,staleOutPoint}));assert.match(staleResult.value.error,/stale|live/i);assert.equal(staleResponses,1);assert.equal(readRow(staleId),undefined);assert.equal(counts.get('send_transaction')||0,sendsBeforeStale);
 
- const wrongSignerId='8fb51e0a-19d4-414a-8a36-31305f7b7382';
- const wrongSignerRequest=await prepareOwner(origin,actors,'deposit','256',wrongSignerId);
- const wrongSigner=await signPrepared(run,wrongSignerRequest,'alice');
- const wrongSignerResult=await post(origin,'/api/external/submit',wrongSigner);
- assert.equal(wrongSignerResult.status,400);assert.match(wrongSignerResult.value.error,/Invalid actor signature/);assert.equal(readRow(wrongSignerId),undefined);
+  const wrongSignerId='8fb51e0a-19d4-414a-8a36-31305f7b7382';
+  const wrongSignerRequest=await prepareOwner(origin,actors,'deposit','256',wrongSignerId);
+  const wrongSigner=await signPrepared(run,wrongSignerRequest,'alice');
+  const wrongSignerResult=await post(origin,'/api/external/submit',wrongSigner);
+  assert.equal(wrongSignerResult.status,400);assert.match(wrongSignerResult.value.error,/Invalid actor signature/);assert.equal(readRow(wrongSignerId),undefined);
 
- const alteredId='4b2b4cef-5b72-4174-93bf-47bf79e7478c';
- const alteredRequest=await prepareOwner(origin,actors,'deposit','256',alteredId);
- const altered=await signPrepared(run,alteredRequest,'owner',true);
- const alteredResult=await post(origin,'/api/external/submit',altered);
- assert.equal(alteredResult.status,400);assert.match(alteredResult.value.error,/altered transaction fields/);assert.equal(readRow(alteredId),undefined);
+  const alteredId='4b2b4cef-5b72-4174-93bf-47bf79e7478c';
+  const alteredRequest=await prepareOwner(origin,actors,'deposit','256',alteredId);
+  const altered=await signPrepared(run,alteredRequest,'owner',true);
+  const alteredResult=await post(origin,'/api/external/submit',altered);
+  assert.equal(alteredResult.status,400);assert.match(alteredResult.value.error,/altered transaction fields/);assert.equal(readRow(alteredId),undefined);
+ }
 
  const depositId='7fbe1738-1ac5-4a67-8eb0-1bc854dc23ce';
  const signedDeposit=await prepareAndSign(origin,run,actors,'deposit','256',depositId);

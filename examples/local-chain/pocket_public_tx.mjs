@@ -20,16 +20,20 @@ export async function submitPublicTransaction({rpc,hash,signed,enabled}){
  catch(e){return {state:'uncertain',reason:e.message};}
 }
 
-export async function rebroadcastExistingTransaction({rpc,hash,signed,priorState,dryRun,enabled,checkpoint=async()=>{}}){
+export async function rebroadcastExistingTransaction({rpc,hash,signed,priorState,dryRun,testPoolAccept,enabled,checkpoint=async()=>{}}){
  if(enabled!==true)throw Error('Pudge broadcast is not explicitly enabled');
  await checkpoint('retry-observation');
  const observed=await observePublicTransaction({rpc,hash,signed,priorState});
  if(observed.state!=='uncertain'||observed.reason!=='Transaction not found')return observed;
- await checkpoint('before-dry-run');
- try{await dryRun();await checkpoint('after-dry-run');}catch(e){await checkpoint('dry-run-failed');return {state:'uncertain',phase:'dry-run',reason:e.message};}
- await checkpoint('before-submit');
+ await checkpoint('retry-before-dry-run');
+ try{await dryRun();await checkpoint('retry-after-dry-run');}catch(e){await checkpoint('retry-dry-run-failed');return {state:'uncertain',phase:'dry-run',reason:e.message};}
+ if(testPoolAccept){
+  await checkpoint('retry-before-pool-admission');
+  try{await testPoolAccept();await checkpoint('retry-pool-admitted');}catch(e){await checkpoint('retry-pool-admission-failed');return {state:'uncertain',phase:'pool-admission',reason:e.message};}
+ }
+ await checkpoint('retry-before-submit');
  const result=await submitPublicTransaction({rpc,hash,signed,enabled});
- await checkpoint('after-submit');
- if(result.state==='uncertain'){await checkpoint('submit-uncertain');return {...result,phase:'submit'};}
+ await checkpoint('retry-after-submit');
+ if(result.state==='uncertain'){await checkpoint('retry-submit-uncertain');return {...result,phase:'submit'};}
  return result;
 }

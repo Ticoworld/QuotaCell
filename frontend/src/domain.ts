@@ -20,6 +20,7 @@ export type HistoryItem = {
   created: string;
   actor: string;
   operation: 'genesis' | 'pay' | 'revoke' | 'close' | 'deposit' | 'sweep' | string;
+  phase?: string;
 };
 
 export type UnsupportedFund = {

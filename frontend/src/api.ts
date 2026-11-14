@@ -16,7 +16,7 @@ export const prepareGenesis = (body: unknown) => request<PreparedTransaction>('/
 export const preparePayment = (body: unknown) => request<PreparedTransaction>('/api/external/prepare', body);
 export const prepareOwnerAction = (body: unknown) => request<PreparedTransaction>('/api/external/owner', body);
 export const submitTransaction = (id: string, transaction: string) => request<TransactionResult>('/api/external/submit', { id, transaction });
-export const retryJournaledDeposit = (approvedHash: string) => request<TransactionResult>('/api/external/retry', { approvedHash });
+export const retryJournaledTransaction = (approvedHash: string, publicKey: string) => request<TransactionResult>('/api/external/retry', { approvedHash, publicKey });
 export const reconcile = () => request<{ outcomes: { txHash: string; state?: string; status?: string }[] }>('/api/reconcile', {});
 
 async function ckbRpc<T>(method: string, params: unknown[]): Promise<T> {

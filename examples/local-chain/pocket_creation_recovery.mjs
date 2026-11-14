@@ -5,7 +5,7 @@ export async function submitDurableCreation({persistIntent,dryRun,submit,checkpo
   await checkpoint('before-dry-run');
   await dryRun();
   await checkpoint('after-dry-run');
- }catch(error){await checkpoint('dry-run-failed');return {state:'uncertain',phase:'dry-run',error:error.message};}
+ }catch(error){const phase=error.validationPhase||'dry-run';await checkpoint(`${phase}-failed`);return {state:'uncertain',phase,error:error.message};}
  try{
   await checkpoint('before-submit');
   const result=await submit();

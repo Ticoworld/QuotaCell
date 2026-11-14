@@ -46,6 +46,8 @@ const num=n=>'0x'+BigInt(n).toString(16);
 const point=p=>({tx_hash:p.txHash,index:num(p.index)});
 const script=s=>({code_hash:s.codeHash,hash_type:s.hashType,args:s.args});
 const raw=tx=>({version:num(tx.version),cell_deps:tx.cellDeps.map(d=>({out_point:point(d.outPoint),dep_type:d.depType==='depGroup'?'dep_group':d.depType})),header_deps:[],inputs:tx.inputs.map(i=>({since:num(i.since),previous_output:point(i.previousOutput)})),outputs:tx.outputs.map(o=>({capacity:num(o.capacity),lock:script(o.lock),type:o.type?script(o.type):null})),outputs_data:tx.outputsData,witnesses:tx.witnesses});
+const transactionFromRaw=x=>c.Transaction.from({version:BigInt(x.version),cellDeps:x.cell_deps.map(d=>({outPoint:{txHash:d.out_point.tx_hash,index:Number(BigInt(d.out_point.index))},depType:d.dep_type==='dep_group'?'depGroup':d.dep_type})),headerDeps:x.header_deps,inputs:x.inputs.map(i=>({since:BigInt(i.since),previousOutput:{txHash:i.previous_output.tx_hash,index:Number(BigInt(i.previous_output.index))}})),outputs:x.outputs.map(o=>({capacity:BigInt(o.capacity),lock:{codeHash:o.lock.code_hash,hashType:o.lock.hash_type,args:o.lock.args},type:o.type?{codeHash:o.type.code_hash,hashType:o.type.hash_type,args:o.type.args}:null})),outputsData:x.outputs_data,witnesses:x.witnesses});
+async function atValidationPhase(phase,action){try{return await action();}catch(error){const wrapped=new Error(error?.message||String(error),{cause:error});wrapped.validationPhase=phase;if(error?.rpc)wrapped.rpc=error.rpc;throw wrapped;}}
 let rid=0;
 async function rpc(method,params=[]){
  return callRpc(method,async()=>{
@@ -103,13 +105,18 @@ async function snapshot({currentIntent}={}){
   state.ownerFee=points(ownerCells)[0];state.seeds.alice=points(aliceCells)[0];state.seeds.ben=points(benCells)[0];
  }
 
- let skippedCurrentIntent=false;
+  let skippedCurrentIntent=false;
  for(const item of rows()){
   if(currentIntent&&item.id===currentIntent.id){
    assert(!skippedCurrentIntent,'Duplicate current intent id');
+   assert.equal(item.genesis,profile.genesisHeader.hash,'Current intent belongs to a different chain identity');
+   assert.equal(item.pocket,c.Script.from(initial.Q).hash(),'Current intent belongs to a different Pocket');
    assert.equal(item.tx_hash,currentIntent.txHash,'Persisted transaction hash changed');
    assert.equal(item.signed,currentIntent.signedJson,'Persisted signed transaction changed');
    assert.equal(item.operation,currentIntent.operation,'Persisted operation changed');
+   assert.equal(item.actor,currentIntent.actor,'Persisted signer changed');
+   assert.equal(item.recipient,currentIntent.recipient,'Persisted recipient changed');
+   assert.equal(item.amount,currentIntent.amount,'Persisted amount changed');
    skippedCurrentIntent=true;continue;
   }
   assert.equal(item.genesis,profile.genesisHeader.hash);assert.equal(item.pocket,c.Script.from(initial.Q).hash());
@@ -133,7 +140,7 @@ async function snapshot({currentIntent}={}){
  if(closed)assert.equal(s.subarray(0,8).toString('hex'),'5143543404000100');else {assert.equal(s.length,466);assert.equal(s.subarray(0,6).toString('hex'),'51434e340400');}
  const u=o=>s.readBigUInt64LE(o)+(s.readBigUInt64LE(o+8)<<64n);
  const delegates=['alice','ben'].map((role,i)=>{if(closed)return {role,limit:'0',used:'0',perPayment:'0',enabled:false,recipient:'',publicKey:''};const o=158+154*i;return {role,limit:u(o+106).toString(),used:u(o+122).toString(),perPayment:u(o+138).toString(),enabled:Boolean(s[7]&(1<<i)),recipient:c.Script.fromBytes(s.subarray(o+33,o+106)).args,publicKey:hex(s.subarray(o,o+33))};});
- return {state,p,f,fs,unresolved,closed,view:{unsupportedFunds:state.unsupportedFunds||[],networkMode,indexedTip,pocket:c.Script.from(initial.Q).hash(),genesis:profile.genesisHeader.hash,owner:actors.owner.publicKey,policyOutpoint:state.policy,fundShannons:fs.reduce((n,x)=>n+BigInt(x.cell.output.capacity),0n).toString(),fundOccupiedShannons:(BigInt(fs.length)*7300000000n).toString(),sharedLimit:closed?'0':u(8).toString(),sharedUsed:closed?'0':u(24).toString(),delegates,closed,hasFund:!!f,policyCapacity:p.cell.output.capacity,history:rows().map(({id,tx_hash,state,amount,recipient,created,actor,operation})=>({id,tx_hash,state,amount,recipient,created,actor,operation})),unresolved}};
+ return {state,p,f,fs,unresolved,closed,view:{unsupportedFunds:state.unsupportedFunds||[],networkMode,indexedTip,pocket:c.Script.from(initial.Q).hash(),genesis:profile.genesisHeader.hash,owner:actors.owner.publicKey,policyOutpoint:state.policy,fundShannons:fs.reduce((n,x)=>n+BigInt(x.cell.output.capacity),0n).toString(),fundOccupiedShannons:(BigInt(fs.length)*7300000000n).toString(),sharedLimit:closed?'0':u(8).toString(),sharedUsed:closed?'0':u(24).toString(),delegates,closed,hasFund:!!f,policyCapacity:p.cell.output.capacity,history:rows().map(({id,tx_hash,state,amount,recipient,created,actor,operation,phase})=>({id,tx_hash,state,amount,recipient,created,actor,operation,phase})),unresolved}};
 }
 async function creationRecoveryState(){
  const item=rows().findLast(x=>x.operation==='genesis');if(!item)return null;
@@ -198,11 +205,15 @@ async function submitExternal(body){
   const recovery=request.operation==='genesis'?JSON.stringify({initial:request.next,actors:request.identities}):null;
   const persistIntent=()=>{db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');if(request.operation==='genesis')assert(!rows().some(x=>x.operation==='genesis'),'A Pocket creation already exists');insert.run(body.id,profile.genesisHeader.hash,request.pocket,request.publicKey,request.recipient,request.amount,signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),'intent-persisted',request.operation,recovery);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}};
   const dryRun=async()=>{
-   await verifyEnvironment();
-   if(request.operation!=='genesis'){const snap=await snapshot({currentIntent:{id:body.id,txHash:signed.hash(),signedJson:JSON.stringify(signedRaw),operation:request.operation}});assert(!snap.unresolved,'An earlier outcome is uncertain');assert.equal(snap.view.pocket,request.pocket);}
-   for(const p of request.points)await live(p);
-   if(networkMode==='pudge'){const f=await rpc('get_fee_rate_statistics',['0x65']);const minimum=(BigInt(signed.toBytes().length)*BigInt(f.median)+999n)/1000n;assert(BigInt(await transactionFee(signed))>=minimum,'Fee below current median');}
-   await rpc('dry_run_transaction',[signedRaw]);
+   await atValidationPhase('network-check',verifyEnvironment);
+   if(request.operation!=='genesis'){
+    const snap=await atValidationPhase('pocket-check',()=>snapshot({currentIntent:{id:body.id,genesis:profile.genesisHeader.hash,pocket:request.pocket,actor:request.publicKey,recipient:request.recipient,amount:request.amount,txHash:signed.hash(),signedJson:JSON.stringify(signedRaw),operation:request.operation}}));
+    assert(!snap.unresolved,'An earlier outcome is uncertain');assert.equal(snap.view.pocket,request.pocket,'Pocket changed after transaction preparation');
+   }
+   const fee=BigInt(await atValidationPhase('input-fee-check',()=>transactionFee(signed)));
+   assert(fee>0n&&fee<=1000000n,'Transaction fee is outside policy bounds');
+   await atValidationPhase('dry-run',()=>rpc('dry_run_transaction',[signedRaw]));
+   if(networkMode==='pudge')await atValidationPhase('pool-admission',()=>rpc('test_tx_pool_accept',[signedRaw]));
   };
   const submitted=await submitDurableCreation({persistIntent,dryRun,checkpoint:async phase=>updatePhase.run(phase,body.id),submit:async()=>networkMode==='pudge'?submitPublicTransaction({rpc,hash:signed.hash(),signed:signedRaw,enabled:process.env.QUOTACELL_PUDGE_BROADCAST==='1'}):(assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash()),{state:'submitted'})});
   if(submitted.state==='uncertain'){update.run('uncertain',body.id);return {txHash:signed.hash(),...submitted};}
@@ -218,11 +229,46 @@ async function retryExternal(body){
   assert.equal(process.env.QUOTACELL_PUDGE_BROADCAST,'1','Pudge broadcasting is disabled');
   assert.match(body.approvedHash||'',/^0x[0-9a-f]{64}$/i,'Invalid approved transaction hash');
   const item=rows().find(row=>row.tx_hash.toLowerCase()===body.approvedHash.toLowerCase());
-  assert(item&&item.operation==='deposit','No journaled deposit matches this transaction');
+  assert(item&&['deposit','pay'].includes(item.operation),'No retryable journaled transaction matches this hash');
   assert(['uncertain','submitted'].includes(item.state),'Transaction is not retryable');
+  assert(!item.phase.startsWith('retry-'),'The controlled retry was already attempted');
+  assert.equal(item.genesis,profile.genesisHeader.hash,'Transaction belongs to a different chain identity');
+  assert.equal(body.publicKey,item.actor,'Reconnect the wallet that signed this transaction');
   await verifyEnvironment();
   const signed=JSON.parse(item.signed);
-  const result=await rebroadcastExistingTransaction({rpc,hash:item.tx_hash,signed,priorState:item.state,enabled:true,dryRun:()=>rpc('dry_run_transaction',[signed]),checkpoint:phase=>updatePhase.run(phase,item.id)});
+  const tx=transactionFromRaw(signed);
+  assert.equal(tx.hash(),item.tx_hash,'Saved signed transaction hash changed');
+  assert.equal(JSON.stringify(raw(tx)),item.signed,'Saved signed transaction bytes changed');
+  if(item.operation==='pay'){
+   assert(initial.expected,'Public Pocket descriptor is unavailable');
+   const snap=await snapshot({currentIntent:{id:item.id,genesis:item.genesis,pocket:item.pocket,actor:item.actor,recipient:item.recipient,amount:item.amount,txHash:item.tx_hash,signedJson:item.signed,operation:item.operation}});
+   assert(!snap.unresolved,'An earlier outcome is uncertain');assert.equal(snap.view.pocket,item.pocket,'Pocket changed after transaction preparation');
+   const role=item.actor===actors.alice.publicKey?'alice':item.actor===actors.ben.publicKey?'ben':null;assert(role,'Payment actor is not a registered delegate');
+   const grant=snap.view.delegates.find(delegate=>delegate.role===role);assert(grant?.enabled,'Delegate permission is no longer active');
+   assert.equal(body.publicKey,grant.publicKey,'Connected account is not the payment delegate');assert.equal(item.recipient,grant.recipient,'Payment recipient no longer matches the Pocket');
+   const amount=BigInt(item.amount),actor=await live(snap.state.seeds[role]),fee=BigInt(await transactionFee(tx));
+   assert(fee>0n&&fee<=1000000n,'Transaction fee is outside policy bounds');
+   const expected=buildPayment({policy:snap.p,actor,funds:snap.fs,deps:environment.allDeps,delegate:role==='alice'?0:1,amount,fee});
+   assert.equal(expected.hash(),tx.hash(),'Saved transaction no longer matches the authorized Pocket payment');
+   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}),lock=c.Script.from(actors[role].lock),info=await expected.getSignHashInfo(lock,client);
+   verifyWalletTransaction({prepared:expected,signed:tx,message:info.message,publicKey:grant.publicKey,position:info.position});
+  }else{
+   assert(initial.expected,'Public Pocket descriptor is unavailable');
+   const snap=await snapshot({currentIntent:{id:item.id,genesis:item.genesis,pocket:item.pocket,actor:item.actor,recipient:item.recipient,amount:item.amount,txHash:item.tx_hash,signedJson:item.signed,operation:item.operation}});
+   assert(!snap.unresolved,'An earlier outcome is uncertain');assert.equal(snap.view.pocket,item.pocket,'Pocket changed after transaction preparation');
+   assert.equal(body.publicKey,actors.owner.publicKey,'Connected account is not the Pocket owner');
+   const amount=BigInt(item.amount);assert(amount>=7300000000n,'Saved deposit is below occupied capacity');
+   assert.equal(item.recipient,actors.owner.lock.args,'Saved deposit owner changed');
+   const owner=await live(snap.state.ownerFee),ownerLock=c.Script.from(actors.owner.lock),ownerCellLock=c.Script.from({codeHash:owner.cell.output.lock.code_hash,hashType:owner.cell.output.lock.hash_type,args:owner.cell.output.lock.args});
+   assert(ownerCellLock.eq(ownerLock)&&!owner.cell.output.type&&owner.cell.data.content==='0x','Owner fee cell mismatch');
+   const fee=BigInt(await transactionFee(tx)),change=BigInt(owner.cell.output.capacity)-amount-fee;
+   assert(fee>0n&&fee<=1000000n,'Transaction fee is outside policy bounds');assert(change>=6100000000n,'Owner change is below occupied capacity');
+   const expected=c.Transaction.from({inputs:[{previousOutput:snap.state.ownerFee,since:0}],outputs:[{capacity:amount,lock:c.Script.from(initial.F)},{capacity:change,lock:ownerLock}],outputsData:['0x','0x'],cellDeps:[environment.kdep],headerDeps:[],witnesses:['0x']});
+   expected.setWitnessArgs(0,{lock:'0x'+'00'.repeat(65)});
+   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}),info=await expected.getSignHashInfo(ownerLock,client);
+   verifyWalletTransaction({prepared:expected,signed:tx,message:info.message,publicKey:actors.owner.publicKey,position:info.position});
+  }
+  const result=await rebroadcastExistingTransaction({rpc,hash:item.tx_hash,signed,priorState:item.state,enabled:true,dryRun:()=>rpc('dry_run_transaction',[signed]),testPoolAccept:()=>rpc('test_tx_pool_accept',[signed]),checkpoint:phase=>updatePhase.run(phase,item.id)});
   update.run(result.state,item.id);
   return {txHash:item.tx_hash,...result};
  }finally{busy=false;}
