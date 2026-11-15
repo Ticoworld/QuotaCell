@@ -268,9 +268,8 @@
   .technical-footer dd { min-width: 0; margin: 0; color: #32435d; }
   .app-footer { width: min(100% - 48px, 1040px); display: flex; justify-content: space-between; gap: 20px; margin: 0 auto; padding: 0 0 25px; color: #64738a; font-size: 10px; }
   .app-footer > span { max-width: 640px; }
-  .app-footer a, .fallback-link a { color: #526b91; text-decoration: none; }
-  .app-footer a:hover, .fallback-link a:hover { text-decoration: underline; }
-  .fallback-link { display: flex; justify-content: center; padding: 0 20px 24px; font-size: 11px; }
+  .app-footer a { color: #526b91; text-decoration: none; }
+  .app-footer a:hover { text-decoration: underline; }
   .empty-pocket-page { width: min(100% - 48px, 1040px); min-height: min(66vh, 620px); display: flex; flex-direction: column; align-items: flex-start; justify-content: center; margin: 0 auto; padding: 40px 0; }
   .empty-cell-mark { width: 54px; height: 54px; display: grid; place-items: center; margin-bottom: 19px; background: var(--blue-wash); border: 1px solid #d9e5fb; border-radius: 14px; }
   .empty-cell-mark svg { width: 37px; height: 37px; fill: none; stroke: var(--blue); stroke-width: 1.45; stroke-linejoin: round; stroke-linecap: round; }
