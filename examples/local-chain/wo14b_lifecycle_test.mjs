@@ -101,8 +101,8 @@ try{
    for(const [index,name] of ['Timo','Operations','Research'].entries())await reactPage.locator('.person-row').nth(index).locator('input').first().fill(name);
    await reactPage.getByRole('button',{name:'Continue'}).click();await reactPage.getByRole('heading',{name:'Choose shared spending rules'}).waitFor();await reactPage.locator('.language-control select').selectOption('zh-Hans');await reactPage.getByRole('button',{name:'继续'}).click();assert.match(await reactPage.getByRole('alert').innerText(),/请输入有效的 CKB 金额/,'Invalid CKB amounts must be explained in Simplified Chinese');await reactPage.locator('.language-control select').selectOption('en');
    const recipients=[0,1].map(i=>c.Address.fromScript(lock(other[i].publicKey),new c.ClientPublicTestnet({url:'http://127.0.0.1:1',fallbacks:[]})).toString());
-   await reactPage.locator('.shared-field input').fill('250');
-   for(let i=0;i<2;i++){const fields=reactPage.locator('.rule-section').nth(i).locator('input');await fields.nth(0).fill('200');await fields.nth(1).fill('100');await fields.nth(2).fill(recipients[i]);}
+   await reactPage.locator('.shared-field input').fill('122');
+   for(let i=0;i<2;i++){const fields=reactPage.locator('.rule-section').nth(i).locator('input');await fields.nth(0).fill('122');await fields.nth(1).fill('61');await fields.nth(2).fill(recipients[i]);}
    await reactPage.getByRole('button',{name:'Continue'}).click();await reactPage.getByRole('heading',{name:'Review Pocket rules'}).waitFor();
    await reactPage.screenshot({path:path.join(run,'react-create-review.png'),fullPage:true});
    await reactPage.getByRole('button',{name:/Create and review in wallet/}).click();try{await reactPage.getByRole('heading',{name:'Review transaction'}).waitFor({timeout:30000});}catch(error){console.log('React genesis prepare diagnostic:',await reactPage.locator('body').innerText());await reactPage.screenshot({path:path.join(run,'react-create-error.png'),fullPage:true});throw error;}
@@ -125,7 +125,7 @@ try{
    await reactPage.keyboard.press('Escape');
    console.log('React retains the last verified Pocket during transient refresh errors and pauses new actions PASS');
   for(const p of pages){await p.goto(appURL);await p.locator('#connectWallet').click();await p.getByText('UTXO Global Wallet',{exact:true}).first().click();await p.getByText('CKB',{exact:true}).first().click();await p.waitForFunction(()=>document.querySelector('#walletStatus').textContent.includes('Connected:'));}
-  const terms={sharedLimit:String(250n*CKB),delegates:publicKeys.slice(1).map((publicKey,i)=>({publicKey,recipient:JSON.parse(JSON.stringify(lock(other[i].publicKey))),limit:String(200n*CKB),perPayment:String(100n*CKB)}))};
+  const terms={sharedLimit:String(122n*CKB),delegates:publicKeys.slice(1).map((publicKey,i)=>({publicKey,recipient:JSON.parse(JSON.stringify(lock(other[i].publicKey))),limit:String(122n*CKB),perPayment:String(61n*CKB)}))};
   const ownerPage=pages[0];await ownerPage.screenshot({path:path.join(run,'empty.png'),fullPage:true});
   const committed=async p=>{await p.waitForFunction(()=>/^committed:/.test(document.querySelector('#status').textContent),null,{timeout:45000}).catch(async e=>{throw Error(await p.locator('#status').innerText());});console.log(await p.locator('#status').innerText());};
   const reactScreenshot=async(name,width=1280)=>{await reactPage.setViewportSize({width,height:840});await reactPage.locator('.refresh-button').click();await reactPage.waitForSelector('.metrics');await reactPage.waitForTimeout(150);assert.equal(await reactPage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,`React ${name} page overflows at ${width}px`);await reactPage.screenshot({path:path.join(run,`react-${name}${width<600?`-${width}`:''}.png`),fullPage:true});};
@@ -165,16 +165,16 @@ try{
    const vmResults=[];
    for(const [i,p] of pages.slice(1).entries()){
    await p.reload();await p.locator('#connectWallet').click();await p.getByText('UTXO Global Wallet',{exact:true}).first().click();await p.getByText('CKB',{exact:true}).first().click();
-   await p.waitForFunction(role=>document.querySelector('#role').value===role,i?'ben':'alice');await p.locator('#amount').fill(i?'100':'99.00000001');
+   await p.waitForFunction(role=>document.querySelector('#role').value===role,i?'ben':'alice');await p.locator('#amount').fill('61');
    const address=c.Address.fromScript(lock(other[i].publicKey),new c.ClientPublicTestnet({url:'http://127.0.0.1:1',fallbacks:[]})).toString();await p.locator('#to').fill(address);
    if(i===0){
     const rejected=async(mode,pattern)=>{await p.locator('#status').evaluate(e=>e.textContent='');await p.evaluate(mode=>window.testWallet.mode=mode,mode);await p.locator('#pay').click();await p.waitForFunction(pattern=>new RegExp(pattern).test(document.querySelector('#status').textContent),pattern,{timeout:20000});};
     await rejected('reject','Authorization rejected');await rejected('mutate','Wallet altered transaction fields');
     await p.evaluate(()=>{window.testWallet.mode='ok';window.testWallet.network='nervos'});await p.locator('#status').evaluate(e=>e.textContent='');await p.locator('#pay').click();await p.waitForFunction(()=>document.querySelector('#status').textContent.includes('wrong network'));
     await p.evaluate(()=>window.testWallet.network='nervos_testnet');await rejected('switch','Wallet.*changed|not the selected delegate');
-    await p.reload();await p.locator('#connectWallet').click();await p.getByText('UTXO Global Wallet',{exact:true}).first().click();await p.getByText('CKB',{exact:true}).first().click();await p.locator('#amount').fill('99.00000001');await p.locator('#to').fill(address);
+    await p.reload();await p.locator('#connectWallet').click();await p.getByText('UTXO Global Wallet',{exact:true}).first().click();await p.getByText('CKB',{exact:true}).first().click();await p.locator('#amount').fill('61');await p.locator('#to').fill(address);
     await rejected('disconnect','disconnected|changed');
-    await p.reload();await p.locator('#connectWallet').click();await p.getByText('UTXO Global Wallet',{exact:true}).first().click();await p.getByText('CKB',{exact:true}).first().click();await p.locator('#amount').fill('99.00000001');await p.locator('#to').fill(address);console.log('simulated wallet negative checks PASS');
+    await p.reload();await p.locator('#connectWallet').click();await p.getByText('UTXO Global Wallet',{exact:true}).first().click();await p.getByText('CKB',{exact:true}).first().click();await p.locator('#amount').fill('61');await p.locator('#to').fill(address);console.log('simulated wallet negative checks PASS');
    }
    await p.locator('#pay').click();await committed(p);
   }
@@ -186,8 +186,13 @@ try{
    const read128=(buffer,offset)=>buffer.readBigUInt64LE(offset)+(buffer.readBigUInt64LE(offset+8)<<64n);
    const write128=(buffer,offset,value)=>{buffer.writeBigUInt64LE(value&((1n<<64n)-1n),offset);buffer.writeBigUInt64LE(value>>64n,offset+8);};
    const amount=61n*CKB,sharedLimit=read128(actual,8),sharedUsed=read128(actual,24),aliceLimit=read128(actual,264),aliceUsed=read128(actual,280),benUsed=read128(actual,434);
-   assert(sharedUsed+amount>sharedLimit,'The negative payment must exceed only the shared allowance');
+   assert.equal(sharedLimit,122n*CKB,'The negative payment must use the public shared limit');
+   assert.equal(sharedUsed,sharedLimit,'The negative payment must start with the shared allowance exhausted');
+   assert.equal(aliceLimit,122n*CKB,'The negative payment must use the public personal limit');
+   assert.equal(aliceUsed,61n*CKB,'Delegate 1 must retain one maximum payment personally');
+   assert.equal(benUsed,61n*CKB,'Delegate 2 must retain one maximum payment personally');
    assert(aliceUsed+amount<=aliceLimit,'The negative payment must remain within Alice personal allowance');
+   assert.equal(aliceUsed+amount,aliceLimit,'The negative payment must consume only Alice personal remainder');
    const actorMatches=await discoverPlainCells({rpc,lock:descriptor.actors.alice.lock,includeUnsupported:true});
    const actorCandidate=actorMatches.cells.find(cell=>BigInt(cell.cell.output.capacity)>=6100000000n);assert(actorCandidate,'Alice seed cell missing');
    const actor=await live(point(actorCandidate.outPoint.tx_hash,Number(BigInt(actorCandidate.outPoint.index))));
@@ -200,14 +205,14 @@ try{
    write128(overLimitState,24,sharedUsed+amount);write128(overLimitState,280,aliceUsed+amount);write128(overLimitState,434,benUsed);
    unsigned.outputsData[0]='0x'+overLimitState.toString('hex');
    assert.equal(read128(overLimitState,280)+read128(overLimitState,434),read128(overLimitState,24));
-   assert(read128(overLimitState,24)>sharedLimit,'The signed output must exceed the unchanged shared limit');
+   assert.equal(read128(overLimitState,24),sharedLimit+amount,'The signed output must exceed only the exhausted shared limit');
    const privateKey=await pages[1].evaluate(()=>window.name),signer=new c.SignerCkbPrivateKey(client,'0x'+privateKey),signed=await signer.signOnlyTransaction(unsigned);
    let failure;try{await rpc('dry_run_transaction',[raw(signed)]);}catch(error){failure=error;}
    assert(failure?.rpc,'Over-limit payment unexpectedly passed CKB-VM dry-run');
    const detail=JSON.stringify(failure.rpc);
    assert.match(detail,/TransactionFailedToVerify.*TransactionScriptError.*Inputs\[0\]\.Type.*ValidationFailure/i,`Shared-limit rejection did not come from Q type-script validation: ${detail}`);
    console.log(`CKB-VM shared allowance payment rejected without broadcast: ${detail}`);
-   return {result:'REJECTED_BY_CKB_VM',rpcError:failure.rpc,sharedUsed:sharedUsed.toString(),sharedLimit:sharedLimit.toString(),attemptedAmount:amount.toString()};
+   return {result:'REJECTED_BY_CKB_VM',rpcError:failure.rpc,sharedUsed:sharedUsed.toString(),sharedLimit:sharedLimit.toString(),aliceUsed:aliceUsed.toString(),aliceLimit:aliceLimit.toString(),benUsed:benUsed.toString(),attemptedAmount:amount.toString()};
   };
   const sharedLimitVmResult=await sharedLimitVmCheck();
 const current=JSON.parse(await fs.readFile(path.join(run,'pocket.json')));const localIndexerRpc=async(method,params=[])=>method==='get_consensus'?{id:'ckb_testnet'}:method==='get_block_hash'&&params[0]==='0x0'?PUDGE_GENESIS:rpc(method,params);
@@ -219,7 +224,7 @@ const current=JSON.parse(await fs.readFile(path.join(run,'pocket.json')));const 
   app=spawn(process.execPath,['--experimental-strip-types',path.join(here,'working_pocket_server.mjs'),run,String(appPort)],{stdio:'ignore',env:{...process.env,QUOTACELL_DEV_SIGNER:'0'},windowsHide:true});
   let reopened;
   for(let i=0;i<100;i++){try{const response=await fetch(appURL+'/api/state');reopened=await response.json();if(response.ok)break;}catch{}await sleep(100);}
-   assert.equal(reopened.closed,false);assert.equal(reopened.sharedUsed,String(199n*CKB+1n));assert.equal(reopened.fundShannons,String(474n*CKB-1n));console.log('active node/server restart PASS');await ownerPage.reload();await ownerPage.waitForFunction(()=>document.querySelector('#creation').hidden);await ownerPage.screenshot({path:path.join(run,'active.png'),fullPage:true});await ownerPage.setViewportSize({width:390,height:844});await ownerPage.screenshot({path:path.join(run,'narrow.png'),fullPage:true});await ownerPage.setViewportSize({width:1280,height:720});await reactScreenshot('active');await reactScreenshot('active',390);await reactScreenshot('active',320);
+   assert.equal(reopened.closed,false);assert.equal(reopened.sharedUsed,String(122n*CKB));assert.equal(reopened.fundShannons,String(551n*CKB));console.log('active node/server restart PASS');await ownerPage.reload();await ownerPage.waitForFunction(()=>document.querySelector('#creation').hidden);await ownerPage.screenshot({path:path.join(run,'active.png'),fullPage:true});await ownerPage.setViewportSize({width:390,height:844});await ownerPage.screenshot({path:path.join(run,'narrow.png'),fullPage:true});await ownerPage.setViewportSize({width:1280,height:720});await reactScreenshot('active');await reactScreenshot('active',390);await reactScreenshot('active',320);
   await ownerPage.reload();await ownerPage.locator('#connectWallet').click();await ownerPage.getByText('UTXO Global Wallet',{exact:true}).first().click();await ownerPage.getByText('CKB',{exact:true}).first().click();
   for(const op of ['revoke','close','deposit','sweep']){ if(op==='close'||op==='sweep'){
     const input=await live(point(extraSigned.hash(),1));const additional=c.Transaction.from({inputs:[{previousOutput:input.outPoint,since:0}],outputs:[{capacity:100n*CKB,lock:c.Script.from(descriptorForExtra.initial.F)},{capacity:BigInt(input.cell.output.capacity)-100n*CKB-200000n,lock:lock(bootstrap.publicKey)}],outputsData:['0x','0x'],cellDeps:[kdep],headerDeps:[],witnesses:['0x']});additional.setWitnessArgs(0,{lock:'0x'+'00'.repeat(65)});extraSigned=await bs.signOnlyTransaction(additional);await commit(extraSigned);assert.equal((await discoverPlainCells({rpc,lock:descriptorForExtra.initial.F,includeUnsupported:true})).cells.length,2);
