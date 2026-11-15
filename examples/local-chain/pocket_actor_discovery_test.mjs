@@ -22,7 +22,7 @@ const indexed={out_point:point,block_number:'0x1',output,output_data:data};
 let calls=0;
 const rpc=async(method,params=[])=>{
  if(method==='get_consensus')return {id:'ckb_testnet'};
- if(method==='get_tip_header')return {number:'0x2',hash:tip};
+ if(method==='get_tip_header')return {number:'0x1',hash:block};
  if(method==='get_indexer_tip')return {block_number:'0x1',block_hash:block};
  if(method==='get_block_hash')return params[0]==='0x0'?PUDGE_GENESIS:params[0]==='0x1'?block:tip;
  if(method==='get_cells'){calls++;assert.equal(params[0].script_search_mode,'prefix');return {objects:[indexed],last_cursor:'0x'};}

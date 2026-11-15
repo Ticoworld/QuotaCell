@@ -7,7 +7,7 @@ import {callRpc} from './pocket_rpc_retry.mjs';
 import {verifyNetwork} from './pocket_network.mjs';
 import {parseCkb,recipientArgs} from './pocket_input.mjs';
 import {buildGenesis} from './pocket_genesis.mjs';
-import {discoverIndexed,discoverIndexedWithRetry,discoverActorPolicies,withIndexedTipRetry} from './pocket_indexed_discovery.mjs';
+import {discoverIndexed,discoverIndexedWithRetry,discoverActorPolicies,discoverActorPoliciesLocal,withIndexedTipRetry} from './pocket_indexed_discovery.mjs';
 import {discoverPolicy} from './pocket_discovery.mjs';
 import {discoverPlainCells} from './pocket_cell_discovery.mjs';
 import {buildPayment} from './pocket_payment.ts';
@@ -167,16 +167,20 @@ function reconstructDiscovered(candidate){
  const initial={...environment,Q:policy,F:{codeHash:hashes.F,hashType:'data1',args:policy.hash()},policy:{txHash:candidate.outPoint.tx_hash,index:Number(BigInt(candidate.outPoint.index))},fund:null,funds:[],ownerFee:null,seeds:{},expected:{ownerPublicKey:ownerKey,delegates,sharedLimit:closed?'0':(data.readBigUInt64LE(8)+(data.readBigUInt64LE(16)<<64n)).toString()},discoveredClosed:closed};
  return {initial,actors};
 }
+async function discoverWalletActor(publicKey){
+ if(networkMode==='isolated')return discoverActorPoliciesLocal({rpc,publicKey,expectedGenesis:profile.genesisHeader.hash});
+ return withIndexedTipRetry(()=>discoverActorPolicies({rpc,publicKey}));
+}
 async function loadLinkedPocket(url){
  const pocket=url.searchParams.get('pocket'),publicKey=url.searchParams.get('actor');
  assert(pocket&&/^0x[0-9a-f]{64}$/i.test(pocket),'Pocket link must contain an exact policy identity');
  assert(publicKey&&/^0x0[23][0-9a-f]{64}$/i.test(publicKey),'Connect the authorized CKB wallet to open this Pocket link');
- const found=await withIndexedTipRetry(()=>discoverActorPolicies({rpc,publicKey}));
+ const found=await discoverWalletActor(publicKey);
  const matches=found.candidates.filter(x=>x.policyHash.toLowerCase()===pocket.toLowerCase());
  assert.equal(matches.length,1,matches.length?'Ambiguous matching Pocket identity':'This wallet is not authorized for that live Pocket, or the Pocket is no longer discoverable');
  const context=reconstructDiscovered(matches[0]);
  initial=context.initial;actors=context.actors;
- return {candidate:matches[0],indexedTip:found.indexedTip};
+ return {candidate:matches[0],indexedTip:found.indexedTip||null};
 }
 async function selectedFee(){if(networkMode==='isolated')return 2000n;const f=await rpc('get_fee_rate_statistics',['0x65']);assert(f?.median,'Fee statistics unavailable');const fee=BigInt(f.median)*8n;assert(fee>0n&&fee<=1000000n,'Current fee exceeds policy bound');return fee;}
 async function transactionFee(tx){let total=0n;for(const i of tx.inputs){const cell=await live(i.previousOutput);total+=BigInt(cell.cell.output.capacity);}return (total-tx.outputs.reduce((sum,o)=>sum+o.capacity,0n)).toString();}
@@ -247,7 +251,7 @@ async function submitExternal(body){
   const submitted=await submitDurableCreation({persistIntent,dryRun,checkpoint:async phase=>updatePhase.run(phase,body.id),submit:async()=>networkMode==='pudge'?submitPublicTransaction({rpc,hash:signed.hash(),signed:signedRaw,enabled:process.env.QUOTACELL_PUDGE_BROADCAST==='1'}):(assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash()),{state:'submitted'})});
   if(submitted.state==='uncertain'){update.run('uncertain',body.id);return {txHash:signed.hash(),...submitted};}
   if(networkMode==='pudge'){update.run(submitted.state,body.id);return {txHash:signed.hash(),...submitted};}
-  for(let i=0;i<20;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));if(await canonicalCommit(await rpc('get_transaction',[signed.hash()]))){update.run('committed',body.id);if(request.operation==='genesis'){const d={initial:request.next,actors:request.identities};await fs.writeFile(path.join(run,'pocket.json.tmp'),JSON.stringify(d));await fs.rename(path.join(run,'pocket.json.tmp'),path.join(run,'pocket.json'));initial=d.initial;actors=d.actors;}return {txHash:signed.hash(),state:'committed'};}}
+  for(let i=0;i<20;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));if(await canonicalCommit(await rpc('get_transaction',[signed.hash()]))){update.run('committed',body.id);if(request.operation==='genesis'){const d={initial:request.next,actors:request.identities};await fs.writeFile(path.join(run,'pocket.json.tmp'),JSON.stringify(d));await fs.rename(path.join(run,'pocket.json.tmp'),path.join(run,'pocket.json'));descriptor=d;initial=d.initial;actors=d.actors;}return {txHash:signed.hash(),state:'committed'};}}
   return {txHash:signed.hash(),state:'uncertain'};
  }finally{busy=false;}
 }
@@ -382,7 +386,7 @@ const server=http.createServer(async(req,res)=>{
    const call=JSON.parse(body);assert(['get_fee_rate_statistics','get_tip_header','get_live_cell','get_transaction','get_header','get_block_hash','get_consensus'].includes(call.method),'RPC method unavailable');
    const result=await rpc(call.method,call.params||[]);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:call.id,result}));return;
   }
-  if(req.method==='GET'&&req.url.startsWith('/api/state')){const url=new URL(req.url,origin);if(url.searchParams.has('pocket')&&!url.searchParams.has('actor')){const view={connectRequired:true,pocket:url.searchParams.get('pocket'),genesis:profile.genesisHeader.hash,networkMode};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(view));return;}let linked=null;if(url.searchParams.has('pocket'))linked=await loadLinkedPocket(url);else if(url.searchParams.has('actor')){const found=await withIndexedTipRetry(()=>discoverActorPolicies({rpc,publicKey:url.searchParams.get('actor')})),discovery=found.candidates.map(x=>({pocket:x.policyHash,role:x.role,closed:x.closed}));const view=discovery.length?{discovery,genesis:profile.genesisHeader.hash,networkMode}:{empty:true,genesis:profile.genesisHeader.hash,networkMode};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(view));return;}const recovery=await creationRecoveryState();const s=recovery?{view:recovery}:initial?await snapshot():{view:{empty:true,genesis:profile.genesisHeader.hash,developmentSigner,networkMode}};const view=s.view;if(linked)view.indexedTip=linked.indexedTip;res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(view));return;}
+  if(req.method==='GET'&&req.url.startsWith('/api/state')){const url=new URL(req.url,origin);if(url.searchParams.has('pocket')&&!url.searchParams.has('actor')){const view={connectRequired:true,pocket:url.searchParams.get('pocket'),genesis:profile.genesisHeader.hash,networkMode};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(view));return;}let linked=null;if(url.searchParams.has('pocket'))linked=await loadLinkedPocket(url);else if(url.searchParams.has('actor')){const actor=url.searchParams.get('actor');let view;if(initial&&actors){const current=(await snapshot()).view,owner=current.owner?.toLowerCase()===actor.toLowerCase(),delegate=!current.closed&&current.delegates?.some(item=>item.publicKey?.toLowerCase()===actor.toLowerCase());view=owner||delegate?current:{empty:true,genesis:profile.genesisHeader.hash,networkMode};}else{const found=await discoverWalletActor(actor),discovery=found.candidates.map(x=>({pocket:x.policyHash,role:x.role,closed:x.closed}));view=discovery.length?{discovery,genesis:profile.genesisHeader.hash,networkMode}:{empty:true,genesis:profile.genesisHeader.hash,networkMode};}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(view));return;}const recovery=await creationRecoveryState();const s=recovery?{view:recovery}:initial?await snapshot():{view:{empty:true,genesis:profile.genesisHeader.hash,developmentSigner,networkMode}};const view=s.view;if(linked)view.indexedTip=linked.indexedTip;res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(view));return;}
   if(req.method==='POST'&&networkMode==='pudge-readonly'&&!['/api/ckb','/api/reconcile'].includes(req.url))throw new Error('Pudge transactions are disabled pending dependency and wallet qualification');
   if(req.method==='POST'&&['/api/external/genesis','/api/external/prepare','/api/external/owner','/api/external/submit','/api/external/retry'].includes(req.url)){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');let body='';for await(const chunk of req){body+=chunk;assert(body.length<210000);}
