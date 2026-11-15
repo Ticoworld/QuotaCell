@@ -2,6 +2,7 @@ import type { WalletIdentity } from './domain';
 
 const STANDARD_LOCK = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 const CONNECTOR_SUCCESS_GRACE_MS = 2_000;
+const CKB_PROVIDER_METHODS = ['connect', 'isConnected', 'getAccount', 'getPublicKey', 'getNetwork', 'switchNetwork', 'signMessage', 'signTransaction', 'on', 'removeListener'];
 type Signer = {
   isConnected(): Promise<boolean>;
   getPublicKey(): Promise<string>;
@@ -12,6 +13,22 @@ type Signer = {
   onReplaced?: (listener: () => void) => () => void;
 };
 
+export class WalletProviderUnavailableError extends Error {
+  constructor() {
+    super('UTXO Global Wallet provider is not available to this page.');
+    this.name = 'WalletProviderUnavailableError';
+  }
+}
+
+export function hasUtxoGlobalCkbProvider(value: unknown) {
+  try {
+    if (!value || typeof value !== 'object') return false;
+    const provider = (value as { ckbSigner?: unknown }).ckbSigner;
+    if (!provider || typeof provider !== 'object') return false;
+    return CKB_PROVIDER_METHODS.every((method) => typeof (provider as Record<string, unknown>)[method] === 'function');
+  } catch { return false; }
+}
+
 export class CkbWalletSession {
   private element: (HTMLElement & { client: unknown; name: string; hideKhie: boolean; disconnect?: () => void }) | undefined;
   private signer: Signer | undefined;
@@ -20,6 +37,8 @@ export class CkbWalletSession {
   private loadConnector?: Promise<typeof import('@ckb-ccc/connector')>;
 
   async connect(): Promise<WalletIdentity> {
+    const injected = (window as Window & { utxoGlobal?: unknown }).utxoGlobal;
+    if (!hasUtxoGlobalCkbProvider(injected)) throw new WalletProviderUnavailableError();
     const connector = await (this.loadConnector ??= import('@ckb-ccc/connector'));
     if (this.element && this.signer) return this.identity();
     if (this.element) {

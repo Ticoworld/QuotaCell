@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CkbWalletSession } from './wallet';
+import { CkbWalletSession, WalletProviderUnavailableError } from './wallet';
 import type { WalletIdentity } from './domain';
 import { createRegistrationProfile, exportLegacyRegistrationJson, parseRegistrationInvitation, registrationShareUrl, type RegistrationInvitation } from './registration';
 
@@ -41,7 +41,7 @@ export function RegistrationPage() {
         const current = await wallet.identity();
         if (active && (current.publicKey !== identity.publicKey || current.address !== identity.address)) setIdentity(current);
       } catch (cause) {
-        if (active) { setIdentity(null); setResponse(''); setError(cause instanceof Error ? cause.message : String(cause)); }
+        if (active) { setIdentity(null); setResponse(''); setError(walletError(cause, t)); }
       } finally { checking = false; }
     };
     const stop = wallet.onAccountOrNetworkChange(() => window.setTimeout(() => void sync(), 0));
@@ -55,7 +55,7 @@ export function RegistrationPage() {
   const connect = async () => {
     setBusy(true); setError(''); setCopied(false);
     try { setIdentity(await wallet.connect()); }
-    catch (cause) { wallet.disconnect(); setIdentity(null); setError(cause instanceof Error ? cause.message : String(cause)); }
+    catch (cause) { wallet.disconnect(); setIdentity(null); setError(walletError(cause, t)); }
     finally { setBusy(false); }
   };
   const copy = async (value: string) => {
@@ -86,4 +86,8 @@ export function RegistrationPage() {
       {error && <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm leading-5 text-red-800" role="alert">{error}</p>}
     </main>
   </>;
+}
+
+function walletError(cause: unknown, t: (key: string) => string) {
+  return cause instanceof WalletProviderUnavailableError ? t('walletProviderMissing') : cause instanceof Error ? cause.message : String(cause);
 }

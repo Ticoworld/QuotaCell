@@ -10,7 +10,7 @@ import { checkPudgeTransaction, getPocketState, prepareGenesis, prepareOwnerActi
 import { CreationFlow, type People } from './CreationFlow';
 import { importMetadata, loadMetadata, saveMetadata, exportMetadata } from './metadata';
 import type { HistoryItem, PocketMetadata, PocketState, PreparedTransaction, TransactionResult, WalletIdentity } from './domain';
-import { CkbWalletSession } from './wallet';
+import { CkbWalletSession, WalletProviderUnavailableError } from './wallet';
 import { RegistrationPage } from './RegistrationPage';
 import { PocketDiscoveryPage } from './PocketDiscoveryPage';
 import { OperationDialog, type Intent, type Operation } from './OperationDialog';
@@ -60,7 +60,9 @@ function localizedError(message: string, t: (key: string) => string): string {
   return found ? t(found[1]) : `${t('actionFailed')} ${message}`;
 }
 
-function localizedConnectionError(message: string, t: (key: string) => string): string {
+function localizedConnectionError(error: unknown, t: (key: string) => string): string {
+  if (error instanceof WalletProviderUnavailableError) return t('walletProviderMissing');
+  const message = error instanceof Error ? error.message : String(error);
   if (/User rejected|rejected.*wallet|canceled/i.test(message)) return t('walletConnectionCanceledError');
   return localizedError(message, t);
 }
@@ -163,10 +165,9 @@ function App() {
         }
       } catch (cause) {
         if (!active) return;
-        const message = cause instanceof Error ? cause.message : String(cause);
         wallet.disconnect();
         setIdentity(null);
-        setIdentityError(localizedConnectionError(message, t));
+        setIdentityError(localizedConnectionError(cause, t));
       } finally { checking = false; }
     };
     const stopWatching = wallet.onAccountOrNetworkChange(() => window.setTimeout(() => void syncIdentity(), 0));
@@ -253,13 +254,13 @@ function App() {
   const connectWallet = async () => {
     setWalletBusy(true); setIdentityError('');
     try { const connected = await wallet.connect(); setIdentity(connected); }
-    catch (cause) { const message = cause instanceof Error ? cause.message : String(cause); setIdentityError(localizedConnectionError(message, t)); wallet.disconnect(); setIdentity(null); }
+    catch (cause) { setIdentityError(localizedConnectionError(cause, t)); wallet.disconnect(); setIdentity(null); }
     finally { setWalletBusy(false); }
   };
   const connectParticipant = async () => {
     wallet.disconnect(); setIdentity(null); setWalletBusy(true); setIdentityError('');
     try { const connected = await wallet.connect(); setIdentity(connected); return connected; }
-    catch (cause) { const message = cause instanceof Error ? cause.message : String(cause); const translated = localizedConnectionError(message, t); setIdentityError(translated); wallet.disconnect(); throw new Error(translated); }
+    catch (cause) { const translated = localizedConnectionError(cause, t); setIdentityError(translated); wallet.disconnect(); throw new Error(translated); }
     finally { setWalletBusy(false); }
   };
   const connectExpectedSigner = async (expectedPublicKey: string) => {
@@ -269,9 +270,8 @@ function App() {
       if (connected.publicKey.toLowerCase() !== expectedPublicKey.toLowerCase()) throw new Error(t('signerMismatch'));
       setIdentity(connected);
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
       wallet.disconnect();
-      throw new Error(localizedConnectionError(message, t));
+      throw new Error(localizedConnectionError(cause, t));
     } finally { setWalletBusy(false); }
   };
   const copyPocketId = async () => {

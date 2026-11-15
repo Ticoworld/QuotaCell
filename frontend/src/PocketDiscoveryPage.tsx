@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { WalletIdentity } from './domain';
 import { formatCkb } from './amount';
-import { CkbWalletSession } from './wallet';
+import { CkbWalletSession, WalletProviderUnavailableError } from './wallet';
 import { discoverPublicPockets, publicDiscoveryNetwork } from './publicDiscovery';
 
 const wallet = new CkbWalletSession();
@@ -38,7 +38,7 @@ export function PocketDiscoveryPage() {
         const current = await wallet.identity();
         if (active && (current.publicKey !== identity.publicKey || current.address !== identity.address)) setIdentity(current);
       } catch (cause) {
-        if (active) { setIdentity(null); setPockets([]); setError(cause instanceof Error ? cause.message : String(cause)); }
+        if (active) { setIdentity(null); setPockets([]); setError(walletError(cause, t)); }
       }
     };
     const stop = wallet.onAccountOrNetworkChange(() => window.setTimeout(() => void sync(), 0));
@@ -49,7 +49,7 @@ export function PocketDiscoveryPage() {
   const connect = async () => {
     setBusy(true); setError('');
     try { setIdentity(await wallet.connect()); }
-    catch (cause) { wallet.disconnect(); setIdentity(null); setError(cause instanceof Error ? cause.message : String(cause)); setBusy(false); }
+    catch (cause) { wallet.disconnect(); setIdentity(null); setError(walletError(cause, t)); setBusy(false); }
   };
   const roleLabel = (role: FoundPocket['role']) => t(role === 'owner' ? 'owner' : role === 'alice' ? 'delegateOne' : 'delegateTwo');
   const chosen = pockets.find((pocket) => pocket.pocket === selected);
@@ -78,4 +78,8 @@ export function PocketDiscoveryPage() {
       <details className="mt-6"><summary className="cursor-pointer text-xs font-medium text-slate-600">{t('technical')}</summary><div className="mt-3 grid gap-1 text-xs text-slate-500"><span>{t('publicRpcEndpoint')}: {publicDiscoveryNetwork.rpc}</span><span>{t('expectedGenesis')}: <code className="break-all" dir="ltr">{publicDiscoveryNetwork.genesis}</code></span></div></details>
     </main>
   </>;
+}
+
+function walletError(cause: unknown, t: (key: string) => string) {
+  return cause instanceof WalletProviderUnavailableError ? t('walletProviderMissing') : cause instanceof Error ? cause.message : String(cause);
 }
