@@ -4,12 +4,11 @@ import {PUDGE_GENESIS} from './pocket_network.mjs';
 
 const nodeTip={number:'0x12',hash:'0x'+'12'.repeat(32)};
 const indexedTip={block_number:'0x10',block_hash:'0x'+'10'.repeat(32)};
-const syncedTip={number:indexedTip.block_number,hash:indexedTip.block_hash};
 let cellsCalls=0;
 const rpc=async(method,params=[])=>{
  if(method==='get_consensus')return {id:'ckb_testnet'};
  if(method==='get_block_hash')return params[0]==='0x0'?PUDGE_GENESIS:params[0]===indexedTip.block_number?indexedTip.block_hash:nodeTip.hash;
- if(method==='get_tip_header')return syncedTip;
+ if(method==='get_tip_header')return nodeTip;
  if(method==='get_indexer_tip')return indexedTip;
  if(method==='get_cells'){cellsCalls++;return {objects:[],last_cursor:'0x'};}
  throw new Error(`Unexpected RPC method ${method}`);
@@ -17,7 +16,10 @@ const rpc=async(method,params=[])=>{
 
 const result=await discoverIndexedWithRetry({rpc,lock:{codeHash:'0x'+'22'.repeat(32),hashType:'type',args:'0x'}});
 assert.equal(result.indexedTip.block_hash,indexedTip.block_hash);
-assert.equal(cellsCalls,1,'A synchronized canonical indexer snapshot is searched once');
+assert.equal(cellsCalls,1,'A stable canonical indexer snapshot two blocks behind the node is searched once');
+const beforeBoundedLag=cellsCalls;
+await assert.rejects(discoverIndexedWithRetry({rpc,maxIndexerLag:1,lock:{codeHash:'0x'+'22'.repeat(32),hashType:'type',args:'0x'}}),/Indexer lag exceeds bounded discovery window/);
+assert.equal(cellsCalls,beforeBoundedLag,'A snapshot beyond the configured bound is rejected before searching');
 
 let lagCalls=0,lagCellQueries=0;
 const lagRpc=async(method,params=[])=>{
@@ -29,7 +31,25 @@ const lagRpc=async(method,params=[])=>{
  throw new Error(`Unexpected lagging-indexer RPC method ${method}`);
 };
 const caughtUpScan=await discoverIndexedWithRetry({rpc:lagRpc,lock:{codeHash:'0x'+'22'.repeat(32),hashType:'type',args:'0x'}},{attempts:3,delayMs:0});
-assert.equal(lagCalls,2,'An incomplete older indexer snapshot must be retried');assert.equal(lagCellQueries,1,'Candidate search starts after node and indexer tips agree');assert.equal(caughtUpScan.indexedTip.block_number,nodeTip.number);
+assert.equal(lagCalls,1,'A stable older indexer tip is accepted without waiting for the node tip');assert.equal(lagCellQueries,1,'Candidate search runs against the bounded older snapshot');assert.equal(caughtUpScan.indexedTip.block_number,indexedTip.block_number);
+
+const recentLock={codeHash:'0x'+'44'.repeat(32),hashType:'type',args:'0x'},recentOutput={capacity:'0x1',lock:{code_hash:recentLock.codeHash,hash_type:recentLock.hashType,args:recentLock.args},type:null};
+const recentPoint={tx_hash:'0x'+'55'.repeat(32),index:'0x0'},recentItem={out_point:recentPoint,block_number:nodeTip.number,output:recentOutput,output_data:'0x'};
+let movingIndexCalls=0,movingCellQueries=0;
+const movingRpc=async(method,params=[])=>{
+ if(method==='get_consensus')return {id:'ckb_testnet'};
+ if(method==='get_block_hash')return params[0]==='0x0'?PUDGE_GENESIS:params[0]===indexedTip.block_number?indexedTip.block_hash:nodeTip.hash;
+ if(method==='get_tip_header')return nodeTip;
+ if(method==='get_indexer_tip'){movingIndexCalls++;return movingIndexCalls===1?indexedTip:{block_number:nodeTip.number,block_hash:nodeTip.hash};}
+ if(method==='get_cells'){movingCellQueries++;return {objects:[recentItem],last_cursor:'0x'};}
+ if(method==='get_live_cell')return {status:'live',cell:{output:recentOutput,data:{content:'0x'}}};
+ if(method==='get_transaction')return {tx_status:{status:'committed',block_hash:nodeTip.hash},transaction:{outputs:[recentOutput],outputs_data:['0x']}};
+ if(method==='get_header')return {number:nodeTip.number,hash:nodeTip.hash};
+ throw new Error(`Unexpected moving-indexer RPC method ${method}`);
+};
+const movedDuringScan=await discoverIndexedWithRetry({rpc:movingRpc,lock:recentLock},{attempts:3,delayMs:0});
+assert.equal(movingIndexCalls,2,'A result newer than its starting indexer snapshot causes a bounded retry');
+assert.equal(movingCellQueries,2);assert.equal(movedDuringScan.cells.length,1,'A newly indexed canonical live Cell is returned after retry');
 
 let consensusCalls=0;
 await assert.rejects(discoverIndexedWithRetry({rpc:async method=>{

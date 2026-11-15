@@ -6,16 +6,29 @@ import {validatePolicy} from './pocket_discovery.mjs';
 import {PUDGE_GENESIS} from './pocket_network.mjs';
 const Q='0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e';
 const A='0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1';
+const MAX_INDEXER_LAG=64; // Keep discovery useful during ordinary indexer catch-up without accepting an unbounded stale view.
 const script=s=>c.Script.from({codeHash:s.code_hash??s.codeHash,hashType:s.hash_type??s.hashType,args:s.args});
 const raw=s=>({code_hash:s.codeHash,hash_type:s.hashType,args:s.args});
-export async function discoverIndexed({rpc,lock,policy,expected,includeUnsupported=false,maxPages=100,pageSize=100,indexedSnapshot}){
+async function captureSnapshot({rpc,indexedSnapshot,maxIndexerLag}){
+ assert(Number.isSafeInteger(maxIndexerLag)&&maxIndexerLag>=0&&maxIndexerLag<=10000,'Invalid indexer lag bound');
+ const tip=await rpc('get_tip_header'),indexed=indexedSnapshot||await rpc('get_indexer_tip');
+ assert(tip&&/^0x[0-9a-f]+$/i.test(tip.number)&&/^0x[0-9a-f]{64}$/i.test(tip.hash),'Invalid node tip');
+ assert(indexed&&/^0x[0-9a-f]+$/i.test(indexed.block_number)&&/^0x[0-9a-f]{64}$/i.test(indexed.block_hash),'Invalid indexer tip');
+ const nodeHeight=BigInt(tip.number),indexerHeight=BigInt(indexed.block_number);
+ assert(indexerHeight<=nodeHeight,'Indexer is ahead of node tip');
+ assert(nodeHeight-indexerHeight<=BigInt(maxIndexerLag),'Indexer lag exceeds bounded discovery window');
+ assert.equal((await rpc('get_block_hash',[indexed.block_number])).toLowerCase(),indexed.block_hash.toLowerCase(),'Noncanonical indexed tip');
+ assert.equal((await rpc('get_block_hash',[tip.number])).toLowerCase(),tip.hash.toLowerCase(),'Noncanonical node tip');
+ return {tip,indexed};
+}
+async function verifySnapshotCanonical({rpc,tip,indexed}){
+ assert.equal((await rpc('get_block_hash',[indexed.block_number])).toLowerCase(),indexed.block_hash.toLowerCase(),'Chain reorganized during scan');
+ assert.equal((await rpc('get_block_hash',[tip.number])).toLowerCase(),tip.hash.toLowerCase(),'Node tip changed during scan');
+}
+export async function discoverIndexed({rpc,lock,policy,expected,includeUnsupported=false,maxPages=100,pageSize=100,indexedSnapshot,maxIndexerLag=MAX_INDEXER_LAG}){
  assert((await rpc('get_consensus')).id==='ckb_testnet','Wrong network');
  assert.equal(await rpc('get_block_hash',['0x0']),PUDGE_GENESIS,'Wrong network genesis');
- const tip=await rpc('get_tip_header'),indexed=indexedSnapshot||await rpc('get_indexer_tip');
- assert(indexed&&/^0x[0-9a-f]+$/i.test(indexed.block_number)&&/^0x[0-9a-f]{64}$/i.test(indexed.block_hash),'Invalid indexer tip');
- assert(BigInt(indexed.block_number)<=BigInt(tip.number),'Indexer is ahead of node tip');
- assert.equal(await rpc('get_block_hash',[indexed.block_number]),indexed.block_hash,'Noncanonical indexed tip');
- assert(BigInt(indexed.block_number)===BigInt(tip.number)&&indexed.block_hash.toLowerCase()===tip.hash.toLowerCase(),'Indexer lag or chain-tip mismatch');
+ const {tip,indexed}=await captureSnapshot({rpc,indexedSnapshot,maxIndexerLag});
  assert(Number.isSafeInteger(maxPages)&&maxPages>0&&Number.isSafeInteger(pageSize)&&pageSize>0&&pageSize<=1000,'Invalid pagination bounds');
  const type=policy?'type':'lock',target=script(policy||lock);
  if(policy)assert(target.codeHash===Q&&target.hashType==='data2'&&/^0x[0-9a-f]{64}$/i.test(target.args),'Invalid QCN4 policy identity');
@@ -41,13 +54,13 @@ export async function discoverIndexed({rpc,lock,policy,expected,includeUnsupport
   assert(result.last_cursor!=='0x'&&result.last_cursor!==cursor,'Indexer cursor did not advance');cursor=result.last_cursor;
  }
  assert(finished,'Indexer pagination limit exceeded');
- assert.equal(await rpc('get_block_hash',[indexed.block_number]),indexed.block_hash,'Chain reorganized during scan');
+ await verifySnapshotCanonical({rpc,tip,indexed});
  for(const item of [...cells,...unsupported]){const current=await rpc('get_live_cell',[item.outPoint,true]);assert.equal(current.status,'live','Cell became stale');assert.deepEqual(current.cell,item.cell,'Cell changed during scan');}
  if(policy)assert.equal(cells.length,1,cells.length?'Ambiguous live policy':'Policy not found');
  return {cells,unsupported,indexedTip:indexed,genesis:PUDGE_GENESIS};
 }
 
-const transientTipDrift=['Indexer lag or chain-tip mismatch','Indexer is ahead of node tip','Indexer tip changed during scan','Node tip changed during scan','Chain reorganized during scan','Stale indexed cell','Cell became stale','Cell changed during scan'];
+const transientTipDrift=['Indexer is ahead of node tip','Indexer returned a Cell beyond its snapshot tip','Node tip changed during scan','Chain reorganized during scan','Stale indexed cell','Cell became stale','Cell changed during scan'];
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export async function withIndexedTipRetry(operation,{attempts=5,delayMs=250}={}){
  assert(Number.isSafeInteger(attempts)&&attempts>0,'Invalid discovery retry count');
@@ -63,16 +76,12 @@ export const discoverIndexedWithRetry=(options,retry)=>withIndexedTipRetry(()=>d
 
 // Discover live policies by QCN4 code identity, then derive the matching role
 // from validated active-state public keys. The indexer is only a candidate source.
-export async function discoverActorPolicies({rpc,publicKey,maxPages=100,pageSize=100,indexedSnapshot}){
+export async function discoverActorPolicies({rpc,publicKey,maxPages=100,pageSize=100,indexedSnapshot,maxIndexerLag=MAX_INDEXER_LAG}){
  assert(/^0x0[23][0-9a-f]{64}$/i.test(publicKey),'Invalid compressed public key');
  assert(Number.isSafeInteger(maxPages)&&maxPages>0&&Number.isSafeInteger(pageSize)&&pageSize>0&&pageSize<=1000,'Invalid pagination bounds');
  assert((await rpc('get_consensus')).id==='ckb_testnet','Wrong network');
  assert.equal(await rpc('get_block_hash',['0x0']),PUDGE_GENESIS,'Wrong network genesis');
- const tip=await rpc('get_tip_header'),indexed=indexedSnapshot||await rpc('get_indexer_tip');
- assert(indexed&&/^0x[0-9a-f]+$/i.test(indexed.block_number)&&/^0x[0-9a-f]{64}$/i.test(indexed.block_hash),'Invalid indexer tip');
- assert(BigInt(indexed.block_number)<=BigInt(tip.number),'Indexer is ahead of node tip');
- assert.equal(await rpc('get_block_hash',[indexed.block_number]),indexed.block_hash,'Noncanonical indexed tip');
- assert(BigInt(indexed.block_number)===BigInt(tip.number)&&indexed.block_hash.toLowerCase()===tip.hash.toLowerCase(),'Indexer lag or chain-tip mismatch');
+ const {tip,indexed}=await captureSnapshot({rpc,indexedSnapshot,maxIndexerLag});
  const key={script:{code_hash:Q,hash_type:'data2',args:'0x'},script_type:'type',script_search_mode:'prefix',with_data:true};
  const candidates=[],seen=new Set();let cursor,finished=false;
  for(let page=0;page<maxPages;page++){
@@ -82,29 +91,30 @@ export async function discoverActorPolicies({rpc,publicKey,maxPages=100,pageSize
    const point=item.out_point;assert(point&&/^0x[0-9a-f]{64}$/i.test(point.tx_hash)&&/^0x[0-9a-f]+$/i.test(point.index),'Invalid outpoint');
    const id=point.tx_hash+':'+point.index;assert(!seen.has(id),'Duplicate indexer outpoint');seen.add(id);
    assert(BigInt(item.block_number)<=BigInt(indexed.block_number),'Indexer returned a Cell beyond its snapshot tip');
-   const txResult=await rpc('get_transaction',[point.tx_hash]);assert.equal(txResult?.tx_status?.status,'committed','Uncommitted indexed policy');
-   const header=await rpc('get_header',[txResult.tx_status.block_hash]);assert(header&&header.number===item.block_number,'Indexed block mismatch');
-   assert.equal(await rpc('get_block_hash',[header.number]),header.hash,'Noncanonical policy block');
-   const output=item.output;assert(output.type&&script(output.type).codeHash===Q&&script(output.type).hashType==='data2'&&/^0x[0-9a-f]{64}$/i.test(script(output.type).args),'Invalid QCN4 identity');
-   assert(script(output.lock).eq(c.Script.from({codeHash:A,hashType:'data1',args:'0x'})),'Policy lock mismatch');
+   const indexedOutput=item.output;assert(indexedOutput.type&&script(indexedOutput.type).codeHash===Q&&script(indexedOutput.type).hashType==='data2'&&/^0x[0-9a-f]{64}$/i.test(script(indexedOutput.type).args),'Invalid QCN4 identity');
    const live=await rpc('get_live_cell',[point,true]);assert.equal(live.status,'live','Stale indexed policy');
-   assert.deepEqual(live.cell.output,output,'Indexer output mismatch');assert.equal(live.cell.data.content,item.output_data,'Indexer data mismatch');
-   const n=Number(BigInt(point.index));assert.deepEqual(txResult.transaction.outputs[n],output,'Canonical transaction output mismatch');assert.equal(txResult.transaction.outputs_data[n],live.cell.data.content,'Canonical transaction data mismatch');
+   assert.deepEqual(live.cell.output,indexedOutput,'Indexer output mismatch');assert.equal(live.cell.data.content,item.output_data,'Indexer data mismatch');
+   const output=live.cell.output;assert(script(output.lock).eq(c.Script.from({codeHash:A,hashType:'data1',args:'0x'})),'Policy lock mismatch');
+   assert(/^0x(?:[0-9a-f]{2})*$/i.test(live.cell.data.content),'Malformed QCN4/QCT4 state');
    const data=Buffer.from(live.cell.data.content.slice(2),'hex');let role;
    if(data.length===466){assert.equal(data.subarray(0,7).toString('hex'),'51434e34040000','Invalid active policy header');assert((data[7]&~3)===0,'Invalid delegate mask');assert(data.subarray(40,125).every(x=>x===0),'Nonzero reserved state');
     const read128=offset=>data.readBigUInt64LE(offset)+(data.readBigUInt64LE(offset+8)<<64n),terms={ownerPublicKey:'0x'+data.subarray(125,158).toString('hex'),sharedLimit:read128(8).toString(),delegates:[0,1].map(i=>{const o=158+154*i;return {publicKey:'0x'+data.subarray(o,o+33).toString('hex'),recipient:c.Script.fromBytes(data.subarray(o+33,o+106)),limit:read128(o+106).toString(),perPayment:read128(o+138).toString()};})};
     validatePolicy(live.cell,script(output.type),terms);
-    if('0x'+data.subarray(125,158).toString('hex')===publicKey.toLowerCase())role='owner';
-    else for(let i=0;i<2;i++)if('0x'+data.subarray(158+i*154,191+i*154).toString('hex')===publicKey.toLowerCase())role=i?'ben':'alice';
+    if(terms.ownerPublicKey===publicKey.toLowerCase())role='owner';else for(let i=0;i<2;i++)if(terms.delegates[i].publicKey===publicKey.toLowerCase())role=i?'ben':'alice';
    }else if(data.length===28){assert.equal(data.subarray(0,8).toString('hex'),'5143543404000100','Invalid terminal state');assert(BigInt(output.capacity)>=13400000000n,'Insufficient terminal capacity');const args=c.hashCkb(Buffer.from(publicKey.slice(2),'hex')).slice(0,42);if('0x'+data.subarray(8).toString('hex')===args)role='owner';}
    else throw Error('Malformed QCN4/QCT4 state');
-   if(role)candidates.push({role,publicKey,closed:data.length===28,outPoint:point,cell:live.cell,policy:script(output.type),policyHash:script(output.type).hash(),blockHash:header.hash,blockNumber:header.number});
+   if(!role)continue;
+   const txResult=await rpc('get_transaction',[point.tx_hash]);assert.equal(txResult?.tx_status?.status,'committed','Uncommitted indexed policy');
+   const header=await rpc('get_header',[txResult.tx_status.block_hash]);assert(header&&header.number===item.block_number,'Indexed block mismatch');
+   assert.equal(await rpc('get_block_hash',[header.number]),header.hash,'Noncanonical policy block');
+   const n=Number(BigInt(point.index));assert.deepEqual(txResult.transaction.outputs[n],output,'Canonical transaction output mismatch');assert.equal(txResult.transaction.outputs_data[n],live.cell.data.content,'Canonical transaction data mismatch');
+   candidates.push({role,publicKey,closed:data.length===28,outPoint:point,cell:live.cell,policy:script(output.type),policyHash:script(output.type).hash(),blockHash:header.hash,blockNumber:header.number});
   }
   if(result.objects.length<pageSize){finished=true;break;}
   assert(result.last_cursor!=='0x'&&result.last_cursor!==cursor,'Indexer cursor did not advance');cursor=result.last_cursor;
  }
  assert(finished,'Indexer pagination limit exceeded');
- assert.equal(await rpc('get_block_hash',[indexed.block_number]),indexed.block_hash,'Chain reorganized during scan');
+ await verifySnapshotCanonical({rpc,tip,indexed});
  for(const item of candidates){const current=await rpc('get_live_cell',[item.outPoint,true]);assert.equal(current.status,'live','Cell became stale');assert.deepEqual(current.cell,item.cell,'Cell changed during scan');}
  return {candidates,indexedTip:indexed,genesis:PUDGE_GENESIS};
 }

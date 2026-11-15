@@ -19,16 +19,16 @@ const policyArgs='0x'+'ab'.repeat(32),policy={code_hash:Q,hash_type:'data2',args
 const output={capacity:'0xdf8475800',lock:{code_hash:A,hash_type:'data1',args:'0x'},type:policy};
 let data='0x'+state.toString('hex');const point={tx_hash:'0x'+'55'.repeat(32),index:'0x0'},block='0x'+'33'.repeat(32),tip='0x'+'44'.repeat(32);
 const indexed={out_point:point,block_number:'0x1',output,output_data:data};
-let calls=0;
+let calls=0,liveCalls=0,transactionCalls=0;
 const rpc=async(method,params=[])=>{
  if(method==='get_consensus')return {id:'ckb_testnet'};
- if(method==='get_tip_header')return {number:'0x1',hash:block};
+ if(method==='get_tip_header')return {number:'0x3',hash:tip};
  if(method==='get_indexer_tip')return {block_number:'0x1',block_hash:block};
  if(method==='get_block_hash')return params[0]==='0x0'?PUDGE_GENESIS:params[0]==='0x1'?block:tip;
  if(method==='get_cells'){calls++;assert.equal(params[0].script_search_mode,'prefix');return {objects:[indexed],last_cursor:'0x'};}
- if(method==='get_transaction')return {tx_status:{status:'committed',block_hash:block},transaction:{outputs:[output],outputs_data:[data]}};
+ if(method==='get_transaction'){transactionCalls++;return {tx_status:{status:'committed',block_hash:block},transaction:{outputs:[output],outputs_data:[data]}};}
  if(method==='get_header')return {number:'0x1',hash:block};
- if(method==='get_live_cell')return {status:'live',cell:{output,data:{content:data}}};
+ if(method==='get_live_cell'){liveCalls++;return {status:'live',cell:{output,data:{content:data}}};}
  throw new Error(`Unexpected RPC method ${method}`);
 };
 
@@ -37,6 +37,11 @@ for(const [index,role] of ['owner','alice','ben'].entries()){
  assert.equal(result.candidates.length,1);assert.equal(result.candidates[0].role,role);assert.equal(result.candidates[0].policyHash,c.Script.from({codeHash:Q,hashType:'data2',args:policyArgs}).hash());
 }
 assert.equal(calls,3,'Each actor gets a bounded indexer query');
+const txBeforeUnrelated=transactionCalls,liveBeforeUnrelated=liveCalls;
+const unrelated=await discoverActorPolicies({rpc,publicKey:key(4),pageSize:2});
+assert.equal(unrelated.candidates.length,0,'An unrelated wallet must not match an active policy');
+assert.equal(transactionCalls,txBeforeUnrelated,'Unmatched actors do not trigger per-candidate transaction and header RPCs');
+assert.equal(liveCalls,liveBeforeUnrelated+1,'Unmatched actors still verify the candidate Cell is currently live');
 await assert.rejects(discoverActorPolicies({rpc,publicKey:'0x'+'02'.repeat(33),maxPages:0}),/Invalid pagination bounds/);
 state=Buffer.alloc(28);state.write('QCT4');state.writeUInt16LE(4,4);state[6]=1;Buffer.from(lockFor(actors[0]).args.slice(2),'hex').copy(state,8);data='0x'+state.toString('hex');indexed.output_data=data;output.capacity='0x31eb3c600';
 const terminal=await discoverActorPolicies({rpc,publicKey:actors[0],pageSize:2});assert.equal(terminal.candidates.length,1);assert.equal(terminal.candidates[0].role,'owner');assert.equal(terminal.candidates[0].closed,true);
