@@ -32,7 +32,10 @@ export type UnsupportedFund = {
 
 export type PocketState = {
   empty?: boolean;
+  connectRequired?: boolean;
+  discovery?: { pocket: string; role: 'owner' | 'alice' | 'ben'; closed: boolean }[];
   closed?: boolean;
+  historicalTermsUnavailable?: boolean;
   unresolved?: boolean;
   recoveryRequired?: boolean;
   creationRecovery?: { txHash: string; state: string; reason?: string; recoveryAvailable: boolean };

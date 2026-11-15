@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { parseCkb } from './amount';
 import { resolveRecipient } from './api';
 import type { WalletIdentity } from './domain';
+import { importRegistrationProfile } from './registration';
 
 type Slot = 'owner' | 'alice' | 'ben';
 type Person = WalletIdentity & { name: string; description: string };
@@ -27,6 +28,8 @@ export function CreationFlow({ pudgeReadOnly, onConnectParticipant, onPrepare, o
   const [registering, setRegistering] = useState<Slot | null>(null);
   const [error, setError] = useState('');
   const [preparing, setPreparing] = useState(false);
+  const [profileText, setProfileText] = useState('');
+  const [profileSlot, setProfileSlot] = useState<Slot>('alice');
 
   const updatePerson = (slot: Slot, key: 'name' | 'description', value: string) => {
     setPeople((prev) => ({ ...prev, [slot]: { ...(prev[slot] || { publicKey: '', address: '', name: '', description: '' }), [key]: value } }));
@@ -42,6 +45,16 @@ export function CreationFlow({ pudgeReadOnly, onConnectParticipant, onPrepare, o
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally { setRegistering(null); }
+  };
+  const importProfile = async () => {
+    setError('');
+    try {
+      const identity = await importRegistrationProfile(profileText);
+      const duplicate = keys.find((slot) => slot !== profileSlot && people[slot]?.publicKey.toLowerCase() === identity.publicKey.toLowerCase());
+      if (duplicate) throw new Error(t('differentWalletsError'));
+      setPeople((previous) => ({ ...previous, [profileSlot]: { ...identity, name: previous[profileSlot]?.name || '', description: previous[profileSlot]?.description || '' } }));
+      setProfileText('');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
   const validatePeople = () => {
     if (keys.some((slot) => !people[slot]?.publicKey)) throw new Error(t('connectAllPeopleError'));
@@ -105,6 +118,7 @@ export function CreationFlow({ pudgeReadOnly, onConnectParticipant, onPrepare, o
 
     {step === 0 && <section className="setup-section mx-auto mt-7 w-full max-w-[830px]">
       <h2 className="mb-1.5 text-xl font-semibold text-navy">{t('stepPeopleTitle')}</h2><p className="section-intro mb-5 text-sm leading-6 text-muted">{t('stepPeopleBody')}</p>
+      <section className="mb-5 grid gap-3 border-y border-line py-4" aria-label={t('profileImport')}><label className="grid max-w-xs gap-1.5 text-xs font-semibold text-slate-700">{t('profileTarget')}<select className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm" value={profileSlot} onChange={(event) => setProfileSlot(event.target.value as Slot)}><option value="alice">{t('delegateOne')}</option><option value="ben">{t('delegateTwo')}</option><option value="owner">{t('owner')}</option></select></label><label className="grid gap-1.5 text-xs font-semibold text-slate-700">{t('profileImport')}<textarea className="min-h-24 rounded-md border border-slate-300 bg-white p-3 font-mono text-xs" value={profileText} onChange={(event) => setProfileText(event.target.value)} /></label><div className="flex flex-wrap items-center gap-3"><button className="secondary-button" type="button" disabled={!profileText.trim() || registering !== null} onClick={() => void importProfile()}>{t('importProfile')}</button><p className="m-0 max-w-xl text-xs leading-5 text-slate-500">{t('profileTrustNote')}</p></div></section>
       <div className="people-list grid gap-3">{keys.map((slot) => {
         const person = people[slot];
         const heading = slot === 'owner' ? t('owner') : slot === 'alice' ? t('delegateOne') : t('delegateTwo');

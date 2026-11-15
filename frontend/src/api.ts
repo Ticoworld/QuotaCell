@@ -11,7 +11,11 @@ async function request<T>(url: string, body?: unknown): Promise<T> {
   return data as T;
 }
 
-export const getPocketState = () => request<PocketState>('/api/state');
+export const getPocketState = (publicKey?: string) => {
+  const params = new URLSearchParams(window.location.search);
+  if (publicKey) params.set('actor', publicKey);
+  return request<PocketState>(`/api/state${params.has('pocket') || publicKey ? `?${new URLSearchParams({ ...(params.has('pocket') ? { pocket: params.get('pocket') || '' } : {}), ...(publicKey ? { actor: publicKey } : {}) })}` : ''}`);
+};
 export const prepareGenesis = (body: unknown) => request<PreparedTransaction>('/api/external/genesis', body);
 export const preparePayment = (body: unknown) => request<PreparedTransaction>('/api/external/prepare', body);
 export const prepareOwnerAction = (body: unknown) => request<PreparedTransaction>('/api/external/owner', body);

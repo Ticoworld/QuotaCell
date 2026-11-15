@@ -11,6 +11,7 @@ import { CreationFlow, type People } from './CreationFlow';
 import { importMetadata, loadMetadata, saveMetadata, exportMetadata } from './metadata';
 import type { HistoryItem, PocketMetadata, PocketState, PreparedTransaction, TransactionResult, WalletIdentity } from './domain';
 import { CkbWalletSession } from './wallet';
+import { createRegistrationProfile } from './registration';
 import { OperationDialog, type Intent, type Operation } from './OperationDialog';
 
 const wallet = new CkbWalletSession();
@@ -100,7 +101,7 @@ function App() {
     if (!quiet) setRefreshing(true);
     const task = (async (): Promise<PocketState | null> => {
       try {
-        const next = await getPocketState();
+        const next = await getPocketState(identity?.publicKey);
         if (next.creationRecovery && lastGoodState.current && !lastGoodState.current.creationRecovery) {
           setStateStale(true);
           return null;
@@ -122,7 +123,7 @@ function App() {
     })();
     refreshInFlight.current = task;
     return task;
-  }, []);
+  }, [identity?.publicKey]);
 
   useEffect(() => { void refresh(); const timer = window.setInterval(() => void refresh(true), 15000); return () => window.clearInterval(timer); }, [refresh]);
   useEffect(() => () => wallet.disconnect(), []);
@@ -255,6 +256,19 @@ function App() {
       wallet.disconnect();
       throw new Error(localizedConnectionError(message, t));
     } finally { setWalletBusy(false); }
+  };
+  const exportRegistration = async () => {
+    if (!identity) return;
+    try {
+      const profile = await createRegistrationProfile(identity);
+      const url = URL.createObjectURL(new Blob([JSON.stringify(profile, null, 2)], { type: 'application/json' }));
+      const link = document.createElement('a'); link.href = url; link.download = 'quotacell-registration-v1.json'; link.click(); URL.revokeObjectURL(url);
+    } catch (cause) { setIdentityError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+  const copyPocketId = async () => {
+    if (!state?.pocket) return;
+    try { await navigator.clipboard.writeText(state.pocket); setTransactionNotice({ state: 'metadata', detail: t('idCopied') }); }
+    catch { setIdentityError(state.pocket); }
   };
 
   const beginOperation = (operation: Operation, selectedRole?: 'alice' | 'ben', displayName?: string) => {
@@ -431,7 +445,7 @@ function App() {
         {state && <div className={`network-state ${pudgeReadOnly ? 'is-readonly' : ''}`} role="status" aria-label={`${pudge ? t('networkPudge') : t('networkLocal')}${pudgeReadOnly ? ` · ${t('readOnly')}` : ''}`}><i aria-hidden="true"/><span className="network-full" aria-hidden="true">{pudge ? t('networkPudge') : t('networkLocal')}</span><span className="network-compact" aria-hidden="true">{pudge ? t('networkPudgeShort') : t('networkLocalShort')}</span>{pudgeReadOnly && <small>{t('readOnly')}</small>}</div>}
         <label className="language-control"><span className="sr-only">{t('language')}</span><select value={i18n.language === 'zh-Hans' ? 'zh-Hans' : 'en'} onChange={(event) => void i18n.changeLanguage(event.target.value)} aria-label={t('language')}><option value="en">EN</option><option value="zh-Hans">简</option></select></label>
         <button className="icon-button refresh-button" type="button" onClick={() => void refresh()} disabled={refreshing} aria-label={refreshing ? t('refreshing') : t('refresh')} title={t('refresh')}>{refreshing ? '…' : '↻'}</button>
-        {identity ? <div className="connected-account"><div><strong>{displayIdentityRole || t('connected')}</strong><code dir="ltr">{shortHash(identity.address, 12, 7)}</code></div><button className="text-button disconnect-button" onClick={() => { wallet.disconnect(); setIdentity(null); setIdentityError(''); }} type="button">×</button></div> : <button className="connect-button" type="button" disabled={walletBusy} onClick={() => void connectWallet()}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button>}
+        {identity ? <div className="connected-account"><div><strong>{displayIdentityRole || t('connected')}</strong><code dir="ltr">{shortHash(identity.address, 12, 7)}</code></div><button className="icon-button" aria-label={t('exportProfile')} title={t('exportProfile')} onClick={() => void exportRegistration()} type="button"><span aria-hidden="true">↓</span></button><button className="text-button disconnect-button" onClick={() => { wallet.disconnect(); setIdentity(null); setIdentityError(''); }} type="button">×</button></div> : <button className="connect-button" type="button" disabled={walletBusy} onClick={() => void connectWallet()}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button>}
       </div>
     </header>
 
@@ -439,9 +453,13 @@ function App() {
     {stateStale && <div className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)] rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900" role="status">{t('stateRefreshPaused')}</div>}
 
     {state?.creationRecovery ? <main className="loading-page mx-auto grid min-h-[55vh] w-[min(100%-2rem,64rem)] place-items-center text-slate-600"><section className="load-error w-full max-w-xl rounded-lg border border-red-200 bg-white p-5 shadow-sm" role="alert"><h1 className="text-lg font-semibold text-red-900">{t('creationRecoveryTitle')}</h1><p className="text-sm leading-6 text-slate-700">{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p className="break-all text-xs text-slate-600"><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
+      : state?.connectRequired ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><h1 className="mb-2 text-xl font-semibold text-navy">{t('activePocket')}</h1><p className="mb-5 text-sm text-slate-600">{t('pocketLinkConnect')}</p><button className="primary-button" type="button" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button></main>
+      : state?.discovery ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><h1 className="mb-4 text-xl font-semibold text-navy">{t('pocketChoices')}</h1><div className="w-full max-w-2xl divide-y divide-slate-200 border-y border-slate-200">{state.discovery.map((item) => <div key={item.pocket} className="flex flex-col justify-between gap-3 py-4 sm:flex-row sm:items-center"><div><strong className="text-sm text-navy">{item.closed ? t('closedPocket') : t('activePocket')} · {t(item.role === 'owner' ? 'owner' : item.role === 'alice' ? 'delegateOne' : 'delegateTwo')}</strong><code className="mt-1 block break-all text-xs text-slate-600" dir="ltr">{item.pocket}</code></div><button className="primary-button shrink-0" type="button" onClick={() => { window.location.search = new URLSearchParams({ pocket: item.pocket }).toString(); }}>{t('openPocket')}</button></div>)}</div></main>
       : state?.empty ? showCreation ? <CreationFlow pudgeReadOnly={pudgeReadOnly} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => setShowCreation(false)}/> : <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><div className="empty-cell-mark mb-5 grid size-14 place-items-center rounded-xl border border-blue-100 bg-blue-wash text-blue"><CellMark/></div><h1 className="mb-2 max-w-2xl text-3xl font-bold leading-tight text-navy sm:text-4xl">{t('emptyTitle')}</h1><p className="mb-5 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">{t('emptyBody')}</p><button className="primary-button" type="button" onClick={() => setShowCreation(true)}>{t('createPocket')} <span aria-hidden="true">→</span></button></main>
       : state && !state.empty ? <main id="home" className="app-page mx-auto w-[min(100%-2rem,64rem)] py-6 sm:py-8">
-        <div className="pocket-heading mb-5 flex items-start justify-between gap-4"><div className="min-w-0"><h1 className="m-0 text-2xl font-bold text-navy sm:text-[28px]">{state.pocket ? t('activePocket') : t('brand')}</h1><p className="mt-1 text-xs text-slate-600 sm:text-sm">{identity ? displayIdentityRole : t('connectToSeeActions')}</p></div><span className={closed ? 'state-mark state-closed' : 'state-mark'}>{closed ? t('closedStatus') : t('active')}</span></div>
+        <div className="pocket-heading mb-5 flex items-start justify-between gap-4"><div className="min-w-0"><h1 className="m-0 text-2xl font-bold text-navy sm:text-[28px]">{state.pocket ? t('activePocket') : t('brand')}</h1><p className="mt-1 text-xs text-slate-600 sm:text-sm">{identity ? displayIdentityRole : t('connectToSeeActions')}</p></div><div className="flex shrink-0 items-center gap-2"><button className="secondary-button" type="button" onClick={() => void copyPocketId()}>{t('sharePocket')}</button><span className={closed ? 'state-mark state-closed' : 'state-mark'}>{closed ? t('closedStatus') : t('active')}</span></div></div>
+
+        {state.historicalTermsUnavailable && <p className="mb-5 border-l-2 border-amber-500 pl-3 text-sm leading-6 text-amber-900" role="status">{t('terminalHistoryUnavailable')}</p>}
 
         {transactionNotice && <div className={`transaction-notice mb-4 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3.5 ${['uncertain', 'error', 'rejected'].includes(transactionNotice.state) ? 'notice-warning border-amber-200 bg-amber-50' : ''}`} role="status" aria-live="polite"><span className="notice-marker grid size-6 shrink-0 place-items-center rounded-full bg-success text-xs font-bold text-white" aria-hidden="true">{['uncertain', 'error', 'rejected'].includes(transactionNotice.state) ? '!' : '✓'}</span><div className="min-w-0 flex-1"><strong className="text-sm font-semibold text-slate-800">{noticeTitle}</strong><p className="mt-1 break-words text-xs leading-5 text-slate-600">{transactionNotice.detail || (transactionNotice.hash ? transactionNotice.state : t('noUncertainTransactions'))}</p>{transactionNotice.hash && <div className="mt-2 grid gap-1.5"><code className="break-all text-[11px] text-slate-700" dir="ltr">{transactionNotice.hash}</code>{pudge && <a className="text-xs text-blue underline" href={explorerUrl(transactionNotice.hash)} target="_blank" rel="noreferrer">{t('explorer')}</a>}</div>}</div>{pudge && transactionNotice.hash && ['uncertain', 'pending', 'proposed', 'submitted'].includes(transactionNotice.state) && <button type="button" className="secondary-button shrink-0" disabled={noticeCheckBusy} onClick={() => void checkNoticeStatus()}>{noticeCheckBusy ? t('checkingStatus') : t('checkStatus')}</button>}{retryableIntent && ['error', 'uncertain', 'unknown', 'submitted'].includes(transactionNotice.state) && <button type="button" className="secondary-button shrink-0" disabled={retryBusy} onClick={() => setRetryDialogOpen(true)}>{t('retrySameTransaction')}</button>}<button type="button" className="text-button rounded p-1 text-slate-500 hover:bg-white/70" onClick={() => { setTransactionNotice(null); try { sessionStorage.removeItem(PENDING_TRANSACTION_KEY); } catch { /* Session storage is optional. */ } }} aria-label={t('close')}>×</button></div>}
 
