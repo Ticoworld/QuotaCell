@@ -72,7 +72,7 @@ export function RegistrationPage() {
     <main className="mx-auto w-[min(100%-2rem,42rem)] py-10 sm:py-14">
       <h1 className="text-2xl font-bold text-navy">{t('shareWalletIdentity')}</h1>
       <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">{invitation ? t(invitation.slot === 'delegate1' ? 'invitationForOne' : 'invitationForTwo') : t('shareIdentityBody')}</p>
-      <a className="mt-3 inline-block text-sm text-blue underline" href={`${window.location.pathname}?discover=1`}>{t('discoverMyPocket')}</a>
+      <a className="mt-3 block w-fit text-sm text-blue underline" href={`${window.location.pathname}?discover=1`}>{t('discoverMyPocket')}</a>
       {invitation && <p className="mt-4 border-l-2 border-blue pl-3 text-sm text-slate-700">{t('invitationNetwork')}: {t('networkPudge')} · {t(invitation.slot === 'delegate1' ? 'delegateOne' : 'delegateTwo')}</p>}
       {!identity && <button className="primary-button mt-6" type="button" onClick={() => void connect()} disabled={busy || !invitationLoaded || Boolean(new URLSearchParams(window.location.search).has('invite') && !invitation)}>{busy ? t('connectingWallet') : t('shareWalletIdentity')}</button>}
       {identity && <section className="mt-6 border-y border-line py-5">
