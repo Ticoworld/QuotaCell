@@ -27,7 +27,9 @@ export class CkbWalletSession {
       return new Promise((resolve, reject) => this.element!.addEventListener('connection', (event) => this.accept(event, resolve, reject), { once: true }));
     }
     const epoch = ++this.epoch;
-    const client = new connector.ClientPublicTestnet({ url: `${location.origin}/api/ckb`, fallbacks: [] });
+    // Identity sharing uses CCC's public testnet client configuration and never
+    // depends on QuotaCell's local application API.
+    const client = new connector.ClientPublicTestnet({ url: 'https://testnet.ckb.dev/', fallbacks: [] });
     const element = document.createElement('ccc-connector') as CkbWalletSession['element'] & HTMLElement;
     element.client = client;
     element.name = 'QuotaCell';
