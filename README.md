@@ -1,27 +1,25 @@
-﻿# QuotaCell
+# QuotaCell
 
-QuotaCell is an experimental CKB spending policy for two independent delegates drawing from one shared cumulative allowance. Each delegate signs with their own key and has an approved recipient, an individual limit and a per-payment ceiling. The owner can revoke a delegate and recover protected funds. Deposits do not reset the shared allowance.
+QuotaCell is an experimental CKB spending policy that lets two delegates draw from one shared cumulative allowance. Each delegate uses an independently controlled key and an approved recipient. The owner can revoke either delegate, close the Pocket, and recover supported protected funds. Deposits do not reset spent authority.
 
-The current QCN4/QCT4 profile protects native CKB in Cells and enforces the policy in CKB transaction validation. Each payment consumes and recreates the shared policy Cell, so concurrent payments contend for the same state. The earlier [synthetic xUDT prototype](evidence/local-node) is a separate historical profile; its results and [owner-control evidence](evidence/owner-control-2026-10-30/README.md) remain available.
+## Verified public Pudge Pocket
 
-## What has been demonstrated
+The current native QCN4/QCT4 policy runs in CKB transaction validation. The verified WO18 public lifecycle completed nine canonical Pudge transactions: Pocket creation, protected funding, two delegate payments, two revocations, closure, a late deposit, and its recovery. The active policy used **600 CKB** capacity. Closure released **466 CKB** of policy capacity and left **134 CKB** in the terminal policy Cell. That terminal capacity is occupied and locked by the contract; it is not spendable balance. The Pocket had two fixed delegate slots, with no ability to add a third delegate.
 
-WO14B ran a complete fresh isolated-node Chromium lifecycle: owner creation and funding, payments by two independently controlled disposable browser signers, revocation, recovery, late deposit and sweep. Eight transactions committed with normal node validation. The application restarted and reopened both active and terminal state, without server-held owner or delegate secrets. See the [validation record](evidence/wo14b/VALIDATION.md), [lifecycle test](examples/local-chain/wo14b_lifecycle_test.mjs) and [reproduction guide](examples/local-chain/WO14B_WORKING_POCKET.md). The browser signer was a disposable simulated provider; this is not qualification of a real wallet extension.
+The public lifecycle is evidence of contract enforcement, not a production security claim. QuotaCell is experimental and unaudited. Do not use it to secure real value.
 
-An active Pocket policy holds **600 CKB**. Closure returns **466 CKB** and retains a **134 CKB** terminal Cell for later recovery. A protected fund Cell requires at least 73 CKB, and actors need separate fee Cells. These per-Pocket amounts are separate from the capacity needed to deploy shared contract code Cells; the exact deployment capacity depends on the executable sizes and output locks. See the [native CKB evidence](evidence/wo13-native-ckb/README.md) and [capital-recovery evidence](evidence/wo12-capital-recovery/README.md).
+See the [WO18 public closeout and transaction evidence](examples/local-chain/WO18_PUBLIC_CLOSEOUT_20261115.md) for canonical transaction and block identities, capacity accounting, verification results, limitations, and reproduction commands. The documented reproduction uses the preserved local runtime for audit inputs; that runtime, its SQLite journal, and any local credentials are not part of the public release and must not be shared.
 
 ## Build and inspect
 
-- [QCN4 contract source](policy/c/allowance_native_v2.c) and [profile](policy/c/profile.h).
-- [Genesis builder](examples/local-chain/pocket_genesis.mjs), [payment builder](examples/local-chain/pocket_payment.ts), [signing boundary](examples/local-chain/pocket_signing.mjs), and [Working Pocket application](examples/local-chain/working_pocket_server.mjs).
-- [WO14B lifecycle evidence](evidence/wo14b/VALIDATION.md) and [fresh reproduction instructions](examples/local-chain/WO14B_WORKING_POCKET.md).
-- [Native CKB isolated-node results](evidence/wo13-native-ckb/README.md), [build and test instructions](docs/BUILD_AND_TEST.md), [dependencies](docs/DEPENDENCIES.md), and [security model](docs/SECURITY.md).
-- [Historical xUDT verifier results](policy/results/summary.json), [fixtures](policy/fixtures), and [local-node records](evidence/local-node).
+- [QCN4 contract source](policy/c/allowance_native_v2.c) and [policy profile](policy/c/profile.h).
+- [Pocket genesis builder](examples/local-chain/pocket_genesis.mjs), [payment builder](examples/local-chain/pocket_payment.ts), and [wallet signing boundary](examples/local-chain/pocket_signing.mjs).
+- [Working Pocket backend](examples/local-chain/working_pocket_server.mjs) and [WO18 public closeout](examples/local-chain/WO18_PUBLIC_CLOSEOUT_20261115.md).
+- [Build and test instructions](docs/BUILD_AND_TEST.md), [dependencies](docs/DEPENDENCIES.md), and [security model](docs/SECURITY.md).
+- The historical [xUDT prototype](evidence/local-node) is a separate profile and is not evidence for the native QCN4 public lifecycle.
 
-The historical xUDT verifier includes 89 fixture expectations, not 89 committed transactions. Isolated-node hashes are not public explorer records. Reproduction requires exact external dependencies; see the linked guides.
+## Limits
 
-## Experimental limits
+The interface remains developer-grade. Public lifecycle acceptance used one configured Pudge RPC endpoint; it is not an independent multi-provider audit or a security audit. The verified public lifecycle used UTXO Global Wallet. Reorganization handling, multi-fund consolidation, independent recovery, and descriptor-free cross-device Pocket operation remain limited. The owner key is required for owner recovery and its loss can strand funds. The public evidence records nine transactions, not broad production adoption.
 
-The interface is developer-grade. A real wallet extension and a public Pudge lifecycle have not been qualified. There is no independent audit or production custody claim. Reorganization handling, multi-fund consolidation and independent recovery remain limited; loss of the owner key can strand funds. Do not use QuotaCell to secure real value.
-
-Original QuotaCell material is [Apache-2.0](LICENSE), Copyright 2026 Ticoworld. Upstream components retain their own terms; see [third-party notices](THIRD_PARTY_NOTICES.md).
+QuotaCell is licensed under [Apache-2.0](LICENSE), Copyright 2026 Ticoworld. Upstream components retain their own terms; see [third-party notices](THIRD_PARTY_NOTICES.md).
