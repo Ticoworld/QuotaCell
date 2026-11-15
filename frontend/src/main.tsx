@@ -67,6 +67,7 @@ function App() {
   const { t, i18n } = useTranslation();
   const [state, setState] = useState<PocketState | null>(null);
   const lastGoodState = useRef<PocketState | null>(null);
+  const refreshInFlight = useRef<Promise<PocketState | null> | null>(null);
   const [stateStale, setStateStale] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [identity, setIdentity] = useState<WalletIdentity | null>(null);
@@ -90,24 +91,37 @@ function App() {
   const [retryDialogOpen, setRetryDialogOpen] = useState(false);
 
   const refresh = useCallback(async (quiet = false) => {
+    const current = refreshInFlight.current;
+    if (current) {
+      if (!quiet) setRefreshing(true);
+      try { return await current; }
+      finally { if (!quiet) setRefreshing(false); }
+    }
     if (!quiet) setRefreshing(true);
-    try {
-      const next = await getPocketState();
-      if (next.creationRecovery && lastGoodState.current && !lastGoodState.current.creationRecovery) {
-        setStateStale(true);
+    const task = (async (): Promise<PocketState | null> => {
+      try {
+        const next = await getPocketState();
+        if (next.creationRecovery && lastGoodState.current && !lastGoodState.current.creationRecovery) {
+          setStateStale(true);
+          return null;
+        }
+        lastGoodState.current = next;
+        setState(next);
+        setStateStale(false);
+        setLoadError('');
+        return next;
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        if (lastGoodState.current) setStateStale(true);
+        else { setState(null); setLoadError(message); }
         return null;
+      } finally {
+        refreshInFlight.current = null;
+        if (!quiet) setRefreshing(false);
       }
-      lastGoodState.current = next;
-      setState(next);
-      setStateStale(false);
-      setLoadError('');
-      return next;
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      if (lastGoodState.current) setStateStale(true);
-      else { setState(null); setLoadError(message); }
-      return null;
-    } finally { if (!quiet) setRefreshing(false); }
+    })();
+    refreshInFlight.current = task;
+    return task;
   }, []);
 
   useEffect(() => { void refresh(); const timer = window.setInterval(() => void refresh(true), 15000); return () => window.clearInterval(timer); }, [refresh]);
