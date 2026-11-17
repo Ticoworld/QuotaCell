@@ -10,6 +10,7 @@ export type Intent = { operation: Operation; role?: 'alice' | 'ben'; displayName
 type Props = {
   intent: Intent | null;
   prepared: PreparedTransaction | null;
+  pendingSigned: { transaction: string; hash: string } | null;
   state: PocketState | null;
   identity: WalletIdentity | null;
   delegates: DelegateState[];
@@ -19,11 +20,14 @@ type Props = {
   error: string;
   onPrepare: (body: Record<string, unknown>) => Promise<void>;
   onSign: (prepared: PreparedTransaction) => Promise<void>;
+  onSubmitSigned: (pending: { transaction: string; hash: string }) => Promise<void>;
+  onDiscardSigned: () => void;
+  canSubmitSigned: boolean;
   onConnectSigner: (expectedPublicKey: string) => Promise<void>;
   onClose: () => void;
 };
 
-export function OperationDialog({ intent, prepared, state, identity, delegates, history, recipientAddresses, working, error, onPrepare, onSign, onConnectSigner, onClose }: Props) {
+export function OperationDialog({ intent, prepared, pendingSigned, state, identity, delegates, history, recipientAddresses, working, error, onPrepare, onSign, onSubmitSigned, onDiscardSigned, canSubmitSigned, onConnectSigner, onClose }: Props) {
   const { t, i18n } = useTranslation();
   const [paymentAmount, setPaymentAmount] = useState('');
   const [depositAmount, setDepositAmount] = useState('');
@@ -106,11 +110,11 @@ export function OperationDialog({ intent, prepared, state, identity, delegates, 
   return <Dialog.Root open={Boolean(intent) && !walletPickerActive} onOpenChange={(open) => { if (!open && !working && !walletPickerActive) onClose(); }}>
     <Dialog.Portal>
       <Dialog.Overlay className="dialog-overlay fixed inset-0 z-50 bg-slate-950/55 backdrop-blur-[1px]" />
-      <Dialog.Content className="dialog-content fixed left-1/2 top-1/2 z-[51] max-h-[min(88dvh,850px)] w-[min(540px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 text-ink shadow-2xl sm:p-6" aria-modal="true" onEscapeKeyDown={(event) => { if (working) event.preventDefault(); }} onPointerDownOutside={(event) => { if (working) event.preventDefault(); }}>
-        <div className="dialog-top mb-3 flex items-center justify-between"><span className="dialog-symbol grid size-8 place-items-center rounded-lg bg-blue-wash text-blue" aria-hidden="true"><CellMark/></span><Dialog.Close asChild><button className="icon-button grid size-9 place-items-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-800" aria-label={t('close')} disabled={working}>×</button></Dialog.Close></div>
-        <Dialog.Title className="dialog-title text-xl font-semibold text-navy sm:text-[22px]">{isPrepared ? t('transactionReview') : title}</Dialog.Title>
+      <Dialog.Content className="dialog-content fixed left-1/2 top-1/2 z-[51] max-h-[min(88dvh,850px)] w-[min(540px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 text-ink shadow-2xl sm:p-6" aria-modal="true" onEscapeKeyDown={(event) => { if (working || pendingSigned) event.preventDefault(); }} onPointerDownOutside={(event) => { if (working || pendingSigned) event.preventDefault(); }}>
+        <div className="dialog-top mb-3 flex items-center justify-between"><span className={`dialog-symbol grid size-8 place-items-center rounded-lg ${pendingSigned ? 'warning-symbol' : 'bg-blue-wash text-blue'}`} aria-hidden="true">{pendingSigned ? '!' : <CellMark/>}</span><Dialog.Close asChild><button className="icon-button grid size-9 place-items-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-800" aria-label={t('close')} disabled={working || Boolean(pendingSigned)}>×</button></Dialog.Close></div>
+        <Dialog.Title className="dialog-title text-xl font-semibold text-navy sm:text-[22px]">{pendingSigned ? t('pudgeBroadcastTitle') : isPrepared ? t('transactionReview') : title}</Dialog.Title>
         <Dialog.Description className="dialog-description mb-4 mt-1.5 block text-xs leading-5 text-slate-600">
-          {isPrepared ? t('feeDisclosure') : intent?.operation === 'pay' ? t('delegateDescription') : intent?.operation === 'revoke' ? `${t('ownerActionConfirm')} ${intent.displayName || t(intent.role === 'alice' ? 'delegateOne' : 'delegateTwo')}.` : intent?.operation === 'close' ? t('closeConsequences') : intent?.operation === 'sweep' ? t('lateFunds') : intent?.operation === 'genesis' ? t('stepReviewBody') : intent?.operation === 'deposit' && state?.closed ? t('lateDepositBody') : t('ownerDescription')}
+          {pendingSigned ? t('pudgeBroadcastBody') : isPrepared ? t('feeDisclosure') : intent?.operation === 'pay' ? t('delegateDescription') : intent?.operation === 'revoke' ? `${t('ownerActionConfirm')} ${intent.displayName || t(intent.role === 'alice' ? 'delegateOne' : 'delegateTwo')}.` : intent?.operation === 'close' ? t('closeConsequences') : intent?.operation === 'sweep' ? t('lateFunds') : intent?.operation === 'genesis' ? t('stepReviewBody') : intent?.operation === 'deposit' && state?.closed ? t('lateDepositBody') : t('ownerDescription')}
         </Dialog.Description>
 
         {!isPrepared && intent && <div className="dialog-form grid gap-3">
@@ -152,6 +156,7 @@ export function OperationDialog({ intent, prepared, state, identity, delegates, 
             </section>}
             <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('network')}</span><strong className="text-right font-semibold text-slate-800">{networkMode.startsWith('pudge') ? t('networkPudge') : t('networkLocal')}</strong></div>
             <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('signer')}</span><code className="text-right text-slate-800" dir="ltr">{identity ? shortHash(identity.address, 13, 8) : '—'}</code></div>
+            {pendingSigned && <div className="grid gap-1 border-b border-slate-100 py-2 text-xs"><span className="text-slate-600">{t('txId')}</span><code className="break-all text-slate-800" dir="ltr">{pendingSigned.hash}</code></div>}
             {intent.operation === 'pay' && selected && <div className="review-row"><span>{t('target')}</span><code dir="ltr">{selectedRecipient}</code></div>}
             {intent.operation === 'revoke' && <div className="inline-facts"><span>{t('revoke')}</span><strong>{intent.displayName || t(intent.role === 'alice' ? 'delegateOne' : 'delegateTwo')}</strong></div>}
           </div>
@@ -170,7 +175,7 @@ export function OperationDialog({ intent, prepared, state, identity, delegates, 
           </details>
           {error && <p className="form-error rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-800" role="alert">{error}</p>}
           {history.some((item) => item.state === 'uncertain') && <p className="readonly-notice rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900">{t('unresolvedBody')}</p>}
-          <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2"><Dialog.Close asChild><button className="secondary-button" type="button" disabled={working}>{t('cancel')}</button></Dialog.Close><button className="primary-button" type="button" disabled={working || readOnly || prepareOnly || !signerMatches} onClick={() => void onSign(prepared)}>{working ? t('walletApproval') : prepareOnly ? t('signingDisabled') : t('continueWallet')} <span aria-hidden="true">→</span></button></div>
+          <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2">{pendingSigned ? <><button className="secondary-button" type="button" disabled={working} onClick={onDiscardSigned}>{t('discardSignature')}</button><button className="primary-button" type="button" disabled={working || !canSubmitSigned} onClick={() => void onSubmitSigned(pendingSigned)}>{working ? t('submitting') : t('sendToPudge')}</button></> : <><Dialog.Close asChild><button className="secondary-button" type="button" disabled={working}>{t('cancel')}</button></Dialog.Close><button className="primary-button" type="button" disabled={working || readOnly || prepareOnly || !signerMatches} onClick={() => void onSign(prepared)}>{working ? t('walletApproval') : prepareOnly ? t('signingDisabled') : t('continueWallet')} <span aria-hidden="true">→</span></button></>}</div>
         </div>}
       </Dialog.Content>
     </Dialog.Portal>
