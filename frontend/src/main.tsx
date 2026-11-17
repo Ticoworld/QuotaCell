@@ -16,12 +16,12 @@ import { RegistrationPage } from './RegistrationPage';
 import { PocketDiscoveryPage } from './PocketDiscoveryPage';
 import { OperationDialog, type Intent, type Operation } from './OperationDialog';
 import { PocketPicker } from './PocketPicker';
-import { createPocketDraft, listPocketDrafts, pocketDraftIndexKey } from './drafts';
+import { createPocketDraft, listPocketDrafts, pocketDraftIndexKey, removePocketDraft } from './drafts';
 
 const wallet = new CkbWalletSession();
 type ActorRole = 'owner' | 'alice' | 'ben' | 'unrecognized';
 type SignedPending = { transaction: string; hash: string };
-type TransactionNotice = { state: string; hash?: string; detail?: string; phase?: string; technicalError?: string; operation?: string };
+type TransactionNotice = { state: string; hash?: string; detail?: string; phase?: string; technicalError?: string; operation?: string; draftIndexKey?: string; draftId?: string };
 type Participant = { publicKey: string; fallback: string; role: 'owner' | 'alice' | 'ben' };
 const PENDING_TRANSACTION_KEY = 'quotacell.pending-pudge-transaction';
 
@@ -30,6 +30,12 @@ function restorePendingTransaction(): TransactionNotice | null {
     const value = JSON.parse(sessionStorage.getItem(PENDING_TRANSACTION_KEY) || 'null') as TransactionNotice | null;
     return value && /^0x[0-9a-f]{64}$/i.test(value.hash || '') ? value : null;
   } catch { return null; }
+}
+
+function removeConfirmedGenesisDraft(notice: TransactionNotice) {
+  if (notice.operation !== 'genesis' || !notice.draftIndexKey || !notice.draftId) return true;
+  try { removePocketDraft(notice.draftIndexKey, notice.draftId); return true; }
+  catch { return false; }
 }
 
 function actorRole(identity: WalletIdentity | null, state: PocketState | null): ActorRole | null {
@@ -100,6 +106,7 @@ function App() {
   const [selectedPocketError, setSelectedPocketError] = useState(false);
   const [activeDraftId, setActiveDraftId] = useState('');
   const [activeDraftOwner, setActiveDraftOwner] = useState('');
+  const [draftVersion, setDraftVersion] = useState(0);
   const [pocketChoices, setPocketChoices] = useState<NonNullable<PocketState['discovery']>>([]);
   const [pocketListLoading, setPocketListLoading] = useState(false);
   const [pocketListError, setPocketListError] = useState('');
@@ -268,7 +275,7 @@ function App() {
 
   const role = useMemo(() => actorRole(identity, state), [identity, state]);
   const draftIndexKey = identity && state?.genesis ? pocketDraftIndexKey(state.genesis, identity.publicKey) : '';
-  const savedDrafts = draftIndexKey ? listPocketDrafts(draftIndexKey) : [];
+  const savedDrafts = useMemo(() => draftIndexKey ? listPocketDrafts(draftIndexKey) : [], [draftIndexKey, draftVersion]);
   const activeDraftKey = draftIndexKey && activeDraftId ? `${draftIndexKey}:draft:${activeDraftId}` : '';
   const delegates = state?.delegates || [];
   const activeDelegate = role === 'alice' || role === 'ben' ? delegates.find((delegate) => delegate.role === role) : undefined;
@@ -406,6 +413,11 @@ function App() {
     if (!identity || !draftIndexKey || !savedDrafts.some((draft) => draft.id === draftId)) return;
     setActiveDraftId(draftId); setActiveDraftOwner(identity.publicKey.toLowerCase()); setShowPocketList(false); setShowCreation(true);
   };
+  const discardDraft = (draftId: string) => {
+    if (!draftIndexKey || !savedDrafts.some((draft) => draft.id === draftId)) return false;
+    try { removePocketDraft(draftIndexKey, draftId); setDraftVersion((version) => version + 1); return true; }
+    catch { toast.error(t('draftRemoveError')); return false; }
+  };
   const openSelectedPocket = (pocket: string) => {
     if (!/^0x[0-9a-f]{64}$/i.test(pocket)) return;
     const nextUrl = `${window.location.pathname}?${new URLSearchParams({ pocket })}`;
@@ -450,8 +462,9 @@ function App() {
   const submitSigned = async (transaction: string, hash?: string) => {
     if (pudgePrepareOnly) { setOperationError(t('prepareOnlyNotice')); return; }
     if (!prepared) return;
+    const draftReference = intent?.operation === 'genesis' && activeDraftId && draftIndexKey ? { draftIndexKey, draftId: activeDraftId } : {};
     if (pudge && hash) {
-      const notice: TransactionNotice = { state: 'pending', hash, detail: t('submitting'), operation: intent?.operation };
+      const notice: TransactionNotice = { state: 'pending', hash, detail: t('submitting'), operation: intent?.operation, ...draftReference };
       try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
       setTransactionNotice(notice);
       toast.loading(t('submitting'), { id: 'quotacell-transaction-submit' });
@@ -491,7 +504,8 @@ function App() {
         : result.state === 'committed' ? t('transactionConfirmed')
           : ['pending', 'proposed', 'submitted'].includes(result.state) ? t('transactionSubmitted')
             : result.state === 'rejected' ? t('transactionRejected') : t('submitUnknown');
-      const notice: TransactionNotice = { state: notSent ? 'not-sent' : preBroadcastFailure ? 'error' : result.state, hash: notSent ? undefined : resultHash, phase: result.phase, detail, technicalError: result.error || result.reason, operation: intent?.operation };
+      const notice: TransactionNotice = { state: notSent ? 'not-sent' : preBroadcastFailure ? 'error' : result.state, hash: notSent ? undefined : resultHash, phase: result.phase, detail, technicalError: result.error || result.reason, operation: intent?.operation, ...draftReference };
+      if (notice.state === 'committed' && !removeConfirmedGenesisDraft(notice)) toast.warning(t('draftCleanupError'));
       setTransactionNotice(notice);
       if (notSent) { try { sessionStorage.removeItem(PENDING_TRANSACTION_KEY); } catch { /* Session storage is optional. */ } }
       else if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
@@ -533,7 +547,8 @@ function App() {
         const detail = resolved.status === 'committed' ? t('transactionConfirmed')
           : ['pending', 'proposed'].includes(resolved.status) ? t('transactionSubmitted')
             : t('transactionRejected');
-        const notice: TransactionNotice = { state: resolved.status, hash, detail, technicalError: resolved.reason, operation: intent?.operation };
+        const notice: TransactionNotice = { state: resolved.status, hash, detail, technicalError: resolved.reason, operation: intent?.operation, ...draftReference };
+        if (notice.state === 'committed' && !removeConfirmedGenesisDraft(notice)) toast.warning(t('draftCleanupError'));
         setTransactionNotice(notice);
         try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
         if (resolved.status === 'committed') toast.success(detail, { id: 'quotacell-transaction-submit' });
@@ -543,7 +558,7 @@ function App() {
         await refresh(true);
         return;
       }
-      const notice: TransactionNotice = { state: 'uncertain', hash, phase: 'submit', detail: t('submitUnknown'), technicalError: message };
+      const notice: TransactionNotice = { state: 'uncertain', hash, phase: 'submit', detail: t('submitUnknown'), technicalError: message, operation: intent?.operation, ...draftReference };
       setTransactionNotice(notice);
       if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
       toast.warning(t('submitUnknown'), { id: 'quotacell-transaction-submit' });
@@ -621,7 +636,8 @@ function App() {
               : status === 'uncertain' ? t('statusCouldNotConfirm')
                 : t('txStillUnknown');
       const preBroadcastFailure = transactionNotice.phase && ['network-check', 'pocket-check', 'input-fee-check', 'dry-run', 'pool-admission'].includes(transactionNotice.phase);
-      const notice: TransactionNotice = { state: status === 'unknown' && preBroadcastFailure ? 'error' : status, hash: transactionNotice.hash, phase: transactionNotice.phase, detail: status === 'unknown' && preBroadcastFailure ? t('transactionNotSent') : detail, technicalError: result.reason, operation: transactionNotice.operation };
+      const notice: TransactionNotice = { state: status === 'unknown' && preBroadcastFailure ? 'error' : status, hash: transactionNotice.hash, phase: transactionNotice.phase, detail: status === 'unknown' && preBroadcastFailure ? t('transactionNotSent') : detail, technicalError: result.reason, operation: transactionNotice.operation, draftIndexKey: transactionNotice.draftIndexKey, draftId: transactionNotice.draftId };
+      if (notice.state === 'committed' && !removeConfirmedGenesisDraft(notice)) toast.warning(t('draftCleanupError'));
       setTransactionNotice(notice);
       if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
       if (status === 'committed') toast.success(t('transactionConfirmed'));
@@ -713,7 +729,8 @@ function App() {
           const detail = result.status === 'committed' ? t('transactionConfirmed')
             : ['pending', 'proposed', 'submitted'].includes(result.status) ? t('transactionSubmitted')
               : t('transactionRejected');
-          const notice: TransactionNotice = { state: result.status, hash, detail, technicalError: result.reason, operation };
+          const notice: TransactionNotice = { state: result.status, hash, detail, technicalError: result.reason, operation, draftIndexKey: current.draftIndexKey, draftId: current.draftId };
+          if (result.status === 'committed' && !removeConfirmedGenesisDraft(notice)) toast.warning(t('draftCleanupError'));
           setTransactionNotice((latest) => latest?.hash === hash ? notice : latest);
           try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
           if (terminal) {
@@ -759,7 +776,7 @@ function App() {
       : selectedPocketLoading ? <main className="mx-auto min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] py-7 sm:py-10" aria-busy="true"><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><h1 className="m-0 text-2xl font-bold text-navy">{t('openingPocket')}</h1><p className="mt-1 text-sm text-slate-600" role="status">{t('verifyingPocket')}</p></div><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('backToMyPockets')}</button></div><section className="grid grid-cols-1 gap-3 md:grid-cols-2" aria-hidden="true"><div className="animate-pulse rounded-lg border border-line bg-white p-5"><div className="mb-4 h-3 w-28 rounded-sm bg-slate-200"/><div className="mb-3 h-9 w-40 rounded-sm bg-slate-100"/><div className="h-3 w-3/4 rounded-sm bg-slate-100"/></div><div className="animate-pulse rounded-lg border border-line bg-white p-5"><div className="mb-4 h-3 w-32 rounded-sm bg-slate-200"/><div className="mb-3 h-9 w-36 rounded-sm bg-slate-100"/><div className="h-3 w-2/3 rounded-sm bg-slate-100"/></div></section><div className="mt-7 divide-y divide-slate-200 border-y border-slate-200" aria-hidden="true">{[0, 1, 2].map((item) => <div key={item} className="flex items-center justify-between gap-4 py-4"><div className="animate-pulse space-y-2"><div className="h-3 w-32 rounded-sm bg-slate-200"/><div className="h-3 w-56 max-w-[70vw] rounded-sm bg-slate-100"/></div><div className="h-10 w-28 animate-pulse rounded-md bg-slate-100"/></div>)}</div></main>
       : selectedPocketError ? <main className="mx-auto grid min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] place-items-center py-10"><section className="w-full max-w-xl rounded-md border border-red-200 bg-white p-5" role="alert"><h1 className="m-0 text-lg font-semibold text-navy">{t('pocketLoadFailed')}</h1><p className="my-2 text-sm leading-6 text-slate-600">{t('pocketCouldNotBeVerified')}</p><div className="mt-4 flex flex-wrap gap-2"><button className="primary-button" type="button" onClick={() => void loadSelectedPocket(selectedPocketId)}>{t('retry')}</button><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('backToMyPockets')}</button></div></section></main>
       : state?.connectRequired ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><h1 className="mb-2 text-xl font-semibold text-navy">{t('activePocket')}</h1><p className="mb-5 text-sm text-slate-600">{t('pocketLinkConnect')}</p><button className="primary-button" type="button" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button></main>
-      : showPocketList || state?.discovery || (state?.empty && identity) || identityDiscoveryLoading ? <PocketPicker pockets={showPocketList ? pocketChoices : state?.discovery || []} drafts={savedDrafts} ownerCanCreate={Boolean(identity)} locale={i18n.language} loading={showPocketList ? pocketListLoading : identityDiscoveryLoading} error={pocketListError} t={(key) => t(key)} onOpen={(pocket) => void openSelectedPocket(pocket)} onCreate={startNewDraft} onResume={resumeDraft}/>
+      : showPocketList || state?.discovery || (state?.empty && identity) || identityDiscoveryLoading ? <PocketPicker pockets={showPocketList ? pocketChoices : state?.discovery || []} drafts={savedDrafts} ownerCanCreate={Boolean(identity)} locale={i18n.language} loading={showPocketList ? pocketListLoading : identityDiscoveryLoading} error={pocketListError} t={(key) => t(key)} onOpen={(pocket) => void openSelectedPocket(pocket)} onCreate={startNewDraft} onResume={resumeDraft} onDiscard={discardDraft}/>
       : state?.empty ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><div className="empty-cell-mark mb-5 grid size-14 place-items-center rounded-xl border border-blue-100 bg-blue-wash text-blue"><CellMark/></div><h1 className="mb-2 max-w-2xl text-3xl font-bold leading-tight text-navy sm:text-4xl">{t('emptyTitle')}</h1><p className="mb-5 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">{t('emptyBody')}</p><button className="primary-button" type="button" disabled={!identity} onClick={startNewDraft}>{t('createPocket')} <span aria-hidden="true">→</span></button></main>
       : state && !state.empty ? <main id="home" className="app-page mx-auto w-[min(100%-2rem,64rem)] py-6 sm:py-8">
         <div className="pocket-heading mb-5 flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><h1 className="m-0 text-2xl font-bold text-navy sm:text-[28px]">{state.pocket ? t('activePocket') : t('brand')}</h1><p className="mt-1 text-xs text-slate-600 sm:text-sm">{identity ? displayIdentityRole : t('connectToSeeActions')}</p></div><div className="flex max-w-full flex-wrap items-center justify-end gap-2"><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('myPockets')}</button><button className="secondary-button" type="button" onClick={() => void copyPocketId()}>{t('sharePocketLink')}</button><span className={closed ? 'state-mark state-closed' : 'state-mark'}>{closed ? t('closedStatus') : t('active')}</span></div></div>

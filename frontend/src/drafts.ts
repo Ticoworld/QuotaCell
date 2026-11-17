@@ -22,6 +22,13 @@ export function touchPocketDraft(indexKey: string, id: string) {
   localStorage.setItem(indexKey, JSON.stringify(drafts.slice(0, 32)));
 }
 
+export function removePocketDraft(indexKey: string, id: string) {
+  if (!draftIdPattern.test(id)) throw new Error('Invalid local Pocket draft identity.');
+  const drafts = listPocketDrafts(indexKey).filter((draft) => draft.id !== id);
+  localStorage.setItem(indexKey, JSON.stringify(drafts));
+  localStorage.removeItem(`${indexKey}:draft:${id}`);
+}
+
 export function createPocketDraft(indexKey: string) {
   const id = crypto.randomUUID();
   touchPocketDraft(indexKey, id);
