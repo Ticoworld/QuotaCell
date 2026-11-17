@@ -1,5 +1,14 @@
 # QuotaCell Project Handoff
 
+## WO19C Owner and Contributor UX Refinement
+
+- Reworked the Pocket draft Participants step around one connected owner row and two separate delegate invitation journeys. The normal flow no longer begins with a global registration-code importer or shows redundant owner wallet actions.
+- Each delegate now moves from not invited, to an invitation awaiting a manually returned response, to registered. The owner copies and sends each invitation, imports the response inside its matching delegate row, and sees a confirmation before replacing an invitation or accepted contributor identity. Existing QCI1/QCR1 validation remains in use; slot, request, duplicate identity and network failures are reported in the UI.
+- Contributor invitation pages show the invited slot and Pudge network, connect the contributor's own wallet, and offer a response link to return to the owner. The flow states that registration does not grant on-chain spending permission and does not prove private-key possession. No JSON exchange is required in the normal flow; legacy JSON remains under Advanced.
+- Drafts remain owner/network scoped in browser storage. The UI shows saved status only after both the draft and index writes succeed, provides a retry for write failures, and avoids overwriting unreadable saved data. No keys, signatures or transactions are stored.
+- Review remains clearly marked as a draft. Genesis preparation stays disabled because this runtime has a single installed Pocket context. The work does not change QCN4, the supervisor, transaction recovery or public broadcasting.
+- Verification for this UX continuation: frontend production build passed; 10 focused API, public discovery, registration, wallet, draft, actor discovery and indexer retry tests passed; `git diff --check` passed. Interactive browser acceptance and screenshots were left for the owner to inspect at `http://127.0.0.1:5173/`; this continuation does not claim that browser journey or real-wallet acceptance passed.
+
 ## WO19C Pocket-First Ownership and Remote Collaboration
 
 - Kept the existing Pocket as the primary workflow. Owners can view their discovered active and closed Pockets, open one by exact identity, copy its public link, and start or resume a separate creation draft.

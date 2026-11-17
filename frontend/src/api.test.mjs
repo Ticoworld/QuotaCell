@@ -36,3 +36,23 @@ test('empty discovery is returned only after all bounded retries finish',async()
   assert.equal(result.empty,true);
  }finally{globalThis.fetch=originalFetch;globalThis.window.setTimeout=originalTimeout;}
 });
+
+test('selected Pocket state lookup keeps the URL identity and connected actor together',async()=>{
+ const originalFetch=globalThis.fetch;
+ const originalSearch=globalThis.window.location.search;
+ const pocket='0x'+'33'.repeat(32);
+ const actor='0x02'+'44'.repeat(32);
+ let requestedUrl='';
+ globalThis.window.location.search=`?pocket=${pocket}`;
+ globalThis.fetch=async(url)=>{
+  requestedUrl=String(url);
+  return new Response(JSON.stringify({pocket,closed:true}),{status:200});
+ };
+ try{
+  const result=await getPocketState(actor);
+  const parsed=new URL(requestedUrl,'http://localhost');
+  assert.equal(parsed.searchParams.get('pocket'),pocket);
+  assert.equal(parsed.searchParams.get('actor'),actor);
+  assert.equal(result.pocket,pocket);
+ }finally{globalThis.fetch=originalFetch;globalThis.window.location.search=originalSearch;}
+});

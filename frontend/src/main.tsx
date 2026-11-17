@@ -93,6 +93,9 @@ function App() {
   const [pendingPeople, setPendingPeople] = useState<People | null>(null);
   const [showCreation, setShowCreation] = useState(false);
   const [showPocketList, setShowPocketList] = useState(false);
+  const [selectedPocketId, setSelectedPocketId] = useState(() => new URLSearchParams(window.location.search).get('pocket') || '');
+  const [selectedPocketLoading, setSelectedPocketLoading] = useState(false);
+  const [selectedPocketError, setSelectedPocketError] = useState(false);
   const [activeDraftId, setActiveDraftId] = useState('');
   const [activeDraftOwner, setActiveDraftOwner] = useState('');
   const [pocketChoices, setPocketChoices] = useState<NonNullable<PocketState['discovery']>>([]);
@@ -160,6 +163,36 @@ function App() {
   }, [identity?.publicKey]);
 
   useEffect(() => { void refresh(); const timer = window.setInterval(() => void refresh(true), 15000); return () => window.clearInterval(timer); }, [refresh]);
+  const loadSelectedPocket = useCallback(async (pocket: string) => {
+    setSelectedPocketLoading(true);
+    setSelectedPocketError(false);
+    setStateStale(false);
+    try {
+      const result = await refresh();
+      const routePocket = new URLSearchParams(window.location.search).get('pocket');
+      if (routePocket?.toLowerCase() !== pocket.toLowerCase()) return;
+      if (!result || result.connectRequired || result.pocket?.toLowerCase() !== pocket.toLowerCase()) {
+        setStateStale(false);
+        setSelectedPocketError(true);
+      }
+    } catch {
+      if (new URLSearchParams(window.location.search).get('pocket')?.toLowerCase() === pocket.toLowerCase()) {
+        setStateStale(false);
+        setSelectedPocketError(true);
+      }
+    } finally {
+      if (new URLSearchParams(window.location.search).get('pocket')?.toLowerCase() === pocket.toLowerCase()) setSelectedPocketLoading(false);
+    }
+  }, [refresh]);
+  useEffect(() => {
+    if (!selectedPocketId || !identity) return;
+    if (state?.pocket?.toLowerCase() === selectedPocketId.toLowerCase() && !state.connectRequired) {
+      setSelectedPocketLoading(false);
+      setSelectedPocketError(false);
+      return;
+    }
+    void loadSelectedPocket(selectedPocketId);
+  }, [identity?.publicKey, loadSelectedPocket, selectedPocketId, state?.connectRequired, state?.pocket]);
   useEffect(() => () => wallet.disconnect(), []);
   useEffect(() => {
     if (!transactionNotice?.hash) return;
@@ -323,7 +356,7 @@ function App() {
 
   const prepareCreation = async (body: unknown, people: People) => {
     if (stateStale) throw new Error(t('stateRefreshPaused'));
-    if (state?.multiPocket !== true) throw new Error(t('multiPocketRequired'));
+    if (state?.multiPocket !== true) throw new Error(t('creationUnavailable'));
     if (pudgeReadOnly) throw new Error(t('readonlyAction'));
     setWorking(true); setOperationError('');
     try {
@@ -338,6 +371,15 @@ function App() {
   };
 
   const openPocketList = async () => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('pocket')) {
+      url.searchParams.delete('pocket');
+      window.history.pushState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+    setSelectedPocketId('');
+    setSelectedPocketLoading(false);
+    setSelectedPocketError(false);
+    setStateStale(false);
     setShowCreation(false); setShowPocketList(true); setPocketListError('');
     if (!identity) { setPocketListError(t('connectToSeeActions')); return; }
     setPocketListLoading(true);
@@ -359,12 +401,40 @@ function App() {
     if (!identity || !draftIndexKey || !savedDrafts.some((draft) => draft.id === draftId)) return;
     setActiveDraftId(draftId); setActiveDraftOwner(identity.publicKey.toLowerCase()); setShowPocketList(false); setShowCreation(true);
   };
-  const openSelectedPocket = async (pocket: string) => {
+  const openSelectedPocket = (pocket: string) => {
     if (!/^0x[0-9a-f]{64}$/i.test(pocket)) return;
-    window.history.replaceState(null, '', `${window.location.pathname}?${new URLSearchParams({ pocket })}`);
+    const nextUrl = `${window.location.pathname}?${new URLSearchParams({ pocket })}`;
+    if (`${window.location.pathname}${window.location.search}` !== nextUrl) window.history.pushState(null, '', nextUrl);
+    setSelectedPocketId(pocket);
     setShowPocketList(false); setPocketListError(''); setLoadError('');
-    await refresh();
+    setSelectedPocketLoading(true);
+    setSelectedPocketError(false);
+    setStateStale(false);
   };
+  useEffect(() => {
+    const onPopState = () => {
+      const pocket = new URLSearchParams(window.location.search).get('pocket') || '';
+      setSelectedPocketId(pocket);
+      setSelectedPocketLoading(Boolean(pocket && identity));
+      setSelectedPocketError(false);
+      setStateStale(false);
+      setShowCreation(false);
+      setActiveDraftId('');
+      if (pocket) {
+        setShowPocketList(false);
+        return;
+      }
+      if (!identity) return;
+      setShowPocketList(true);
+      setPocketListError('');
+      setPocketListLoading(true);
+      void getActorPockets(identity.publicKey).then((result) => setPocketChoices(result.discovery || []))
+        .catch(() => setPocketListError(t('pocketListError')))
+        .finally(() => setPocketListLoading(false));
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [identity?.publicKey, t]);
   useEffect(() => {
     if (!showCreation || !identity || !activeDraftOwner || identity.publicKey.toLowerCase() === activeDraftOwner) return;
     setShowCreation(false); setActiveDraftId(''); setShowPocketList(true); setPocketListError(t('draftOwnerChanged'));
@@ -519,15 +589,17 @@ function App() {
       <div className="topbar-controls flex min-w-0 items-center justify-end gap-1.5 sm:gap-3">
         {state && <div className={`network-state ${pudgeActionsDisabled ? 'is-readonly' : ''}`} role="status" aria-label={`${pudge ? t('networkPudge') : t('networkLocal')}${pudgeReadOnly ? ` · ${t('readOnly')}` : pudgePrepareOnly ? ` · ${t('prepareOnly')}` : ''}`}><i aria-hidden="true"/><span className="network-full" aria-hidden="true">{pudge ? t('networkPudge') : t('networkLocal')}</span><span className="network-compact" aria-hidden="true">{pudge ? t('networkPudgeShort') : t('networkLocalShort')}</span>{pudgeReadOnly && <small>{t('readOnly')}</small>}{pudgePrepareOnly && <small>{t('prepareOnly')}</small>}</div>}
         <label className="language-control"><span className="sr-only">{t('language')}</span><select value={i18n.language === 'zh-Hans' ? 'zh-Hans' : 'en'} onChange={(event) => void i18n.changeLanguage(event.target.value)} aria-label={t('language')}><option value="en">EN</option><option value="zh-Hans">简</option></select></label>
-        <button className="icon-button refresh-button" type="button" onClick={() => void refresh()} disabled={refreshing} aria-label={refreshing ? t('refreshing') : t('refresh')} title={t('refresh')}>{refreshing ? '…' : '↻'}</button>
+        <button className="icon-button refresh-button" type="button" onClick={() => selectedPocketId ? void loadSelectedPocket(selectedPocketId) : void refresh()} disabled={refreshing || selectedPocketLoading} aria-label={refreshing || selectedPocketLoading ? t('refreshing') : t('refresh')} title={t('refresh')}>{refreshing || selectedPocketLoading ? '…' : '↻'}</button>
         {identity ? <div className="connected-account"><div><strong>{displayIdentityRole || t('connected')}</strong><code dir="ltr">{shortHash(identity.address, 12, 7)}</code></div><button className="text-button disconnect-button" onClick={() => { wallet.disconnect(); setIdentity(null); setIdentityError(''); }} type="button">×</button></div> : <button className="connect-button" type="button" disabled={walletBusy} onClick={() => void connectWallet()}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button>}
       </div>
     </header>
 
     {identityError && <div className="wallet-connection-alert inline-alert mx-auto mt-4 w-[min(calc(100%-2rem),64rem)] rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm leading-5 text-red-800" role="alert">{identityError}</div>}
-    {stateStale && <div className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)] rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900" role="status">{t('stateRefreshPaused')}</div>}
+    {stateStale && !selectedPocketLoading && !selectedPocketError && !showPocketList && <div className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)] rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900" role="status">{t('stateRefreshPaused')}</div>}
 
     {showCreation && identity && state?.genesis && activeDraftId && activeDraftKey ? <CreationFlow key={`${state.genesis}:${activeDraftOwner}:${activeDraftId}`} draftId={activeDraftId} draftIndexKey={draftIndexKey} draftKey={activeDraftKey} pudgeReadOnly={pudgeReadOnly} prepareOnly={pudgePrepareOnly} canPrepareCreation={state.multiPocket === true && !pudgeReadOnly} connectedIdentity={identity} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => { setActiveDraftId(''); setActiveDraftOwner(''); setShowCreation(false); setShowPocketList(false); setPocketListError(''); }}/> : state?.creationRecovery ? <main className="loading-page mx-auto grid min-h-[55vh] w-[min(100%-2rem,64rem)] place-items-center text-slate-600"><section className="load-error w-full max-w-xl rounded-lg border border-red-200 bg-white p-5 shadow-sm" role="alert"><h1 className="text-lg font-semibold text-red-900">{t('creationRecoveryTitle')}</h1><p className="text-sm leading-6 text-slate-700">{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p className="break-all text-xs text-slate-600"><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
+      : selectedPocketLoading ? <main className="mx-auto min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] py-7 sm:py-10" aria-busy="true"><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><h1 className="m-0 text-2xl font-bold text-navy">{t('openingPocket')}</h1><p className="mt-1 text-sm text-slate-600" role="status">{t('verifyingPocket')}</p></div><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('backToMyPockets')}</button></div><section className="grid grid-cols-1 gap-3 md:grid-cols-2" aria-hidden="true"><div className="animate-pulse rounded-lg border border-line bg-white p-5"><div className="mb-4 h-3 w-28 rounded-sm bg-slate-200"/><div className="mb-3 h-9 w-40 rounded-sm bg-slate-100"/><div className="h-3 w-3/4 rounded-sm bg-slate-100"/></div><div className="animate-pulse rounded-lg border border-line bg-white p-5"><div className="mb-4 h-3 w-32 rounded-sm bg-slate-200"/><div className="mb-3 h-9 w-36 rounded-sm bg-slate-100"/><div className="h-3 w-2/3 rounded-sm bg-slate-100"/></div></section><div className="mt-7 divide-y divide-slate-200 border-y border-slate-200" aria-hidden="true">{[0, 1, 2].map((item) => <div key={item} className="flex items-center justify-between gap-4 py-4"><div className="animate-pulse space-y-2"><div className="h-3 w-32 rounded-sm bg-slate-200"/><div className="h-3 w-56 max-w-[70vw] rounded-sm bg-slate-100"/></div><div className="h-10 w-28 animate-pulse rounded-md bg-slate-100"/></div>)}</div></main>
+      : selectedPocketError ? <main className="mx-auto grid min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] place-items-center py-10"><section className="w-full max-w-xl rounded-md border border-red-200 bg-white p-5" role="alert"><h1 className="m-0 text-lg font-semibold text-navy">{t('pocketLoadFailed')}</h1><p className="my-2 text-sm leading-6 text-slate-600">{t('pocketCouldNotBeVerified')}</p><div className="mt-4 flex flex-wrap gap-2"><button className="primary-button" type="button" onClick={() => void loadSelectedPocket(selectedPocketId)}>{t('retry')}</button><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('backToMyPockets')}</button></div></section></main>
       : state?.connectRequired ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><h1 className="mb-2 text-xl font-semibold text-navy">{t('activePocket')}</h1><p className="mb-5 text-sm text-slate-600">{t('pocketLinkConnect')}</p><button className="primary-button" type="button" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button></main>
       : showPocketList || state?.discovery || (state?.empty && identity) || identityDiscoveryLoading ? <PocketPicker pockets={showPocketList ? pocketChoices : state?.discovery || []} drafts={savedDrafts} ownerCanCreate={Boolean(identity)} locale={i18n.language} loading={showPocketList ? pocketListLoading : identityDiscoveryLoading} error={pocketListError} t={(key) => t(key)} onOpen={(pocket) => void openSelectedPocket(pocket)} onCreate={startNewDraft} onResume={resumeDraft}/>
       : state?.empty ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><div className="empty-cell-mark mb-5 grid size-14 place-items-center rounded-xl border border-blue-100 bg-blue-wash text-blue"><CellMark/></div><h1 className="mb-2 max-w-2xl text-3xl font-bold leading-tight text-navy sm:text-4xl">{t('emptyTitle')}</h1><p className="mb-5 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">{t('emptyBody')}</p><button className="primary-button" type="button" disabled={!identity} onClick={startNewDraft}>{t('createPocket')} <span aria-hidden="true">→</span></button></main>
@@ -588,7 +660,7 @@ function App() {
       </main>
       : <main id="home" className="loading-page">{loadError ? <section className="load-error" role="alert"><h1>{t('loadError')}</h1><p>{localizedError(loadError, t)}</p><button className="primary-button" onClick={() => void refresh()}>{t('retry')}</button><div className="mt-4 flex flex-wrap gap-4 text-sm"><a href={`${window.location.pathname}?register=1`}>{t('shareWalletIdentity')}</a><a href={`${window.location.pathname}?discover=1`}>{t('discoverMyPocket')}</a></div></section> : <p role="status">{t('loadingState')}</p>}</main>}
 
-    {state && !state.empty && <footer className="app-footer mx-auto flex w-[min(100%-2rem,64rem)] flex-col justify-between gap-2 pb-6 text-[11px] text-slate-500 sm:flex-row sm:gap-5"><span className="max-w-2xl">{t('localDisclosure')}</span></footer>}
+    {state && !state.empty && !state.discovery && !state.connectRequired && !showPocketList && !selectedPocketLoading && !selectedPocketError && <footer className="app-footer mx-auto flex w-[min(100%-2rem,64rem)] flex-col justify-between gap-2 pb-6 text-[11px] text-slate-500 sm:flex-row sm:gap-5"><span className="max-w-2xl">{t('localDisclosure')}</span></footer>}
 
     {state && <OperationDialog intent={intent} prepared={prepared} state={state} identity={identity} delegates={delegates} history={history} recipientAddresses={recipientAddresses} working={working} error={operationError} onPrepare={prepareOperation} onSign={signPrepared} onConnectSigner={connectExpectedSigner} onClose={closeDialog}/>}
     {editPerson && <EditParticipantDialog participant={editPerson} initial={metadata[editPerson.publicKey]} onClose={() => setEditPerson(null)} onSave={saveName} t={t}/>}

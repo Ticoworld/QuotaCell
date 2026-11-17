@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import { useTranslation } from 'react-i18next';
 import { parseCkb } from './amount';
 import { resolveRecipient } from './api';
@@ -23,6 +24,18 @@ function savedPerson(value: unknown): Person | null {
     name: typeof item.name === 'string' ? item.name.slice(0, 32) : '',
     description: typeof item.description === 'string' ? item.description.slice(0, 72) : '',
   };
+}
+
+function readDraft(key: string): { value: Record<string, unknown> | null; error: 'unavailable' | 'corrupt' | null } {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return { value: null, error: null };
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return { value: null, error: 'corrupt' };
+    return { value: value as Record<string, unknown>, error: null };
+  } catch (cause) {
+    return { value: null, error: cause instanceof SyntaxError ? 'corrupt' : 'unavailable' };
+  }
 }
 
 function savedInvitations(value: unknown): Partial<Record<'alice' | 'ben', RegistrationInvitation>> {
@@ -55,16 +68,18 @@ type Props = {
 
 export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, connectedIdentity, onConnectParticipant, onPrepare, onCancel, draftId, draftIndexKey, draftKey }: Props) {
   const { t } = useTranslation();
-  const [saved] = useState(() => { try { return JSON.parse(localStorage.getItem(draftKey) || 'null'); } catch { return null; } });
-  const [step, setStep] = useState<number>(saved?.step >= 0 && saved?.step <= 2 ? saved.step : 0);
+  const [initialDraft] = useState(() => readDraft(draftKey));
+  const saved = initialDraft.value;
+  const savedStep = typeof saved?.step === 'number' && saved.step >= 0 && saved.step <= 2 ? saved.step : 0;
+  const restoredPeople = saved?.people && typeof saved.people === 'object' && !Array.isArray(saved.people) ? saved.people as Record<string, unknown> : {};
+  const [step, setStep] = useState<number>(savedStep);
   const [people, setPeople] = useState<People>(() => {
-    const restored = saved?.people && typeof saved.people === 'object' ? saved.people : {};
-    const owner = savedPerson(restored.owner);
+    const owner = savedPerson(restoredPeople.owner);
     return {
       ...initialPeople,
       owner: connectedIdentity ? { ...(owner || { publicKey: '', address: '', name: '', description: '' }), ...connectedIdentity } : null,
-      alice: savedPerson(restored.alice),
-      ben: savedPerson(restored.ben),
+      alice: savedPerson(restoredPeople.alice),
+      ben: savedPerson(restoredPeople.ben),
     };
   });
   const [terms, setTerms] = useState<Terms>(() => {
@@ -77,8 +92,18 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
   const [profileText, setProfileText] = useState('');
   const [profileSlot, setProfileSlot] = useState<Slot>(saved?.profileSlot === 'ben' ? 'ben' : 'alice');
   const [inviteBySlot, setInviteBySlot] = useState<Partial<Record<Slot, RegistrationInvitation>>>(() => savedInvitations(saved?.inviteBySlot));
-  const [inviteLink, setInviteLink] = useState('');
+  const [responseTexts, setResponseTexts] = useState<Record<'alice' | 'ben', string>>({ alice: '', ben: '' });
+  const [responseErrors, setResponseErrors] = useState<Partial<Record<'alice' | 'ben', string>>>({});
+  const [copiedInvitation, setCopiedInvitation] = useState<'alice' | 'ben' | null>(null);
+  const [linkFallback, setLinkFallback] = useState<'alice' | 'ben' | null>(null);
+  const [replaceSlot, setReplaceSlot] = useState<'alice' | 'ben' | null>(null);
+  const [creatingInvitation, setCreatingInvitation] = useState<'alice' | 'ben' | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'error' | null>(null);
+  const [saveAttempt, setSaveAttempt] = useState(0);
+  const saveBlocked = Boolean(initialDraft.error);
+  const draftReadErrorKey = initialDraft.error === 'unavailable' ? 'draftStorageUnavailable' : 'draftCorruptError';
   useEffect(() => {
+    if (saveBlocked) return;
     try {
       const publicPeople = Object.fromEntries(keys.map((slot) => {
         const person = people[slot];
@@ -90,8 +115,9 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
       }));
       localStorage.setItem(draftKey, JSON.stringify({ step, people: publicPeople, terms, inviteBySlot: publicInvitations, profileSlot }));
       touchPocketDraft(draftIndexKey, draftId);
-    } catch { setError(t('draftSaveError')); }
-  }, [draftKey, draftIndexKey, draftId, step, people, terms, inviteBySlot, profileSlot, t]);
+      setSaveStatus('saved');
+    } catch { setSaveStatus('error'); }
+  }, [draftKey, draftIndexKey, draftId, step, people, terms, inviteBySlot, profileSlot, saveAttempt, saveBlocked]);
 
   const updatePerson = (slot: Slot, key: 'name' | 'description', value: string) => {
     setPeople((prev) => ({ ...prev, [slot]: { ...(prev[slot] || { publicKey: '', address: '', name: '', description: '' }), [key]: value } }));
@@ -107,51 +133,75 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally { setRegistering(null); }
   };
-  const importProfile = async () => {
-    setError('');
+  const importProfileForSlot = async (slot: 'alice' | 'ben', text: string) => {
+    setResponseErrors((previous) => ({ ...previous, [slot]: '' }));
     try {
-      const invitedSlot = profileSlot === 'alice' ? 'delegate1' : profileSlot === 'ben' ? 'delegate2' : null;
-      if (profileSlot === 'owner') throw new Error('Owner identity must be connected directly.');
-      if (!inviteBySlot[profileSlot]) throw new Error(t('invitationRequired'));
-      const response = await importRegistrationResponse(profileText, inviteBySlot[profileSlot]);
-      if (response.slot && response.slot !== invitedSlot) throw new Error('This response was created for another delegate slot.');
+      if (!inviteBySlot[slot]) throw new Error(t('invitationRequired'));
+      const invitation = inviteBySlot[slot];
+      const response = await importRegistrationResponse(text);
+      const expectedSlot = slot === 'alice' ? 'delegate1' : 'delegate2';
+      if (response.slot !== expectedSlot) throw new Error('This response belongs to a different delegate slot.');
+      if (response.requestId !== invitation.requestId) throw new Error('This response uses a different invitation request.');
       const identity = response.identity;
-      assertUniqueRegistrationIdentities(keys.map((slot) => slot === profileSlot ? identity : people[slot]));
-      setPeople((previous) => ({ ...previous, [profileSlot]: { ...identity, name: previous[profileSlot]?.name || '', description: previous[profileSlot]?.description || '' } }));
-      setProfileText('');
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+      assertUniqueRegistrationIdentities(keys.map((key) => key === slot ? identity : people[key]));
+      setPeople((previous) => ({ ...previous, [slot]: { ...identity, name: previous[slot]?.name || '', description: previous[slot]?.description || '' } }));
+      setResponseTexts((previous) => ({ ...previous, [slot]: '' }));
+      setResponseErrors((previous) => ({ ...previous, [slot]: '' }));
+    } catch (cause) { setResponseErrors((previous) => ({ ...previous, [slot]: registrationError(cause, t) })); }
   };
-  const invite = async (slot: 'alice' | 'ben') => {
-    setError(''); setInviteLink('');
+  const createInvitation = async (slot: 'alice' | 'ben', replacing = false) => {
+    if (creatingInvitation) return;
+    setCreatingInvitation(slot);
     try {
       const invitation = await createRegistrationInvitation(slot === 'alice' ? 'delegate1' : 'delegate2');
-      const link = registrationShareUrl(invitation.code);
       setInviteBySlot((previous) => ({ ...previous, [slot]: invitation }));
-      setPeople((previous) => ({ ...previous, [slot]: null }));
-      setProfileSlot(slot);
-      setInviteLink(link);
-      try { await navigator.clipboard.writeText(link); } catch { /* Link remains selectable. */ }
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+      if (replacing) {
+        setPeople((previous) => ({ ...previous, [slot]: null }));
+        setResponseTexts((previous) => ({ ...previous, [slot]: '' }));
+        setResponseErrors((previous) => ({ ...previous, [slot]: '' }));
+      }
+      setCopiedInvitation(null);
+      setLinkFallback(null);
+      setReplaceSlot(null);
+    } catch { setResponseErrors((previous) => ({ ...previous, [slot]: t('invitationCreateError') })); }
+    finally { setCreatingInvitation(null); }
   };
-  const useConnected = (slot: Slot) => {
-    if (!connectedIdentity) return;
-    try { assertUniqueRegistrationIdentities(keys.map((key) => key === slot ? connectedIdentity : people[key])); }
-    catch { setError(t('differentWalletsError')); return; }
-    setError('');
-    setPeople((previous) => ({ ...previous, [slot]: { ...previous[slot], ...connectedIdentity, name: previous[slot]?.name || '', description: previous[slot]?.description || '' } }));
+  const requestInvitation = (slot: 'alice' | 'ben') => {
+    if (people[slot] || inviteBySlot[slot]) setReplaceSlot(slot);
+    else void createInvitation(slot);
+  };
+  const copyInvitation = async (slot: 'alice' | 'ben') => {
+    const invite = inviteBySlot[slot];
+    if (!invite) return;
+    try {
+      await navigator.clipboard.writeText(registrationShareUrl(invite.code));
+      setCopiedInvitation(slot);
+      setLinkFallback(null);
+      setResponseErrors((previous) => ({ ...previous, [slot]: '' }));
+    } catch {
+      setCopiedInvitation(null);
+      setLinkFallback(slot);
+      setResponseErrors((previous) => ({ ...previous, [slot]: t('clipboardUnavailable') }));
+    }
   };
   const importAdvancedJson = async () => {
     setError('');
     try {
+      if (profileSlot !== 'alice' && profileSlot !== 'ben') throw new Error(t('ownerIdentityConnectedOnly'));
       const response = await importRegistrationProfile(profileText);
+      const invite = inviteBySlot[profileSlot];
+      const expectedSlot = profileSlot === 'alice' ? 'delegate1' : 'delegate2';
+      if (response.slot && response.slot !== expectedSlot) throw new Error(t('responseWrongSlot'));
+      if (invite && (response.requestId !== invite.requestId || response.slot !== invite.slot)) throw new Error(t('responseWrongInvitation'));
       const identity = response.identity;
       assertUniqueRegistrationIdentities(keys.map((slot) => slot === profileSlot ? identity : people[slot]));
       setPeople((previous) => ({ ...previous, [profileSlot]: { ...identity, name: previous[profileSlot]?.name || '', description: previous[profileSlot]?.description || '' } }));
       setProfileText('');
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) { setError(registrationError(cause, t)); }
   };
   const validatePeople = () => {
-    if (keys.some((slot) => !people[slot]?.publicKey)) throw new Error(t('connectAllPeopleError'));
+    if (!connectedIdentity || !people.owner || people.owner.publicKey.toLowerCase() !== connectedIdentity.publicKey.toLowerCase() || people.owner.address !== connectedIdentity.address) throw new Error(t('ownerIdentityConnectedOnly'));
+    if (!people.alice?.publicKey || !people.ben?.publicKey) throw new Error(t('contributorsNotRegistered'));
     try { assertUniqueRegistrationIdentities(keys.map((slot) => people[slot])); }
     catch { throw new Error(t('differentWalletsError')); }
   };
@@ -201,35 +251,49 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setPreparing(false); }
   };
+  const ownerIsConnected = Boolean(connectedIdentity && people.owner && people.owner.publicKey.toLowerCase() === connectedIdentity.publicKey.toLowerCase() && people.owner.address === connectedIdentity.address);
   return <main className="setup-page mx-auto w-[min(100%-2rem,64rem)] py-6 md:py-9">
     <button className="text-button setup-back mb-5 inline-flex items-center gap-2 text-sm text-slate-600 hover:text-blue-700" type="button" onClick={onCancel}>← {t('returnPocket')}</button>
-    <div className="setup-title flex flex-col gap-4 border-b border-line pb-5 sm:flex-row sm:items-end sm:justify-between"><h1 className="text-2xl font-bold text-navy sm:text-[28px]">{t('draftTitle')}</h1><div className="steps flex items-center justify-between gap-2 sm:gap-5" aria-label={t('setup')}>
+    <div className="setup-title flex flex-col gap-4 border-b border-line pb-5 sm:flex-row sm:items-end sm:justify-between"><div><h1 className="text-2xl font-bold text-navy sm:text-[28px]">{t('draftTitle')}</h1><div className="mt-2 flex flex-wrap items-center gap-2 text-xs"><span className="draft-state" aria-label={t('draftNotOnChain')}>{t('draftNotOnChain')}</span>{saveStatus === 'saved' && <span className="text-slate-600" role="status">{t('draftSavedOnDevice')}</span>}{(saveStatus === 'error' || saveBlocked) && <span className="flex flex-wrap items-center gap-2 text-red-800" role="alert">{t(saveBlocked ? draftReadErrorKey : 'draftSaveError')}{saveBlocked && initialDraft.error === 'unavailable' && <button className="text-button" type="button" onClick={() => window.location.reload()}>{t('reload')}</button>}{saveBlocked && initialDraft.error === 'corrupt' && <span>{t('draftCorruptAction')}</span>}{saveStatus === 'error' && !saveBlocked && <button className="text-button" type="button" onClick={() => setSaveAttempt((attempt) => attempt + 1)}>{t('retry')}</button>}</span>}</div></div><div className="steps flex items-center justify-between gap-2 sm:gap-5" aria-label={t('setup')}>
       {[t('participants'), t('spendingRules'), t('review')].map((label, index) => <span className={`step inline-flex items-center gap-2 text-xs ${index === step ? 'current font-semibold text-blue' : index < step ? 'done text-success' : 'text-slate-500'}`} key={label}><i className={`grid size-6 place-items-center rounded-full border text-[11px] not-italic ${index === step ? 'border-blue bg-blue text-white' : index < step ? 'border-success text-success' : 'border-slate-300 text-slate-500'}`}>{index + 1}</i>{label}</span>)}
     </div></div>
 
     {step === 0 && <section className="setup-section mx-auto mt-7 w-full max-w-[830px]">
       <h2 className="mb-1.5 text-xl font-semibold text-navy">{t('stepPeopleTitle')}</h2><p className="section-intro mb-5 text-sm leading-6 text-muted">{t('draftPeopleBody')}</p>
-      <section className="mb-5 grid gap-3 border-y border-line py-4" aria-label={t('profileImport')}>
-        <label className="grid max-w-xs gap-1.5 text-xs font-semibold text-slate-700">{t('profileTarget')}<select className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm" value={profileSlot} onChange={(event) => setProfileSlot(event.target.value as Slot)}><option value="alice">{t('delegateOne')}</option><option value="ben">{t('delegateTwo')}</option></select></label>
-        <label className="grid gap-1.5 text-xs font-semibold text-slate-700">{t('profileImport')}<textarea className="min-h-24 rounded-md border border-slate-300 bg-white p-3 font-mono text-xs" value={profileText} onChange={(event) => setProfileText(event.target.value)} placeholder={t('profilePlaceholder')} /></label>
-        <div className="flex flex-wrap items-center gap-3"><button className="secondary-button" type="button" disabled={!profileText.trim() || registering !== null} onClick={() => void importProfile()}>{t('importProfile')}</button><p className="m-0 max-w-xl text-xs leading-5 text-slate-500">{t('profileTrustNote')}</p></div>
-        {inviteLink && <label className="grid gap-1.5 text-xs font-semibold text-slate-700">{t('invitationLink')}<input readOnly className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-3 text-xs" value={inviteLink} onFocus={(event) => event.currentTarget.select()} /></label>}
-        <details><summary className="cursor-pointer text-xs font-medium text-slate-600">{t('advancedRegistration')}</summary><div className="mt-3 grid gap-3"><label className="grid gap-1.5 text-xs font-semibold text-slate-700">{t('legacyJson')}<textarea className="min-h-24 rounded-md border border-slate-300 bg-white p-3 font-mono text-xs" value={profileText} onChange={(event) => setProfileText(event.target.value)} /></label><div className="flex flex-wrap gap-2"><button className="secondary-button" type="button" disabled={!profileText.trim()} onClick={() => void importAdvancedJson()}>{t('importProfile')}</button>{connectedIdentity && <button className="secondary-button" type="button" onClick={() => { const data = new Blob([exportLegacyRegistrationJson(connectedIdentity)], { type: 'application/json' }); const url = URL.createObjectURL(data); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'quotacell-registration-v1.json'; anchor.click(); URL.revokeObjectURL(url); }}>{t('exportProfile')}</button>}</div></div></details>
-      </section>
-      <div className="people-list grid gap-3">{keys.map((slot) => {
-        const person = people[slot];
-        const heading = slot === 'owner' ? t('owner') : slot === 'alice' ? t('delegateOne') : t('delegateTwo');
-        return <article className="person-row grid grid-cols-[2rem_minmax(0,1fr)] items-start gap-3 rounded-lg border border-line bg-white p-3.5 shadow-sm sm:grid-cols-[2.25rem_minmax(0,1fr)_auto] sm:gap-4 sm:p-4" key={slot}>
-          <div className="person-index grid size-8 place-items-center rounded-md border border-blue-100 bg-blue-wash text-sm font-bold text-blue-800 sm:size-9" aria-hidden="true">{slot === 'owner' ? 'O' : slot === 'alice' ? '1' : '2'}</div>
-          <div className="person-fields min-w-0"><div className="person-heading mb-3 flex flex-wrap items-baseline gap-2"><h3 className="m-0 text-sm font-semibold text-navy">{heading}</h3>{person && <span className="registered-state text-xs font-medium text-success">{t('registered')}</span>}</div>
-            <div className="person-inputs grid gap-3 sm:grid-cols-2"><label className="grid gap-1.5 text-xs font-semibold text-slate-700">{t('name')}<input className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm text-ink focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/20" value={person?.name || ''} maxLength={32} onChange={(event) => updatePerson(slot, 'name', event.target.value)} placeholder={heading}/></label><label className="grid gap-1.5 text-xs font-semibold text-slate-700">{t('description')}<input className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm text-ink focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/20" value={person?.description || ''} maxLength={72} onChange={(event) => updatePerson(slot, 'description', event.target.value)}/></label></div>
-            {person && <div className="registered-address"><span title={person.address}>{shortAddress(person.address)}</span></div>}
-          </div>{slot === 'owner' && <button className="secondary-button connect-participant col-start-2 justify-self-start sm:col-auto" type="button" disabled={registering !== null} onClick={() => void connect(slot)}>{registering === slot ? t('preparing') : person ? t('reconnect') : t('connect')}</button>}
-          {slot === 'owner' && connectedIdentity && <button className="secondary-button col-start-2 justify-self-start sm:col-auto" type="button" onClick={() => useConnected(slot)}>{t('useConnectedWallet')}</button>}
-          {(slot === 'alice' || slot === 'ben') && <div className="col-start-2 flex flex-wrap gap-2 sm:col-auto"><button className="secondary-button" type="button" onClick={() => void invite(slot)}>{t('inviteContributor')}</button>{inviteBySlot[slot] && <button className="secondary-button" type="button" onClick={() => { const link = registrationShareUrl(inviteBySlot[slot]!.code); setInviteLink(link); void navigator.clipboard.writeText(link).catch(() => setError(t('clipboardUnavailable'))); }}>{t('copyInvitation')}</button>}</div>}
-        </article>;
-      })}</div>
-      <p className="quiet-note mt-3 text-xs leading-5 text-slate-500">{t('nameLocal')}</p>
+      <div className="people-list">
+        <article className="person-row" aria-label={t('owner')}>
+          <div className="person-index" aria-hidden="true">O</div>
+          <div className="person-fields min-w-0"><div className="person-heading"><h3>{t('owner')}</h3><span className={`participant-state ${ownerIsConnected ? 'is-complete' : ''}`}>{ownerIsConnected ? t('connected') : t('ownerConnectionRequired')}</span></div>{ownerIsConnected && people.owner && <code className="participant-address" dir="ltr" title={people.owner.address}>{shortAddress(people.owner.address)}</code>}</div>
+          {!ownerIsConnected && <button className="secondary-button" type="button" disabled={registering !== null} onClick={() => void connect('owner')}>{registering === 'owner' ? t('connectingWallet') : t('connectOwner')}</button>}
+        </article>
+        {(['alice', 'ben'] as const).map((slot) => {
+          const person = people[slot];
+          const invitation = inviteBySlot[slot];
+          const heading = slot === 'alice' ? t('delegateOne') : t('delegateTwo');
+          const registered = Boolean(person?.publicKey);
+          return <article className="person-row" key={slot} aria-label={heading}>
+            <div className="person-index" aria-hidden="true">{slot === 'alice' ? '1' : '2'}</div>
+            <div className="person-fields min-w-0">
+              <div className="person-heading"><h3>{heading}</h3><span className={`participant-state ${registered ? 'is-complete' : ''}`}>{registered ? t('registered') : invitation ? t('awaitingContributorResponseShort') : t('notInvited')}</span></div>
+              {registered && person && <code className="participant-address" dir="ltr" title={person.address}>{shortAddress(person.address)}</code>}
+              {!registered && !invitation && <p className="participant-hint">{t('inviteContributorHint')}</p>}
+              {invitation && !registered && <div className="delegate-invitation">
+                <p className="participant-hint" role="status">{t('awaitingContributorResponse')}</p>
+                <div className="flex flex-wrap items-center gap-2"><button className="secondary-button" type="button" onClick={() => void copyInvitation(slot)}>{copiedInvitation === slot ? t('copied') : t('copyInvitation')}</button></div>
+                {copiedInvitation === slot && <p className="copy-status" role="status">{t('invitationCopied')}</p>}
+                {linkFallback === slot && <label className="mt-2 grid gap-1.5 text-xs font-medium text-slate-700">{t('invitationLink')}<input className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-3 text-xs" readOnly value={registrationShareUrl(invitation.code)} onFocus={(event) => event.currentTarget.select()}/></label>}
+                <label className="mt-3 grid gap-1.5 text-xs font-medium text-slate-700">{t('responseFor', { delegate: heading })}<textarea className="min-h-20 rounded-md border border-slate-300 bg-white p-3 font-mono text-xs" value={responseTexts[slot]} onChange={(event) => { setResponseTexts((previous) => ({ ...previous, [slot]: event.target.value })); setResponseErrors((previous) => ({ ...previous, [slot]: '' })); }} placeholder={t('responsePlaceholder')} /></label>
+                <div className="mt-2 flex flex-wrap items-center gap-3"><button className="primary-button" type="button" disabled={!responseTexts[slot].trim()} onClick={() => void importProfileForSlot(slot, responseTexts[slot])}>{t('importResponse')}</button><details className="contextual-help"><summary>{t('registrationMeaning')}</summary><p>{t('profileTrustNote')}</p></details></div>
+                {responseErrors[slot] && <p className="form-error" role="alert">{responseErrors[slot]}</p>}
+              </div>}
+              {registered && person && <details className="participant-details"><summary>{t('participantDetails')}</summary><div className="person-inputs"><label>{t('name')}<input value={person.name} maxLength={32} placeholder={heading} onChange={(event) => updatePerson(slot, 'name', event.target.value)}/></label><label>{t('description')}<input value={person.description} maxLength={72} onChange={(event) => updatePerson(slot, 'description', event.target.value)}/></label></div><p>{t('ownerAuthorizationRequired')}</p></details>}
+            </div>
+            {!registered && !invitation && <button className="primary-button" type="button" disabled={creatingInvitation === slot} onClick={() => requestInvitation(slot)}>{creatingInvitation === slot ? t('preparing') : t('inviteContributor')}</button>}
+            {(invitation || registered) && <button className="text-button replacement-action" type="button" disabled={creatingInvitation !== null} onClick={() => requestInvitation(slot)}>{registered ? t('replaceContributor') : t('newInvitation')}</button>}
+          </article>;
+        })}
+      </div>
+      <details className="advanced-registration"><summary>{t('advancedRegistration')}</summary><div className="advanced-registration-body"><label>{t('profileTarget')}<select value={profileSlot} onChange={(event) => setProfileSlot(event.target.value as Slot)}><option value="alice">{t('delegateOne')}</option><option value="ben">{t('delegateTwo')}</option></select></label><label>{t('legacyJson')}<textarea value={profileText} onChange={(event) => setProfileText(event.target.value)} placeholder={t('profilePlaceholder')}/></label><div className="flex flex-wrap gap-2"><button className="secondary-button" type="button" disabled={!profileText.trim()} onClick={() => void importAdvancedJson()}>{t('importProfile')}</button>{connectedIdentity && <button className="secondary-button" type="button" onClick={() => { const data = new Blob([exportLegacyRegistrationJson(connectedIdentity)], { type: 'application/json' }); const url = URL.createObjectURL(data); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'quotacell-registration-v1.json'; anchor.click(); URL.revokeObjectURL(url); }}>{t('exportProfile')}</button>}</div></div></details>
     </section>}
 
     {step === 1 && <section className="setup-section mx-auto mt-7 w-full max-w-[830px]">
@@ -263,11 +327,14 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
         </section>
       </div>
       <p className="quiet-note mt-3 text-xs leading-5 text-slate-500">{t('draftCapacity')}</p>
-      {!canPrepareCreation && <p className="quiet-note mt-3 text-sm text-slate-700" role="status">{pudgeReadOnly ? t('readonlyAction') : t('multiPocketRequired')}</p>}
+      {!canPrepareCreation && <p className="quiet-note mt-3 text-sm text-slate-700" role="status">{pudgeReadOnly ? t('readonlyAction') : t('creationUnavailable')}</p>}
     </section>}
 
     {error && <p className="form-error" role="alert">{error}</p>}
-    <div className="setup-actions mx-auto mt-6 flex w-full max-w-[830px] justify-end gap-2">{step > 0 && <button className="secondary-button" type="button" disabled={preparing} onClick={() => { setError(''); setStep(step - 1); }}>{t('back')}</button>}{step < 2 ? <button className="primary-button" type="button" disabled={preparing} onClick={() => void next()}>{t('next')} <span aria-hidden="true">→</span></button> : <button className="primary-button" type="button" disabled={preparing || !canPrepareCreation} onClick={() => void prepare()}>{preparing ? t('preparing') : t(prepareOnly ? 'prepareForReview' : 'createAndSign')} <span aria-hidden="true">→</span></button>}</div>
+    <div className="setup-actions mx-auto mt-6 flex w-full max-w-[830px] justify-end gap-2">{step > 0 && <button className="secondary-button" type="button" disabled={preparing} onClick={() => { setError(''); setStep(step - 1); }}>{t('back')}</button>}{step < 2 ? <button className="primary-button" type="button" disabled={preparing} onClick={() => void next()}>{t('continue')} <span aria-hidden="true">→</span></button> : <button className="primary-button" type="button" disabled={preparing || !canPrepareCreation} onClick={() => void prepare()}>{preparing ? t('preparing') : t(prepareOnly ? 'prepareForReview' : 'createAndSign')} <span aria-hidden="true">→</span></button>}</div>
+    <AlertDialog.Root open={Boolean(replaceSlot)} onOpenChange={(open) => { if (!open) setReplaceSlot(null); }}>
+      <AlertDialog.Portal><AlertDialog.Overlay className="dialog-overlay"/><AlertDialog.Content className="dialog-content alert-dialog" aria-modal="true"><AlertDialog.Title className="dialog-title">{people[replaceSlot || 'alice']?.publicKey ? t('replaceContributorTitle') : t('replaceInvitationTitle')}</AlertDialog.Title><AlertDialog.Description className="dialog-description">{people[replaceSlot || 'alice']?.publicKey ? t('replaceContributorBody') : t('replaceInvitationBody')}</AlertDialog.Description><div className="dialog-actions"><AlertDialog.Cancel asChild><button className="secondary-button" type="button">{t('cancel')}</button></AlertDialog.Cancel><AlertDialog.Action asChild><button className="primary-button" type="button" onClick={() => { if (replaceSlot) void createInvitation(replaceSlot, true); }}>{t('confirmReplace')}</button></AlertDialog.Action></div></AlertDialog.Content></AlertDialog.Portal>
+    </AlertDialog.Root>
   </main>;
 }
 
@@ -275,4 +342,13 @@ export type { People, Slot };
 
 function shortAddress(address: string) {
   return address.length > 30 ? `${address.slice(0, 15)}…${address.slice(-10)}` : address;
+}
+
+function registrationError(cause: unknown, t: (key: string) => string) {
+  const message = cause instanceof Error ? cause.message.toLowerCase() : String(cause).toLowerCase();
+  if (/different wallet|already assigned/.test(message)) return t('responseDuplicateIdentity');
+  if (/network|unsupported version/.test(message)) return t('responseWrongNetwork');
+  if (/invitation|request id|does not match/.test(message)) return t('responseWrongInvitation');
+  if (/slot/.test(message)) return t('responseWrongSlot');
+  return t('responseInvalid');
 }
