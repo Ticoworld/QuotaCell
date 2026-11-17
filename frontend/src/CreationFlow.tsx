@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { parseCkb } from './amount';
 import { resolveRecipient } from './api';
@@ -17,22 +17,24 @@ type Props = {
   pudgeReadOnly: boolean;
   connectedIdentity: WalletIdentity | null;
   onConnectParticipant: () => Promise<WalletIdentity>;
-  onPrepare: (body: unknown, people: People) => Promise<void>;
   onCancel: () => void;
+  draftKey: string;
 };
 
-export function CreationFlow({ pudgeReadOnly, connectedIdentity, onConnectParticipant, onPrepare, onCancel }: Props) {
+export function CreationFlow({ pudgeReadOnly, connectedIdentity, onConnectParticipant, onCancel, draftKey }: Props) {
   const { t } = useTranslation();
-  const [step, setStep] = useState(0);
-  const [people, setPeople] = useState<People>(initialPeople);
-  const [terms, setTerms] = useState<Terms>(emptyTerms);
+  const [saved] = useState(() => { try { return JSON.parse(localStorage.getItem(draftKey) || 'null'); } catch { return null; } });
+  const [step, setStep] = useState<number>(saved?.step >= 0 && saved?.step <= 2 ? saved.step : 0);
+  const [people, setPeople] = useState<People>(() => ({ ...initialPeople, ...saved?.people, owner: connectedIdentity ? { ...saved?.people?.owner, ...connectedIdentity, name: saved?.people?.owner?.name || '', description: saved?.people?.owner?.description || '' } : null }));
+  const [terms, setTerms] = useState<Terms>(() => ({ ...emptyTerms, ...saved?.terms }));
   const [registering, setRegistering] = useState<Slot | null>(null);
   const [error, setError] = useState('');
-  const [preparing, setPreparing] = useState(false);
+  const preparing = false;
   const [profileText, setProfileText] = useState('');
   const [profileSlot, setProfileSlot] = useState<Slot>('alice');
-  const [inviteBySlot, setInviteBySlot] = useState<Partial<Record<Slot, RegistrationInvitation>>>({});
+  const [inviteBySlot, setInviteBySlot] = useState<Partial<Record<Slot, RegistrationInvitation>>>(() => saved?.inviteBySlot || {});
   const [inviteLink, setInviteLink] = useState('');
+  useEffect(() => { try { localStorage.setItem(draftKey, JSON.stringify({ step, people, terms, inviteBySlot })); } catch { setError(t('draftSaveError')); } }, [draftKey, step, people, terms, inviteBySlot, t]);
 
   const updatePerson = (slot: Slot, key: 'name' | 'description', value: string) => {
     setPeople((prev) => ({ ...prev, [slot]: { ...(prev[slot] || { publicKey: '', address: '', name: '', description: '' }), [key]: value } }));
@@ -53,6 +55,7 @@ export function CreationFlow({ pudgeReadOnly, connectedIdentity, onConnectPartic
     try {
       const invitedSlot = profileSlot === 'alice' ? 'delegate1' : profileSlot === 'ben' ? 'delegate2' : null;
       if (profileSlot === 'owner') throw new Error('Owner identity must be connected directly.');
+      if (!inviteBySlot[profileSlot]) throw new Error(t('invitationRequired'));
       const response = await importRegistrationResponse(profileText, inviteBySlot[profileSlot]);
       if (response.slot && response.slot !== invitedSlot) throw new Error('This response was created for another delegate slot.');
       const identity = response.identity;
@@ -67,8 +70,10 @@ export function CreationFlow({ pudgeReadOnly, connectedIdentity, onConnectPartic
       const invitation = await createRegistrationInvitation(slot === 'alice' ? 'delegate1' : 'delegate2');
       const link = registrationShareUrl(invitation.code);
       setInviteBySlot((previous) => ({ ...previous, [slot]: invitation }));
+      setPeople((previous) => ({ ...previous, [slot]: null }));
+      setProfileSlot(slot);
       setInviteLink(link);
-      await navigator.clipboard.writeText(link);
+      try { await navigator.clipboard.writeText(link); } catch { /* Link remains selectable. */ }
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
   const useConnected = (slot: Slot) => {
@@ -123,33 +128,14 @@ export function CreationFlow({ pudgeReadOnly, connectedIdentity, onConnectPartic
       setStep((value) => Math.min(value + 1, 2));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
-  const prepare = async () => {
-    setError('');
-    setPreparing(true);
-    try {
-      validatePeople();
-      const value = await validateTerms();
-      await onPrepare({
-        id: crypto.randomUUID(),
-        publicKey: people.owner!.publicKey,
-        sharedLimit: value.shared.toString(),
-        delegates: [
-          { publicKey: people.alice!.publicKey, recipient: { codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8', hashType: 'type', args: value.firstArgs }, limit: value.firstLimit.toString(), perPayment: value.firstMax.toString() },
-          { publicKey: people.ben!.publicKey, recipient: { codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8', hashType: 'type', args: value.secondArgs }, limit: value.secondLimit.toString(), perPayment: value.secondMax.toString() },
-        ],
-      }, people);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setPreparing(false); }
-  };
-
   return <main className="setup-page mx-auto w-[min(100%-2rem,64rem)] py-6 md:py-9">
-    <button className="text-button setup-back mb-5 inline-flex items-center gap-2 text-sm text-slate-600 hover:text-blue-700" type="button" onClick={onCancel}>← {t('back')} · {t('brand')}</button>
-    <div className="setup-title flex flex-col gap-4 border-b border-line pb-5 sm:flex-row sm:items-end sm:justify-between"><h1 className="text-2xl font-bold text-navy sm:text-[28px]">{t('setup')}</h1><div className="steps flex items-center justify-between gap-2 sm:gap-5" aria-label={t('setup')}>
+    <button className="text-button setup-back mb-5 inline-flex items-center gap-2 text-sm text-slate-600 hover:text-blue-700" type="button" onClick={onCancel}>← {t('returnPocket')}</button>
+    <div className="setup-title flex flex-col gap-4 border-b border-line pb-5 sm:flex-row sm:items-end sm:justify-between"><h1 className="text-2xl font-bold text-navy sm:text-[28px]">{t('draftTitle')}</h1><div className="steps flex items-center justify-between gap-2 sm:gap-5" aria-label={t('setup')}>
       {[t('participants'), t('spendingRules'), t('review')].map((label, index) => <span className={`step inline-flex items-center gap-2 text-xs ${index === step ? 'current font-semibold text-blue' : index < step ? 'done text-success' : 'text-slate-500'}`} key={label}><i className={`grid size-6 place-items-center rounded-full border text-[11px] not-italic ${index === step ? 'border-blue bg-blue text-white' : index < step ? 'border-success text-success' : 'border-slate-300 text-slate-500'}`}>{index + 1}</i>{label}</span>)}
     </div></div>
 
     {step === 0 && <section className="setup-section mx-auto mt-7 w-full max-w-[830px]">
-      <h2 className="mb-1.5 text-xl font-semibold text-navy">{t('stepPeopleTitle')}</h2><p className="section-intro mb-5 text-sm leading-6 text-muted">{t('stepPeopleBody')}</p>
+      <h2 className="mb-1.5 text-xl font-semibold text-navy">{t('stepPeopleTitle')}</h2><p className="section-intro mb-5 text-sm leading-6 text-muted">{t('draftPeopleBody')}</p>
       <section className="mb-5 grid gap-3 border-y border-line py-4" aria-label={t('profileImport')}>
         <label className="grid max-w-xs gap-1.5 text-xs font-semibold text-slate-700">{t('profileTarget')}<select className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm" value={profileSlot} onChange={(event) => setProfileSlot(event.target.value as Slot)}><option value="alice">{t('delegateOne')}</option><option value="ben">{t('delegateTwo')}</option></select></label>
         <label className="grid gap-1.5 text-xs font-semibold text-slate-700">{t('profileImport')}<textarea className="min-h-24 rounded-md border border-slate-300 bg-white p-3 font-mono text-xs" value={profileText} onChange={(event) => setProfileText(event.target.value)} placeholder={t('profilePlaceholder')} /></label>
@@ -165,9 +151,9 @@ export function CreationFlow({ pudgeReadOnly, connectedIdentity, onConnectPartic
           <div className="person-fields min-w-0"><div className="person-heading mb-3 flex flex-wrap items-baseline gap-2"><h3 className="m-0 text-sm font-semibold text-navy">{heading}</h3>{person && <span className="registered-state text-xs font-medium text-success">{t('registered')}</span>}</div>
             <div className="person-inputs grid gap-3 sm:grid-cols-2"><label className="grid gap-1.5 text-xs font-semibold text-slate-700">{t('name')}<input className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm text-ink focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/20" value={person?.name || ''} maxLength={32} onChange={(event) => updatePerson(slot, 'name', event.target.value)} placeholder={heading}/></label><label className="grid gap-1.5 text-xs font-semibold text-slate-700">{t('description')}<input className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm text-ink focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/20" value={person?.description || ''} maxLength={72} onChange={(event) => updatePerson(slot, 'description', event.target.value)}/></label></div>
             {person && <div className="registered-address"><span title={person.address}>{shortAddress(person.address)}</span></div>}
-          </div><button className="secondary-button connect-participant col-start-2 justify-self-start sm:col-auto" type="button" disabled={registering !== null} onClick={() => void connect(slot)}>{registering === slot ? t('preparing') : person ? t('reconnect') : t('connect')}</button>
+          </div>{slot === 'owner' && <button className="secondary-button connect-participant col-start-2 justify-self-start sm:col-auto" type="button" disabled={registering !== null} onClick={() => void connect(slot)}>{registering === slot ? t('preparing') : person ? t('reconnect') : t('connect')}</button>}
           {slot === 'owner' && connectedIdentity && <button className="secondary-button col-start-2 justify-self-start sm:col-auto" type="button" onClick={() => useConnected(slot)}>{t('useConnectedWallet')}</button>}
-          {(slot === 'alice' || slot === 'ben') && <button className="secondary-button col-start-2 justify-self-start sm:col-auto" type="button" onClick={() => void invite(slot)}>{t('inviteContributor')}</button>}
+          {(slot === 'alice' || slot === 'ben') && <div className="col-start-2 flex flex-wrap gap-2 sm:col-auto"><button className="secondary-button" type="button" onClick={() => void invite(slot)}>{t('inviteContributor')}</button>{inviteBySlot[slot] && <button className="secondary-button" type="button" onClick={() => { const link = registrationShareUrl(inviteBySlot[slot]!.code); setInviteLink(link); void navigator.clipboard.writeText(link).catch(() => setError(t('clipboardUnavailable'))); }}>{t('copyInvitation')}</button>}</div>}
         </article>;
       })}</div>
       <p className="quiet-note mt-3 text-xs leading-5 text-slate-500">{t('nameLocal')}</p>
@@ -193,7 +179,7 @@ export function CreationFlow({ pudgeReadOnly, connectedIdentity, onConnectPartic
     </section>}
 
     {step === 2 && <section className="setup-section mx-auto mt-7 w-full max-w-[830px]">
-      <h2 className="mb-1.5 text-xl font-semibold text-navy">{t('stepReviewTitle')}</h2><p className="section-intro mb-5 text-sm leading-6 text-muted">{t('stepReviewBody')}</p>
+      <h2 className="mb-1.5 text-xl font-semibold text-navy">{t('stepReviewTitle')}</h2><p className="section-intro mb-5 text-sm leading-6 text-muted">{t('draftReviewBody')}</p>
       <div className="review-sheet rounded-lg border border-line bg-white px-4 py-1 sm:px-5">
         <section><div className="review-heading"><h3>{t('participants')}</h3><button className="text-button" type="button" onClick={() => setStep(0)}>{t('edit')}</button></div>
           {keys.map((slot) => <div className="review-row" key={slot}><span>{people[slot]?.name.trim() || (slot === 'owner' ? t('owner') : slot === 'alice' ? t('delegateOne') : t('delegateTwo'))}{people[slot]?.description && <small>{people[slot]?.description}</small>}</span><code>{people[slot]?.address}</code></div>)}
@@ -203,12 +189,12 @@ export function CreationFlow({ pudgeReadOnly, connectedIdentity, onConnectPartic
           {(['alice', 'ben'] as const).map((slot, index) => { const isFirst = index === 0; const limit = isFirst ? terms.firstLimit : terms.secondLimit; const max = isFirst ? terms.firstMax : terms.secondMax; const recipient = isFirst ? terms.firstRecipient : terms.secondRecipient; return <div className="review-delegate" key={slot}><strong>{people[slot]?.name.trim() || (isFirst ? t('delegateOne') : t('delegateTwo'))}</strong><div className="review-row"><span>{t('personalAllowance')}</span><b>{limit} CKB</b></div><div className="review-row"><span>{t('perPayment')}</span><b>{max} CKB</b></div><div className="review-row recipient-review"><span>{t('approvedRecipient')}</span><code dir="ltr">{recipient}</code></div></div>; })}
         </section>
       </div>
-      <p className="quiet-note mt-3 text-xs leading-5 text-slate-500">{t('ownerInputNote')}</p>
+      <p className="quiet-note mt-3 text-xs leading-5 text-slate-500">{t('draftCapacity')}</p><p className="quiet-note mt-3 text-sm text-slate-700" role="status">{t('draftUnavailable')}</p>
     </section>}
 
     {error && <p className="form-error" role="alert">{error}</p>}
     {pudgeReadOnly && <p className="readonly-notice" role="status">{t('readonlyAction')}</p>}
-    <div className="setup-actions mx-auto mt-6 flex w-full max-w-[830px] justify-end gap-2">{step > 0 && <button className="secondary-button" type="button" disabled={preparing} onClick={() => { setError(''); setStep(step - 1); }}>{t('back')}</button>}{step < 2 ? <button className="primary-button" type="button" onClick={() => void next()}>{t('next')} <span aria-hidden="true">→</span></button> : <button className="primary-button" type="button" disabled={preparing || pudgeReadOnly} onClick={() => void prepare()}>{preparing ? t('preparing') : t('createAndSign')} <span aria-hidden="true">→</span></button>}</div>
+    <div className="setup-actions mx-auto mt-6 flex w-full max-w-[830px] justify-end gap-2">{step > 0 && <button className="secondary-button" type="button" disabled={preparing} onClick={() => { setError(''); setStep(step - 1); }}>{t('back')}</button>}{step < 2 ? <button className="primary-button" type="button" onClick={() => void next()}>{t('next')} <span aria-hidden="true">→</span></button> : <button className="secondary-button" type="button" onClick={onCancel}>{t('returnPocket')}</button>}</div>
   </main>;
 }
 

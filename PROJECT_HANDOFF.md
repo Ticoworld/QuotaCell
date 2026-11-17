@@ -1,5 +1,16 @@
 # QuotaCell Project Handoff
 
+## WO19B Public Pocket Viewer
+
+- Added wallet-free direct Pocket lookup at `?view=1&pocket=<type-script-hash>`. Existing `?pocket=...` runtime routing remains unchanged; the public route is selected explicitly with `view=1`.
+- The public viewer runs from the static React frontend and queries Pudge directly. It verifies the testnet genesis, bounded/canonical indexer snapshot, exact live Cell contents, terminal/active QCN4 state, and canonical creation transaction before rendering.
+- Verified the historical closed WO18 Pocket in a fresh in-app browser context with no wallet provider and no QuotaCell backend listening on port 4173. Pocket ID: `0xfd76ec009d7ceeaf4ad1f49806dccb673cbc5530b07f270c28395112a7320898`.
+- Browser showed closed status, 134 CKB terminal policy capacity, canonical indexer height and the disclosure that the terminal Cell does not contain delegate identities, original rules or transaction history. No public-fund amount or historical transaction list is inferred.
+- Deterministic active QCN4 direct-lookup fixture, invalid ID, missing ID, RPC error, wrong-network, stale-tip and indexer-drift checks pass. Browser inspection covered English and Simplified Chinese at mobile and desktop widths; invalid IDs show a readable error.
+- Copy Pocket Link now generates `?view=1&pocket=<type-script-hash>`. No transaction, signing or backend write path is used by public viewing.
+- The pre-existing uncommitted WO19A draft edits were preserved and remain part of the checkout; they were not part of the public-viewer browser acceptance journey.
+- Remaining limitation: public protected-fund discovery is not presented. Closed QCT4 state cannot reconstruct historical delegate details or transaction history. Hosted wallet actions still need a separately secured service; this viewer is read-only.
+
 ## Active Checkout
 
 - Git root: `C:\Users\timot\Desktop\2026\CKB\QuotaCell`

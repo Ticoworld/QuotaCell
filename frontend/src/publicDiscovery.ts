@@ -14,7 +14,7 @@ type Rpc = <T>(method: string, params?: unknown[]) => Promise<T>;
 type Script = { code_hash: string; hash_type: string; args: string };
 type OutPoint = { tx_hash: string; index: string };
 type PublicPocketSummary = { sharedLimit: string; sharedUsed: string; delegates: Array<{ role: 'alice' | 'ben'; publicKey: string; limit: string; used: string; perPayment: string; recipient: string; enabled: boolean }> };
-type Discovery = { pocket: string; role: 'owner' | 'alice' | 'ben'; closed: boolean; summary: PublicPocketSummary | null; outPoint: OutPoint; indexedTip: { block_number: string; block_hash: string } };
+type Discovery = { pocket: string; role: 'owner' | 'alice' | 'ben' | 'public'; closed: boolean; capacity: string; summary: PublicPocketSummary | null; outPoint: OutPoint; indexedTip: { block_number: string; block_hash: string } };
 
 function equal(a: unknown, b: unknown) { return JSON.stringify(a) === JSON.stringify(b); }
 function normalizedScript(value: Script) { return { code_hash: value.code_hash.toLowerCase(), hash_type: value.hash_type, args: value.args.toLowerCase() }; }
@@ -48,7 +48,7 @@ async function httpRpc<T>(method: string, params: unknown[] = []): Promise<T> {
   return body.result as T;
 }
 
-function validateActiveState(cell: any, actor: string) {
+function validateActiveState(cell: any, actor?: string) {
   const state = bytesFromHex(cell.data.content);
   if (state.length !== 466 || Array.from(state.slice(0, 7)).map((v) => v.toString(16).padStart(2, '0')).join('') !== '51434e34040000') throw new Error('Malformed active QCN4 policy state.');
   if ((state[7] & ~3) !== 0 || state.slice(40, 125).some((byte: number) => byte !== 0)) throw new Error('Invalid QCN4 reserved state.');
@@ -70,14 +70,14 @@ function validateActiveState(cell: any, actor: string) {
   const recipients = delegates.map((delegate) => delegate.recipient);
   if (recipients[0].eq(recipients[1]) || recipients.some((recipient) => keys.some((key) => recipient.args === argsFor(key)))) throw new Error('Duplicate Pocket recipient.');
   if (delegates[0].used + delegates[1].used !== sharedUsed) throw new Error('QCN4 shared usage counters do not match.');
-  const role: 'owner' | 'alice' | 'ben' | null = owner.toLowerCase() === actor.toLowerCase() ? 'owner' : delegates.find((item) => item.publicKey.toLowerCase() === actor.toLowerCase())?.role || null;
+  const role: 'owner' | 'alice' | 'ben' | null = actor ? owner.toLowerCase() === actor.toLowerCase() ? 'owner' : delegates.find((item) => item.publicKey.toLowerCase() === actor.toLowerCase())?.role || null : null;
   return { role, summary: {
     sharedLimit: sharedLimit.toString(), sharedUsed: sharedUsed.toString(),
     delegates: delegates.map((delegate, index) => ({ role: delegate.role, publicKey: delegate.publicKey, limit: delegate.limit.toString(), used: delegate.used.toString(), perPayment: delegate.perPayment.toString(), recipient: delegate.recipient.args, enabled: (state[7] & (1 << index)) !== 0 })),
   } };
 }
 
-function candidateRole(cell: any, actor: string): { role: 'owner' | 'alice' | 'ben' | null; closed: boolean; summary: PublicPocketSummary | null } {
+function candidateRole(cell: any, actor?: string): { role: 'owner' | 'alice' | 'ben' | null; closed: boolean; summary: PublicPocketSummary | null } {
   const type = cell.output.type as Script | null;
   if (!type || type.code_hash.toLowerCase() !== POLICY_CODE || type.hash_type !== 'data2' || !/^0x[0-9a-f]{64}$/i.test(type.args)) throw new Error('Invalid QCN4 Type ID.');
   const lock = cell.output.lock as Script;
@@ -86,7 +86,7 @@ function candidateRole(cell: any, actor: string): { role: 'owner' | 'alice' | 'b
   if (state.length === 466) return { ...validateActiveState(cell, actor), closed: false };
   if (state.length === 28 && Array.from(state.slice(0, 8)).map((v) => v.toString(16).padStart(2, '0')).join('') === '5143543404000100') {
     if (BigInt(cell.output.capacity) < 13_400_000_000n) throw new Error('Insufficient terminal QCT4 capacity.');
-    return { role: `0x${Array.from(state.slice(8), (v) => v.toString(16).padStart(2, '0')).join('')}` === argsFor(actor) ? 'owner' as const : null, closed: true, summary: null };
+    return { role: actor && `0x${Array.from(state.slice(8), (v) => v.toString(16).padStart(2, '0')).join('')}` === argsFor(actor) ? 'owner' as const : null, closed: true, summary: null };
   }
   throw new Error('Malformed QCN4/QCT4 state.');
 }
@@ -94,6 +94,18 @@ function candidateRole(cell: any, actor: string): { role: 'owner' | 'alice' | 'b
 export async function discoverPublicPockets(publicKey: string, rpc: Rpc = httpRpc): Promise<Discovery[]> {
   if (!/^0x0[23][0-9a-f]{64}$/i.test(publicKey)) throw new Error('Invalid compressed public key.');
   secp256k1.Point.fromBytes(c.bytesFrom(publicKey));
+  return discover(publicKey, undefined, rpc);
+}
+
+export async function discoverPublicPocket(pocketId: string, rpc: Rpc = httpRpc): Promise<Discovery> {
+  if (!/^0x[0-9a-f]{64}$/i.test(pocketId)) throw new Error('Invalid Pocket ID.');
+  const found = await discover(undefined, pocketId.toLowerCase(), rpc);
+  const exact = found.find((item) => item.pocket.toLowerCase() === pocketId.toLowerCase());
+  if (!exact) throw new Error('Pocket was not found on Pudge.');
+  return exact;
+}
+
+async function discover(publicKey: string | undefined, targetPocket: string | undefined, rpc: Rpc): Promise<Discovery[]> {
   const consensus = await rpc<{ id: string }>('get_consensus');
   if (consensus.id !== 'ckb_testnet' || (await rpc<string>('get_block_hash', ['0x0'])).toLowerCase() !== GENESIS) throw new Error('Public RPC is not the verified Pudge testnet.');
   const [tip, indexed] = await Promise.all([rpc<any>('get_tip_header'), rpc<any>('get_indexer_tip')]);
@@ -124,14 +136,15 @@ export async function discoverPublicPockets(publicKey: string, rpc: Rpc = httpRp
       if (live?.status !== 'live' || !live.cell?.output || live.cell.data?.content !== item.output_data || !equal(normalizeOutput(live.cell.output), normalizeOutput(item.output))) throw new Error('Indexed policy does not match its live chain Cell.');
       const policy = live.cell.output.type as Script;
       const role = candidateRole(live.cell, publicKey);
-      if (!role.role) continue;
+      const pocketId = parseScript(policy).hash().toLowerCase();
+      if (targetPocket ? pocketId !== targetPocket : !role.role) continue;
       const transaction = await rpc<any>('get_transaction', [point.tx_hash]);
       if (transaction?.tx_status?.status !== 'committed' || !transaction.tx_status.block_hash) throw new Error('Indexed policy transaction is not committed.');
       const header = await rpc<any>('get_header', [transaction.tx_status.block_hash]);
       if (!header || header.number !== item.block_number || (await rpc<string>('get_block_hash', [header.number])).toLowerCase() !== header.hash.toLowerCase()) throw new Error('Indexed policy transaction is not canonical.');
       const outputIndex = Number(BigInt(point.index));
       if (!equal(normalizeOutput(transaction.transaction.outputs[outputIndex]), normalizeOutput(live.cell.output)) || transaction.transaction.outputs_data[outputIndex] !== live.cell.data.content) throw new Error('Canonical policy transaction output mismatch.');
-      candidates.push({ pocket: parseScript(policy).hash(), role: role.role, closed: role.closed, summary: role.summary, outPoint: point, indexedTip: indexed, cell: live.cell });
+      candidates.push({ pocket: pocketId, role: role.role || 'public', closed: role.closed, capacity: live.cell.output.capacity, summary: role.summary, outPoint: point, indexedTip: indexed, cell: live.cell });
     }
     if (result.objects.length < PAGE_SIZE) { finished = true; break; }
     if (result.last_cursor === '0x' || result.last_cursor === cursor) throw new Error('Pudge indexer cursor did not advance.');
