@@ -18,3 +18,4 @@ target/
 policy/build/
 test-support/binaries/
 examples/local-chain/results/
+local-state/

@@ -1,8 +1,8 @@
 # WO18A permanent Windows startup
 
-The project checkout and WO18 acceptance runtime are separate from the Codex worktree:
+The project checkout is the permanent Git root. The WO18 acceptance runtime is persistent local state inside that root and must remain separate from tracked source:
 
-- Checkout: `C:\Users\timot\Desktop\2026\CKB\QuotaCell\app`
+- Checkout: `C:\Users\timot\Desktop\2026\CKB\QuotaCell`
 - Runtime: `C:\Users\timot\Desktop\2026\CKB\QuotaCell\local-state\wo18-pudge-acceptance-20261111`
 
 Keep this runtime path for every restart. Do not create a new run directory or replace its journal.
@@ -10,7 +10,7 @@ Keep this runtime path for every restart. Do not create a new run directory or r
 ## Backend
 
 ```powershell
-Set-Location 'C:\Users\timot\Desktop\2026\CKB\QuotaCell\app'
+Set-Location 'C:\Users\timot\Desktop\2026\CKB\QuotaCell'
 $run = 'C:\Users\timot\Desktop\2026\CKB\QuotaCell\local-state\wo18-pudge-acceptance-20261111'
 $env:QUOTACELL_NETWORK = 'pudge-readonly'
 $env:QUOTACELL_DEV_SIGNER = '0'
@@ -21,7 +21,7 @@ node --experimental-strip-types examples/local-chain/working_pocket_server.mjs $
 ## React
 
 ```powershell
-Set-Location 'C:\Users\timot\Desktop\2026\CKB\QuotaCell\app\frontend'
+Set-Location 'C:\Users\timot\Desktop\2026\CKB\QuotaCell\frontend'
 node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort
 ```
 
