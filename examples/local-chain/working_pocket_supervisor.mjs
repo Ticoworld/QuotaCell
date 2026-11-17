@@ -10,12 +10,15 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
 import {acquireRuntimeLock} from './runtime_lock.mjs';
+import {assertGenesisAcceptanceOperation,assertGenesisAcceptanceRoute} from './pudge_acceptance_gate.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const repo=path.resolve(here,'../..');
 const workerScript=path.join(here,'working_pocket_server.mjs');
 const Q='0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e';
 const networkMode=process.env.QUOTACELL_NETWORK||'isolated';
+const genesisAcceptanceOnly=process.env.QUOTACELL_PUDGE_GENESIS_ONLY==='1';
+if(genesisAcceptanceOnly){assert.equal(networkMode,'pudge','Genesis-only acceptance requires Pudge mode');assert.equal(process.env.QUOTACELL_PUDGE_BROADCAST,'1','Genesis-only acceptance requires explicit Pudge broadcast enablement');}
 const pocketPattern=/^0x[0-9a-f]{64}$/i;
 const actorPattern=/^0x0[23][0-9a-f]{64}$/i;
 const uuidPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -240,6 +243,7 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
    if(!validOuterOrigin(req.headers.origin))throw new Error('Invalid browser origin');
    const url=new URL(req.url,origin);
    if(!url.pathname.startsWith('/api/')){res.writeHead(404);res.end('Not found');return;}
+   if(req.method==='POST'&&genesisAcceptanceOnly)assertGenesisAcceptanceRoute(url.pathname);
    if(req.method==='POST'&&networkMode==='pudge-prepare-only'&&!['/api/ckb','/api/reconcile','/api/external/genesis'].includes(url.pathname))throw new Error('Pudge preparation-only mode permits genesis review, not wallet signing or transaction submission');
    if(req.method==='GET'&&url.pathname==='/api/state'){
     const pocket=url.searchParams.get('pocket'),actor=url.searchParams.get('actor');
@@ -255,6 +259,7 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
    if(req.method==='POST'&&url.pathname==='/api/external/submit'){
     const body=await readJson(req);const reservation=getReservation(body.id),reserved={...reservation},contextId=pendingRequests.get(body.id);
     assert(reservation&&contextId&&reservation.context_id===contextId&&reservation.phase==='prepared','Signing request is unknown, expired, or already used');
+    if(genesisAcceptanceOnly)assertGenesisAcceptanceOperation(reserved.operation);
     db.prepare("UPDATE reservations SET phase='submitting' WHERE request_id=? AND phase='prepared'").run(body.id);
     const context=getContext(contextId),result=await workerJson(context,'POST','/api/external/submit',body);
     if(result.status!==200){

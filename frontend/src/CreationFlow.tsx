@@ -92,8 +92,8 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
   const [inviteBySlot, setInviteBySlot] = useState<Partial<Record<Slot, RegistrationInvitation>>>(() => savedInvitations(saved?.inviteBySlot));
   const [responseTexts, setResponseTexts] = useState<Record<'alice' | 'ben', string>>({ alice: '', ben: '' });
   const [responseErrors, setResponseErrors] = useState<Partial<Record<'alice' | 'ben', string>>>({});
-  const [copiedInvitation, setCopiedInvitation] = useState<'alice' | 'ben' | null>(null);
-  const [linkFallback, setLinkFallback] = useState<'alice' | 'ben' | null>(null);
+  const [copiedInvitation, setCopiedInvitation] = useState<Record<'alice' | 'ben', boolean>>({ alice: false, ben: false });
+  const [linkFallback, setLinkFallback] = useState<Record<'alice' | 'ben', boolean>>({ alice: false, ben: false });
   const [replaceSlot, setReplaceSlot] = useState<'alice' | 'ben' | null>(null);
   const [creatingInvitation, setCreatingInvitation] = useState<'alice' | 'ben' | null>(null);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'error' | null>(null);
@@ -158,8 +158,8 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
         setResponseTexts((previous) => ({ ...previous, [slot]: '' }));
         setResponseErrors((previous) => ({ ...previous, [slot]: '' }));
       }
-      setCopiedInvitation(null);
-      setLinkFallback(null);
+      setCopiedInvitation((previous) => ({ ...previous, [slot]: false }));
+      setLinkFallback((previous) => ({ ...previous, [slot]: false }));
       setReplaceSlot(null);
     } catch { setResponseErrors((previous) => ({ ...previous, [slot]: t('invitationCreateError') })); }
     finally { setCreatingInvitation(null); }
@@ -173,12 +173,12 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
     if (!invite) return;
     try {
       await navigator.clipboard.writeText(registrationShareUrl(invite.code));
-      setCopiedInvitation(slot);
-      setLinkFallback(null);
+      setCopiedInvitation((previous) => ({ ...previous, [slot]: true }));
+      setLinkFallback((previous) => ({ ...previous, [slot]: false }));
       setResponseErrors((previous) => ({ ...previous, [slot]: '' }));
     } catch {
-      setCopiedInvitation(null);
-      setLinkFallback(slot);
+      setCopiedInvitation((previous) => ({ ...previous, [slot]: false }));
+      setLinkFallback((previous) => ({ ...previous, [slot]: true }));
       setResponseErrors((previous) => ({ ...previous, [slot]: t('clipboardUnavailable') }));
     }
   };
@@ -254,20 +254,23 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
           const invitation = inviteBySlot[slot];
           const heading = slot === 'alice' ? t('delegateOne') : t('delegateTwo');
           const registered = Boolean(person?.publicKey);
+          const responseImportReady = Boolean(copiedInvitation[slot] || linkFallback[slot]);
           return <article className="person-row" key={slot} aria-label={heading}>
             <div className="person-index" aria-hidden="true">{slot === 'alice' ? '1' : '2'}</div>
             <div className="person-fields min-w-0">
-              <div className="person-heading"><h3>{heading}</h3><span className={`participant-state ${registered ? 'is-complete' : ''}`}>{registered ? t('registered') : invitation ? t('awaitingContributorResponseShort') : t('notInvited')}</span></div>
+              <div className="person-heading"><h3>{heading}</h3><span className={`participant-state ${registered ? 'is-complete' : ''}`}>{registered ? t('registered') : invitation ? t(responseImportReady ? 'awaitingContributorResponseShort' : 'invitationCreated') : t('notInvited')}</span></div>
               {registered && person && <code className="participant-address" dir="ltr" title={person.address}>{shortAddress(person.address)}</code>}
               {!registered && !invitation && <p className="participant-hint">{t('inviteContributorHint')}</p>}
               {invitation && !registered && <div className="delegate-invitation">
-                <p className="participant-hint" role="status">{t('awaitingContributorResponse')}</p>
-                <div className="flex flex-wrap items-center gap-2"><button className="secondary-button" type="button" onClick={() => void copyInvitation(slot)}>{copiedInvitation === slot ? t('copied') : t('copyInvitation')}</button></div>
-                {copiedInvitation === slot && <p className="copy-status" role="status">{t('invitationCopied')}</p>}
-                {linkFallback === slot && <label className="mt-2 grid gap-1.5 text-xs font-medium text-slate-700">{t('invitationLink')}<input className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-3 text-xs" readOnly value={registrationShareUrl(invitation.code)} onFocus={(event) => event.currentTarget.select()}/></label>}
-                <label className="mt-3 grid gap-1.5 text-xs font-medium text-slate-700">{t('responseFor', { delegate: heading })}<textarea className="min-h-20 rounded-md border border-slate-300 bg-white p-3 font-mono text-xs" value={responseTexts[slot]} onChange={(event) => { setResponseTexts((previous) => ({ ...previous, [slot]: event.target.value })); setResponseErrors((previous) => ({ ...previous, [slot]: '' })); }} placeholder={t('responsePlaceholder')} /></label>
-                <div className="mt-2 flex flex-wrap items-center gap-3"><button className="primary-button" type="button" disabled={!responseTexts[slot].trim()} onClick={() => void importProfileForSlot(slot, responseTexts[slot])}>{t('importResponse')}</button><details className="contextual-help"><summary>{t('registrationMeaning')}</summary><p>{t('profileTrustNote')}</p></details></div>
+                {!responseImportReady && <p className="participant-hint">{t('sendInvitationHint')}</p>}
+                <div className="flex flex-wrap items-center gap-2"><button className="secondary-button" type="button" onClick={() => void copyInvitation(slot)}>{copiedInvitation[slot] ? t('copied') : t('copyInvitation')}</button></div>
+                {copiedInvitation[slot] && <p className="copy-status" role="status">{t('invitationCopied')}</p>}
+                {linkFallback[slot] && <label className="mt-2 grid gap-1.5 text-xs font-medium text-slate-700">{t('invitationLink')}<input className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-3 text-xs" readOnly value={registrationShareUrl(invitation.code)} onFocus={(event) => event.currentTarget.select()}/></label>}
                 {responseErrors[slot] && <p className="form-error" role="alert">{responseErrors[slot]}</p>}
+                {responseImportReady && <>
+                  <label className="mt-3 grid gap-1.5 text-xs font-medium text-slate-700">{t('responseFor', { delegate: heading })}<textarea className="min-h-20 rounded-md border border-slate-300 bg-white p-3 font-mono text-xs" value={responseTexts[slot]} onChange={(event) => { setResponseTexts((previous) => ({ ...previous, [slot]: event.target.value })); setResponseErrors((previous) => ({ ...previous, [slot]: '' })); }} placeholder={t('responsePlaceholder')} /></label>
+                  <div className="mt-2 flex flex-wrap items-center gap-3"><button className="primary-button" type="button" disabled={!responseTexts[slot].trim()} onClick={() => void importProfileForSlot(slot, responseTexts[slot])}>{t('importResponse')}</button><details className="contextual-help"><summary>{t('registrationMeaning')}</summary><p>{t('profileTrustNote')}</p></details></div>
+                </>}
               </div>}
               {registered && person && <details className="participant-details"><summary>{t('participantDetails')}</summary><div className="person-inputs"><label>{t('name')}<input value={person.name} maxLength={32} placeholder={heading} onChange={(event) => updatePerson(slot, 'name', event.target.value)}/></label><label>{t('description')}<input value={person.description} maxLength={72} onChange={(event) => updatePerson(slot, 'description', event.target.value)}/></label></div><p>{t('ownerAuthorizationRequired')}</p></details>}
             </div>
