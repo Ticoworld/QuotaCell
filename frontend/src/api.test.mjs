@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {getActorPockets,getPocketState} from './api.ts';
+import {ApiError,getActorPockets,getPocketState,resolvePudgeTransaction,submitTransaction} from './api.ts';
 
 globalThis.window={location:{search:''}};
 
@@ -9,6 +9,38 @@ test('an empty proxy error response is identified as a Pocket backend failure',a
  globalThis.fetch=async()=>new Response('',{status:500});
  try{await assert.rejects(()=>getPocketState(),/Pocket backend returned an empty response/);}
  finally{globalThis.fetch=originalFetch;}
+});
+
+test('a transient submission response failure is marked safe to retry with the same request',async()=>{
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async()=>new Response(JSON.stringify({error:'supervisor restarting'}),{status:503});
+ try{
+  await assert.rejects(()=>submitTransaction('request-id','0x00'),(error)=>error instanceof ApiError&&error.retryable&&error.status===503);
+ }finally{globalThis.fetch=originalFetch;}
+});
+
+test('an absent journal entry and a Pudge miss resolve a transaction as not submitted',async()=>{
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async(url)=>url==='/api/reconcile'
+  ? new Response(JSON.stringify({outcomes:[]}),{status:200})
+  : new Response(JSON.stringify({result:{tx_status:{status:'unknown'}}}),{status:200});
+ try{
+  const result=await resolvePudgeTransaction(`0x${'11'.repeat(32)}`);
+  assert.equal(result.status,'not-sent');
+  assert.equal(result.notSent,true);
+ }finally{globalThis.fetch=originalFetch;}
+});
+
+test('a journaled transaction remains unresolved when Pudge has not returned it yet',async()=>{
+ const originalFetch=globalThis.fetch;
+ const hash=`0x${'22'.repeat(32)}`;
+ globalThis.fetch=async(url)=>url==='/api/reconcile'
+  ? new Response(JSON.stringify({outcomes:[{txHash:hash,state:'uncertain',reason:'Transaction not found'}]}),{status:200})
+  : new Response(JSON.stringify({result:{tx_status:{status:'unknown'}}}),{status:200});
+ try{
+  const result=await resolvePudgeTransaction(hash);
+  assert.equal(result.status,'uncertain');
+ }finally{globalThis.fetch=originalFetch;}
 });
 
 test('empty actor discovery is retried before it can be presented as no Pockets',async()=>{

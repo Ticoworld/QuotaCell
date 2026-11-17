@@ -134,7 +134,14 @@ try{
  const delegates=['alice','ben'].map(role=>({publicKey:actors[role].publicKey,recipient:actors[role+'Recipient'].lock,limit:(200n*ckb).toString(),perPayment:(100n*ckb).toString()}));
  const sharedLimit=(250n*ckb).toString(),draftA=randomUUID(),draftB=randomUUID(),genesisId=randomUUID();
  const genesisBody={draftId:draftA,id:genesisId,publicKey:owner,delegates,sharedLimit};
- const preparedGenesis=await api(origin,'/api/external/genesis',genesisBody);assert.equal(preparedGenesis.status,200,JSON.stringify(preparedGenesis.value));
+ const staleGenesis=await api(origin,'/api/external/genesis',genesisBody);assert.equal(staleGenesis.status,200,JSON.stringify(staleGenesis.value));
+ const staleSignedGenesis=await signPrepared(staleGenesis.value);
+ const supervisorDbPath=path.join(run,'pocket-supervisor.sqlite'),expiredReservationDb=new DatabaseSync(supervisorDbPath);
+ expiredReservationDb.prepare('DELETE FROM reservations WHERE request_id=?').run(genesisId);expiredReservationDb.close();
+ const sendsBeforeExpired=sendCalls,expiredGenesisResult=await api(origin,'/api/external/submit',staleSignedGenesis);
+ assert.equal(expiredGenesisResult.status,200);assert.equal(expiredGenesisResult.value.state,'not-sent');assert.equal(expiredGenesisResult.value.notSent,true);
+ assert.equal(sendCalls,sendsBeforeExpired,'An expired signing request must not broadcast');
+ const freshGenesisBody={...genesisBody,id:randomUUID()},preparedGenesis=await api(origin,'/api/external/genesis',freshGenesisBody);assert.equal(preparedGenesis.status,200,JSON.stringify(preparedGenesis.value));
  const genesisTransaction=c.Transaction.fromBytes(preparedGenesis.value.transaction),genesisInput=genesisTransaction.inputs[0].previousOutput;
  assert(genesisInput.txHash.toLowerCase()!==context.ownerFee.txHash.toLowerCase()||BigInt(genesisInput.index)!==BigInt(context.ownerFee.index),'New Pocket genesis must not consume the existing Pocket fee Cell');
  const genesisSource=await rpc(runtime.url,'get_live_cell',[{tx_hash:genesisInput.txHash,index:num(genesisInput.index)},true]);assert.equal(genesisSource.status,'live');
@@ -142,17 +149,16 @@ try{
  assert(c.Script.from({codeHash:genesisSource.cell.output.lock.code_hash,hashType:genesisSource.cell.output.lock.hash_type,args:genesisSource.cell.output.lock.args}).eq(c.Script.from(actors.owner.lock)),'Genesis must use an owner-controlled funding Cell');
  const collision=await api(origin,'/api/external/genesis',{...genesisBody,draftId:draftB,id:randomUUID()});assert.equal(collision.status,400);assert.match(collision.value.error,/already reserves one of these owner-controlled inputs|Pocket identity is already assigned to another runtime context/);
  const signedGenesis=await signPrepared(preparedGenesis.value);
- const wrongGenesisRequest=await api(origin,'/api/external/submit',{id:randomUUID(),transaction:signedGenesis.transaction});assert.equal(wrongGenesisRequest.status,400,'An unknown request cannot consume the prepared genesis');
+ const wrongGenesisRequest=await api(origin,'/api/external/submit',{id:randomUUID(),transaction:signedGenesis.transaction});assert.equal(wrongGenesisRequest.status,200,'An expired request is reported as a recoverable non-submission');assert.equal(wrongGenesisRequest.value.state,'not-sent');assert.equal(wrongGenesisRequest.value.notSent,true,'An unknown request is explicitly distinguished from an uncertain broadcast');
  const submittedGenesis=await api(origin,'/api/external/submit',signedGenesis);assert.equal(submittedGenesis.status,200,JSON.stringify(submittedGenesis.value));assert.equal(submittedGenesis.value.state,'committed');
  const pocketB=submittedGenesis.value.pocket.toLowerCase();assert.notEqual(pocketA,pocketB);
  const sendAfterGenesis=sendCalls;
- const duplicateGenesis=await api(origin,'/api/external/submit',signedGenesis);assert.equal(duplicateGenesis.status,400,'A committed genesis request cannot be replayed');assert.equal(sendCalls,sendAfterGenesis);
+ const duplicateGenesis=await api(origin,'/api/external/submit',signedGenesis);assert.equal(duplicateGenesis.status,200);assert.equal(duplicateGenesis.value.state,'committed','A replay returns the existing committed outcome');assert.equal(duplicateGenesis.value.pocket,pocketB);assert.equal(sendCalls,sendAfterGenesis,'A replay must not broadcast again');
 
  const discovery=await api(origin,`/api/state?actor=${encodeURIComponent(owner)}`);assert.equal(discovery.status,200);assert.equal(discovery.value.discovery.length,2,'The owner must discover both independently identified Pockets');
  for(const pocket of [pocketA,pocketB]){const state=await api(origin,`/api/state?pocket=${pocket}&actor=${encodeURIComponent(owner)}`);assert.equal(state.status,200,`Pocket ${pocket}: ${JSON.stringify(state.value)}`);assert.equal(state.value.pocket,pocket);assert.equal(state.value.multiPocket,true);}
 
  const prepareDeposit=async(pocket,id)=>api(origin,'/api/external/owner',{id,pocket,operation:'deposit',role:'owner',amount:'100',publicKey:owner});
- const supervisorDbPath=path.join(run,'pocket-supervisor.sqlite');
  const transactionInputs=value=>c.Transaction.fromBytes(value.transaction).inputs.map(item=>({txHash:item.previousOutput.txHash,index:Number(item.previousOutput.index)}));
  const probeRequest=randomUUID(),probeB=await prepareDeposit(pocketB,probeRequest);assert.equal(probeB.status,200,JSON.stringify(probeB.value));
  const selectedBInput=transactionInputs(probeB.value)[0];assert(selectedBInput,'Pocket B probe must contain its owner input');
@@ -174,7 +180,7 @@ try{
  const releasedPrepared=new DatabaseSync(supervisorDbPath,{readOnly:true});assert.equal(releasedPrepared.prepare('SELECT 1 FROM reservations WHERE request_id IN (?,?)').all(sharedRequestA,sharedRequestB).length,0,'Unsigned requests are discarded after supervisor restart');releasedPrepared.close();
 
  const badSignerId=randomUUID(),badSignerRequest=await prepareDeposit(pocketB,badSignerId);assert.equal(badSignerRequest.status,200,JSON.stringify(badSignerRequest.value));
- const badSignerTx=await signPrepared(badSignerRequest.value,'alice');const badSignerResult=await api(origin,'/api/external/submit',badSignerTx);assert.equal(badSignerResult.status,400);assert.match(badSignerResult.value.error,/signature|actor/i);
+ const badSignerTx=await signPrepared(badSignerRequest.value,'alice');const badSignerResult=await api(origin,'/api/external/submit',badSignerTx);assert.equal(badSignerResult.status,200);assert.equal(badSignerResult.value.state,'not-sent');assert.match(badSignerResult.value.error,/signature|actor/i);
 
  const requestA=randomUUID(),requestB=randomUUID();
  const preparedA=await prepareDeposit(pocketA,requestA),preparedB=await prepareDeposit(pocketB,requestB);
@@ -184,9 +190,9 @@ try{
  assert(inputA.txHash.toLowerCase()!==inputB.txHash.toLowerCase()||BigInt(inputA.index)!==BigInt(inputB.index),'Independent Pocket operations must use distinct owner fee inputs');
  const signedA=await signPrepared(preparedA.value),signedB=await signPrepared(preparedB.value);
  const beforeRejectedSubmissions=sendCalls;
- const wrongRequest=await api(origin,'/api/external/submit',{id:randomUUID(),transaction:signedA.transaction});assert.equal(wrongRequest.status,400);
- const crossPocket=await api(origin,'/api/external/submit',{id:requestB,transaction:signedA.transaction});assert.equal(crossPocket.status,400,'A signature prepared for one Pocket must not submit in another context');
- const consumedCrossPocket=await api(origin,'/api/external/submit',signedB);assert.equal(consumedCrossPocket.status,400,'A rejected cross-Pocket submission must not leave its request replayable');assert.equal(sendCalls,beforeRejectedSubmissions,'Rejected requests must not broadcast');
+ const wrongRequest=await api(origin,'/api/external/submit',{id:randomUUID(),transaction:signedA.transaction});assert.equal(wrongRequest.status,200);assert.equal(wrongRequest.value.state,'not-sent');
+ const crossPocket=await api(origin,'/api/external/submit',{id:requestB,transaction:signedA.transaction});assert.equal(crossPocket.status,200,'A cross-Pocket signature is rejected as a known non-submission');assert.equal(crossPocket.value.state,'not-sent');
+ const consumedCrossPocket=await api(origin,'/api/external/submit',signedB);assert.equal(consumedCrossPocket.status,200,'A rejected cross-Pocket submission must not leave its request replayable');assert.equal(consumedCrossPocket.value.state,'not-sent');assert.equal(sendCalls,beforeRejectedSubmissions,'Rejected requests must not broadcast');
  const requestBRecovery=randomUUID(),preparedBRecovery=await prepareDeposit(pocketB,requestBRecovery);assert.equal(preparedBRecovery.status,200,JSON.stringify(preparedBRecovery.value));
  const signedBRecovery=await signPrepared(preparedBRecovery.value);
  const beforeLost=sendCalls;lossesRemaining=2;
@@ -225,7 +231,7 @@ try{
  const reconcileB=await api(origin,'/api/reconcile',{pocket:pocketB});assert.equal(reconcileB.status,200,JSON.stringify(reconcileB.value));assert(reconcileB.value.outcomes.some(item=>item.txHash===signedBRecovery.hash&&item.status==='committed'));
  const finalDb=new DatabaseSync(path.join(run,'pocket-supervisor.sqlite'),{readOnly:true});
  assert.equal(finalDb.prepare('SELECT 1 FROM reservations WHERE request_id IN (?,?)').all(requestA,requestBRecovery).length,0);finalDb.close();
- const replayA=await api(origin,'/api/external/submit',signedA),replayB=await api(origin,'/api/external/submit',signedBRecovery);assert.equal(replayA.status,400);assert.equal(replayB.status,400);assert.equal(sendCalls,beforeLost+2,'Restart and replay checks must not broadcast again');
+ const replayA=await api(origin,'/api/external/submit',signedA),replayB=await api(origin,'/api/external/submit',signedBRecovery);assert.equal(replayA.status,200);assert.equal(replayB.status,200);assert.equal(replayA.value.state,'committed');assert.equal(replayB.value.state,'committed');assert.equal(sendCalls,beforeLost+2,'Restart and replay checks must not broadcast again');
 
  const finalDiscovery=await api(origin,`/api/state?actor=${encodeURIComponent(owner)}`);assert.equal(finalDiscovery.value.discovery.length,2);
  const policyCell=await rpc(runtime.url,'get_live_cell',[point(context.policy),true]);assert.equal(policyCell.status,'live');

@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 import './i18n';
 import './style.css';
 import { formatCkb, progressPercent, shortHash } from './amount';
-import { checkPudgeTransaction, getActorPockets, getPocketState, prepareGenesis, prepareOwnerAction, preparePayment, reconcile, retryJournaledTransaction, submitTransaction } from './api';
+import { ApiError, checkPudgeTransaction, getActorPockets, getPocketState, prepareGenesis, prepareOwnerAction, preparePayment, reconcile, resolvePudgeTransaction, retryJournaledTransaction, submitTransaction } from './api';
 import { CreationFlow, type People } from './CreationFlow';
 import { importMetadata, loadMetadata, saveMetadata, exportMetadata } from './metadata';
 import type { HistoryItem, PocketMetadata, PocketState, PreparedTransaction, TransactionResult, WalletIdentity } from './domain';
@@ -21,7 +21,7 @@ import { createPocketDraft, listPocketDrafts, pocketDraftIndexKey } from './draf
 const wallet = new CkbWalletSession();
 type ActorRole = 'owner' | 'alice' | 'ben' | 'unrecognized';
 type SignedPending = { transaction: string; hash: string };
-type TransactionNotice = { state: string; hash?: string; detail?: string; phase?: string; technicalError?: string };
+type TransactionNotice = { state: string; hash?: string; detail?: string; phase?: string; technicalError?: string; operation?: string };
 type Participant = { publicKey: string; fallback: string; role: 'owner' | 'alice' | 'ben' };
 const PENDING_TRANSACTION_KEY = 'quotacell.pending-pudge-transaction';
 
@@ -357,6 +357,7 @@ function App() {
 
   const prepareCreation = async (body: unknown, people: People) => {
     if (stateStale) throw new Error(t('stateRefreshPaused'));
+    if (state?.unresolved || clientTransactionUnresolved) throw new Error(t('unresolvedBody'));
     if (state?.multiPocket !== true) throw new Error(t('creationUnavailable'));
     if (pudgeReadOnly) throw new Error(t('readonlyAction'));
     setWorking(true); setOperationError('');
@@ -447,24 +448,53 @@ function App() {
     if (pudgePrepareOnly) { setOperationError(t('prepareOnlyNotice')); return; }
     if (!prepared) return;
     if (pudge && hash) {
-      const notice = { state: 'pending', hash, detail: t('submitting') };
+      const notice: TransactionNotice = { state: 'pending', hash, detail: t('submitting'), operation: intent?.operation };
       try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
       setTransactionNotice(notice);
       toast.loading(t('submitting'), { id: 'quotacell-transaction-submit' });
     }
     setWorking(true); setOperationError('');
     try {
-      const result: TransactionResult = await submitTransaction(prepared.id, transaction);
-      const preBroadcastFailure = ['network-check', 'pocket-check', 'input-fee-check', 'dry-run', 'pool-admission'].includes(result.phase || '');
-      const detail = preBroadcastFailure ? t('transactionNotSent')
+      let result: TransactionResult;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          result = await submitTransaction(prepared.id, transaction);
+          break;
+        } catch (cause) {
+          if (!(cause instanceof ApiError) || !cause.retryable || attempt >= 1) throw cause;
+          toast.loading(t('recoveringSubmission'), { id: 'quotacell-transaction-submit' });
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 700 * (attempt + 1)));
+        }
+      }
+      const resultHash = result.txHash || hash;
+      let checkedOutcome: Awaited<ReturnType<typeof resolvePudgeTransaction>> | undefined;
+      if (pudge && result.state === 'uncertain' && resultHash) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (attempt) await new Promise<void>((resolve) => window.setTimeout(resolve, 800 * attempt));
+          try {
+            const checked = await resolvePudgeTransaction(resultHash);
+            if (checked.status !== 'uncertain' && checked.status !== 'unknown') {
+              checkedOutcome = checked;
+              break;
+            }
+          } catch { /* Keep the journaled result visible when Pudge cannot answer yet. */ }
+        }
+      if (checkedOutcome) result = { ...result, state: checkedOutcome.status, reason: checkedOutcome.reason, notSent: checkedOutcome.status === 'not-sent', pocket: checkedOutcome.pocket || result.pocket };
+      }
+      const notSent = result.notSent === true || result.state === 'not-sent';
+      const preBroadcastFailure = notSent || ['network-check', 'pocket-check', 'input-fee-check', 'dry-run', 'pool-admission'].includes(result.phase || '');
+      const detail = notSent && result.phase === 'signing-request' ? t('signingRequestExpired')
+        : preBroadcastFailure ? t('transactionNotSent')
         : result.state === 'committed' ? t('transactionConfirmed')
           : ['pending', 'proposed', 'submitted'].includes(result.state) ? t('transactionSubmitted')
             : result.state === 'rejected' ? t('transactionRejected') : t('submitUnknown');
-      const notice: TransactionNotice = { state: preBroadcastFailure ? 'error' : result.state, hash: result.txHash || hash, phase: result.phase, detail, technicalError: result.error || result.reason };
+      const notice: TransactionNotice = { state: notSent ? 'not-sent' : preBroadcastFailure ? 'error' : result.state, hash: notSent ? undefined : resultHash, phase: result.phase, detail, technicalError: result.error || result.reason, operation: intent?.operation };
       setTransactionNotice(notice);
-      if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
+      if (notSent) { try { sessionStorage.removeItem(PENDING_TRANSACTION_KEY); } catch { /* Session storage is optional. */ } }
+      else if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
       const toastOptions = { id: 'quotacell-transaction-submit' };
-      if (preBroadcastFailure) toast.error(t('transactionNotSent'), toastOptions);
+      if (notSent) toast.error(detail, toastOptions);
+      else if (preBroadcastFailure) toast.error(t('transactionNotSent'), toastOptions);
       else if (result.state === 'committed') toast.success(t('transactionConfirmed'), toastOptions);
       else if (['pending', 'proposed', 'submitted'].includes(result.state)) toast.info(t('transactionSubmitted'), toastOptions);
       else if (result.state === 'rejected') toast.error(t('transactionRejected'), toastOptions);
@@ -477,6 +507,39 @@ function App() {
       await refresh(true);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
+      let resolved: Awaited<ReturnType<typeof resolvePudgeTransaction>> | undefined;
+      if (pudge && hash) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (attempt) await new Promise<void>((resolve) => window.setTimeout(resolve, 800 * attempt));
+          try {
+            const checked = await resolvePudgeTransaction(hash);
+            if (checked.status !== 'uncertain' && checked.status !== 'unknown') { resolved = checked; break; }
+          } catch { /* Leave the result unresolved if Pudge is temporarily unavailable. */ }
+        }
+      }
+      if (resolved?.status === 'not-sent') {
+        const notice: TransactionNotice = { state: 'not-sent', phase: 'signing-request', detail: t('transactionNotSent'), operation: intent?.operation };
+        setTransactionNotice(notice);
+        try { sessionStorage.removeItem(PENDING_TRANSACTION_KEY); } catch { /* Session storage is optional. */ }
+        toast.info(t('transactionNotSent'), { id: 'quotacell-transaction-submit' });
+        setPrepared(null); setIntent(null); setPendingSigned(null);
+        await refresh(true);
+        return;
+      }
+      if (resolved && hash) {
+        const detail = resolved.status === 'committed' ? t('transactionConfirmed')
+          : ['pending', 'proposed'].includes(resolved.status) ? t('transactionSubmitted')
+            : t('transactionRejected');
+        const notice: TransactionNotice = { state: resolved.status, hash, detail, technicalError: resolved.reason, operation: intent?.operation };
+        setTransactionNotice(notice);
+        try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
+        if (resolved.status === 'committed') toast.success(detail, { id: 'quotacell-transaction-submit' });
+        else if (resolved.status === 'rejected') toast.error(detail, { id: 'quotacell-transaction-submit' });
+        else toast.info(detail, { id: 'quotacell-transaction-submit' });
+        setPrepared(null); setIntent(null); setPendingSigned(null);
+        await refresh(true);
+        return;
+      }
       const notice: TransactionNotice = { state: 'uncertain', hash, phase: 'submit', detail: t('submitUnknown'), technicalError: message };
       setTransactionNotice(notice);
       if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
@@ -537,8 +600,16 @@ function App() {
     if (!transactionNotice?.hash) return;
     setNoticeCheckBusy(true);
     try {
-      const result = await checkPudgeTransaction(transactionNotice.hash);
+      const result = await resolvePudgeTransaction(transactionNotice.hash);
       const status = result.status || 'unknown';
+      if (status === 'not-sent') {
+        const notice: TransactionNotice = { state: 'not-sent', phase: 'signing-request', detail: t('transactionNotSent'), operation: transactionNotice.operation };
+        setTransactionNotice(notice);
+        try { sessionStorage.removeItem(PENDING_TRANSACTION_KEY); } catch { /* Session storage is optional. */ }
+        toast.info(t('transactionNotSent'));
+        await refresh(true);
+        return;
+      }
       const detail = status === 'committed'
         ? `${t('statusCommitted')} · ${t('blockNumber')} ${result.blockNumber || '—'}`
         : status === 'pending' ? t('statusPending')
@@ -547,7 +618,7 @@ function App() {
               : status === 'uncertain' ? t('statusCouldNotConfirm')
                 : t('txStillUnknown');
       const preBroadcastFailure = transactionNotice.phase && ['network-check', 'pocket-check', 'input-fee-check', 'dry-run', 'pool-admission'].includes(transactionNotice.phase);
-      const notice: TransactionNotice = { state: status === 'unknown' && preBroadcastFailure ? 'error' : status, hash: transactionNotice.hash, phase: transactionNotice.phase, detail: status === 'unknown' && preBroadcastFailure ? t('transactionNotSent') : detail, technicalError: result.reason };
+      const notice: TransactionNotice = { state: status === 'unknown' && preBroadcastFailure ? 'error' : status, hash: transactionNotice.hash, phase: transactionNotice.phase, detail: status === 'unknown' && preBroadcastFailure ? t('transactionNotSent') : detail, technicalError: result.reason, operation: transactionNotice.operation };
       setTransactionNotice(notice);
       if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
       if (status === 'committed') toast.success(t('transactionConfirmed'));
@@ -604,10 +675,66 @@ function App() {
     const key = value === 'committed' ? 'statusCommitted' : value === 'pending' ? 'statusPending' : value === 'proposed' ? 'statusProposed' : value === 'submitted' ? 'statusSubmitted' : value === 'uncertain' || value === 'unknown' ? 'statusUncertain' : value === 'rejected' ? 'statusRejected' : value === 'failed' || value === 'error' ? 'statusFailed' : '';
     return key ? t(key) : value;
   };
+  useEffect(() => {
+    const current = transactionNotice;
+    const hash = current?.hash;
+    if (!pudge || !hash || !['uncertain', 'pending', 'proposed', 'submitted'].includes(current.state)) return;
+    let active = true;
+    let inFlight = false;
+    let keepChecking = true;
+    let attempt = 0;
+    let timer = 0;
+    const schedule = () => {
+      const delay = Math.min(4_000 * 2 ** Math.min(attempt, 3), 30_000);
+      attempt++;
+      timer = window.setTimeout(() => void poll(), delay);
+    };
+    const poll = async () => {
+      if (!active || inFlight) return;
+      inFlight = true;
+      setNoticeCheckBusy(true);
+      try {
+        const result = await resolvePudgeTransaction(hash);
+        if (!active) return;
+        if (result.status === 'not-sent') {
+          keepChecking = false;
+          const notice: TransactionNotice = { state: 'not-sent', phase: 'signing-request', detail: t('transactionNotSent'), operation: current.operation };
+          setTransactionNotice((latest) => latest?.hash === hash ? notice : latest);
+          try { sessionStorage.removeItem(PENDING_TRANSACTION_KEY); } catch { /* Session storage is optional. */ }
+          toast.info(t('transactionNotSent'), { id: 'quotacell-transaction-submit' });
+          await refresh(true);
+        } else if (['committed', 'pending', 'proposed', 'submitted', 'rejected'].includes(result.status)) {
+          const terminal = ['committed', 'rejected'].includes(result.status);
+          const operation = result.operation || current.operation;
+          keepChecking = !terminal;
+          const detail = result.status === 'committed' ? t('transactionConfirmed')
+            : ['pending', 'proposed', 'submitted'].includes(result.status) ? t('transactionSubmitted')
+              : t('transactionRejected');
+          const notice: TransactionNotice = { state: result.status, hash, detail, technicalError: result.reason, operation };
+          setTransactionNotice((latest) => latest?.hash === hash ? notice : latest);
+          try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
+          if (terminal) {
+            if (result.status === 'committed' && operation === 'genesis' && result.pocket) {
+              window.history.replaceState(null, '', `${window.location.pathname}?${new URLSearchParams({ pocket: result.pocket })}`);
+              setShowCreation(false); setActiveDraftId(''); setShowPocketList(false);
+            }
+            await refresh(true);
+          }
+        }
+      } catch { /* Retry automatically while the transaction outcome remains unknown. */ }
+      finally {
+        inFlight = false;
+        if (active) setNoticeCheckBusy(false);
+        if (active && keepChecking) schedule();
+      }
+    };
+    timer = window.setTimeout(() => void poll(), 1_200);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [pudge, refresh, t, transactionNotice?.hash, transactionNotice?.operation, transactionNotice?.state]);
   const explorerUrl = (hash: string) => `https://pudge.explorer.nervos.org/transaction/${hash}`;
   const displayIdentityRole = role === 'owner' ? t('owner') : role === 'alice' ? labelFor(delegates.find((d) => d.role === 'alice')?.publicKey, t('delegateOne')) : role === 'ben' ? labelFor(delegates.find((d) => d.role === 'ben')?.publicKey, t('delegateTwo')) : role === 'unrecognized' ? t('unknownRole') : '';
   const identityDiscoveryLoading = Boolean(identity && !loadError && (stateActor !== identity.publicKey.toLowerCase() || (state?.empty && refreshing)));
-  const noticeTitle = transactionNotice?.state === 'uncertain' ? t('statusUncertain') : transactionNotice?.state === 'error' && ['network-check', 'pocket-check', 'input-fee-check', 'dry-run', 'pool-admission'].includes(transactionNotice.phase || '') ? t('statusNotSent') : transactionNotice?.state === 'error' ? t('statusFailed') : transactionNotice?.state === 'checked' ? t('checkedStatus') : transactionNotice?.state === 'metadata' ? t('metadataLocal') : transactionNotice ? historyState(transactionNotice.state) : '';
+  const noticeTitle = transactionNotice?.state === 'uncertain' ? t('statusUncertain') : transactionNotice?.state === 'not-sent' || transactionNotice?.state === 'error' && (transactionNotice.phase === 'signing-request' || ['network-check', 'pocket-check', 'input-fee-check', 'dry-run', 'pool-admission'].includes(transactionNotice.phase || '')) ? t('statusNotSent') : transactionNotice?.state === 'error' ? t('statusFailed') : transactionNotice?.state === 'checked' ? t('checkedStatus') : transactionNotice?.state === 'metadata' ? t('metadataLocal') : transactionNotice ? historyState(transactionNotice.state) : '';
 
   return <>
     <header className="topbar sticky top-0 z-40 flex h-16 w-full items-center justify-between gap-3 border-b border-line bg-white/95 px-4 backdrop-blur sm:px-6 lg:px-[max(26px,calc((100vw-1160px)/2))]"><a className="brand inline-flex shrink-0 items-center gap-2.5 text-lg font-bold text-navy no-underline" href="#home" aria-label={t('brand')}><CellMark/><span>{t('brand')}</span></a>
@@ -625,7 +752,7 @@ function App() {
     {stateStale && !selectedPocketLoading && !selectedPocketError && !showPocketList && <div className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)] rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900" role="status">{t('stateRefreshPaused')}</div>}
     {showCreation && transactionNotice && <TransactionNoticePanel notice={transactionNotice} title={noticeTitle} pudge={pudge} explorerUrl={explorerUrl} t={t} className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)]" onCheckStatus={() => void checkNoticeStatus()} checkingStatus={noticeCheckBusy}/>}
 
-    {showCreation && identity && state?.genesis && activeDraftId && activeDraftKey ? <CreationFlow key={`${state.genesis}:${activeDraftOwner}:${activeDraftId}`} draftId={activeDraftId} draftIndexKey={draftIndexKey} draftKey={activeDraftKey} pudgeReadOnly={pudgeReadOnly} prepareOnly={pudgePrepareOnly} canPrepareCreation={state.multiPocket === true && !pudgeReadOnly} connectedIdentity={identity} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => { setActiveDraftId(''); setActiveDraftOwner(''); setShowCreation(false); setShowPocketList(false); setPocketListError(''); }}/> : state?.creationRecovery ? <main className="loading-page mx-auto grid min-h-[55vh] w-[min(100%-2rem,64rem)] place-items-center text-slate-600"><section className="load-error w-full max-w-xl rounded-lg border border-red-200 bg-white p-5 shadow-sm" role="alert"><h1 className="text-lg font-semibold text-red-900">{t('creationRecoveryTitle')}</h1><p className="text-sm leading-6 text-slate-700">{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p className="break-all text-xs text-slate-600"><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
+    {showCreation && identity && state?.genesis && activeDraftId && activeDraftKey ? <CreationFlow key={`${state.genesis}:${activeDraftOwner}:${activeDraftId}`} draftId={activeDraftId} draftIndexKey={draftIndexKey} draftKey={activeDraftKey} pudgeReadOnly={pudgeReadOnly} prepareOnly={pudgePrepareOnly} canPrepareCreation={state.multiPocket === true && !pudgeReadOnly && !actionsBlocked} creationBlocked={Boolean(state.unresolved || clientTransactionUnresolved)} connectedIdentity={identity} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => { setActiveDraftId(''); setActiveDraftOwner(''); setShowCreation(false); setShowPocketList(false); setPocketListError(''); }}/> : state?.creationRecovery ? <main className="loading-page mx-auto grid min-h-[55vh] w-[min(100%-2rem,64rem)] place-items-center text-slate-600"><section className="load-error w-full max-w-xl rounded-lg border border-red-200 bg-white p-5 shadow-sm" role="alert"><h1 className="text-lg font-semibold text-red-900">{t('creationRecoveryTitle')}</h1><p className="text-sm leading-6 text-slate-700">{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p className="break-all text-xs text-slate-600"><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
       : selectedPocketLoading ? <main className="mx-auto min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] py-7 sm:py-10" aria-busy="true"><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><h1 className="m-0 text-2xl font-bold text-navy">{t('openingPocket')}</h1><p className="mt-1 text-sm text-slate-600" role="status">{t('verifyingPocket')}</p></div><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('backToMyPockets')}</button></div><section className="grid grid-cols-1 gap-3 md:grid-cols-2" aria-hidden="true"><div className="animate-pulse rounded-lg border border-line bg-white p-5"><div className="mb-4 h-3 w-28 rounded-sm bg-slate-200"/><div className="mb-3 h-9 w-40 rounded-sm bg-slate-100"/><div className="h-3 w-3/4 rounded-sm bg-slate-100"/></div><div className="animate-pulse rounded-lg border border-line bg-white p-5"><div className="mb-4 h-3 w-32 rounded-sm bg-slate-200"/><div className="mb-3 h-9 w-36 rounded-sm bg-slate-100"/><div className="h-3 w-2/3 rounded-sm bg-slate-100"/></div></section><div className="mt-7 divide-y divide-slate-200 border-y border-slate-200" aria-hidden="true">{[0, 1, 2].map((item) => <div key={item} className="flex items-center justify-between gap-4 py-4"><div className="animate-pulse space-y-2"><div className="h-3 w-32 rounded-sm bg-slate-200"/><div className="h-3 w-56 max-w-[70vw] rounded-sm bg-slate-100"/></div><div className="h-10 w-28 animate-pulse rounded-md bg-slate-100"/></div>)}</div></main>
       : selectedPocketError ? <main className="mx-auto grid min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] place-items-center py-10"><section className="w-full max-w-xl rounded-md border border-red-200 bg-white p-5" role="alert"><h1 className="m-0 text-lg font-semibold text-navy">{t('pocketLoadFailed')}</h1><p className="my-2 text-sm leading-6 text-slate-600">{t('pocketCouldNotBeVerified')}</p><div className="mt-4 flex flex-wrap gap-2"><button className="primary-button" type="button" onClick={() => void loadSelectedPocket(selectedPocketId)}>{t('retry')}</button><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('backToMyPockets')}</button></div></section></main>
       : state?.connectRequired ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><h1 className="mb-2 text-xl font-semibold text-navy">{t('activePocket')}</h1><p className="mb-5 text-sm text-slate-600">{t('pocketLinkConnect')}</p><button className="primary-button" type="button" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button></main>
@@ -729,10 +856,10 @@ function TransactionNoticePanel({ notice, title, pudge, explorerUrl, t, classNam
       : ['error', 'rejected', 'failed'].includes(notice.state) ? 'error' : 'info';
   const canCheck = Boolean(pudge && notice.hash && onCheckStatus && ['uncertain', 'pending', 'proposed', 'submitted', 'unknown'].includes(notice.state));
   const message = notice.detail || (notice.hash ? notice.state : t('noUncertainTransactions'));
-  const canDismiss = Boolean(onDismiss && ['committed', 'checked', 'error', 'rejected', 'failed'].includes(notice.state));
+  const canDismiss = Boolean(onDismiss && ['committed', 'checked', 'not-sent', 'error', 'rejected', 'failed'].includes(notice.state));
   return <section className={`transaction-notice notice-${tone} ${className}`} role={tone === 'error' || tone === 'warning' ? 'alert' : 'status'} aria-live={tone === 'error' || tone === 'warning' ? 'assertive' : 'polite'} aria-atomic="true">
     <span className="notice-marker" aria-hidden="true">{tone === 'success' ? '✓' : tone === 'info' ? 'i' : '!'}</span>
-    <div className="notice-content"><strong>{title}</strong><p>{message}</p>
+    <div className="notice-content"><strong>{title}</strong><p>{message}</p>{['uncertain', 'pending', 'proposed', 'submitted'].includes(notice.state) && <p className="mt-1 text-xs text-slate-600">{t('automaticTracking')}</p>}
       {notice.hash && <div className="notice-transaction"><code dir="ltr">{notice.hash}</code>{pudge && <a href={explorerUrl(notice.hash)} target="_blank" rel="noreferrer">{t('explorer')}</a>}</div>}
       {(notice.technicalError || notice.phase) && <details className="notice-technical"><summary>{t('technical')}</summary>{notice.phase && <p><code>{notice.phase}</code></p>}{notice.technicalError && <pre dir="ltr">{notice.technicalError}</pre>}</details>}
     </div>

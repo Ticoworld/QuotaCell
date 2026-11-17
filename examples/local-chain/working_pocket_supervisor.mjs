@@ -147,7 +147,7 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
   return {transaction,inputs,keys};
  }
  function acquireReservation({id,context,pocket,inputs,operation}){
-  const expires=Date.now()+330000,keys=inputs.map(inputKey);
+  const expires=Date.now()+31*60_000,keys=inputs.map(inputKey);
   db.exec('BEGIN IMMEDIATE');
   try{
    assert(!getReservation(id),'Signing request ID is already reserved');
@@ -161,6 +161,10 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
  }
  function releaseReservation(id){db.prepare('DELETE FROM reservations WHERE request_id=?').run(id);pendingRequests.delete(id);}
  async function inspectIntent(context,id){const result=await workerJson(context,'GET',`/api/internal/intent?id=${encodeURIComponent(id)}`);assert.equal(result.status,200);return result.data.intent;}
+ async function findIntent(id){const found=await Promise.all(contexts().map(async context=>{const intent=await inspectIntent(context,id);return intent?{context,intent}:null;}));return found.find(Boolean)||null;}
+ function intentOutcome(intent){return {txHash:intent.txHash,state:['committed','pending','proposed','submitted','rejected'].includes(intent.state)?intent.state:'uncertain',phase:intent.phase,operation:intent.operation,pocket:intent.operation==='genesis'?intent.pocket:undefined};}
+ function signedHash(transaction){try{return /^0x[0-9a-f]+$/i.test(transaction||'')?c.Transaction.fromBytes(transaction).hash():undefined;}catch{return undefined;}}
+ function sendNotSubmitted(res,error,txHash){sendJson(res,200,{state:'not-sent',notSent:true,phase:'signing-request',error,txHash});}
  async function seedUnresolved(context){
   const result=await workerJson(context,'GET','/api/internal/intents');assert.equal(result.status,200);
   for(const intent of result.data.intents||[]){
@@ -258,15 +262,30 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
    }
    if(req.method==='POST'&&url.pathname==='/api/external/submit'){
     const body=await readJson(req);const reservation=getReservation(body.id),reserved={...reservation},contextId=pendingRequests.get(body.id);
-    assert(reservation&&contextId&&reservation.context_id===contextId&&reservation.phase==='prepared','Signing request is unknown, expired, or already used');
+    if(!reservation||!contextId||reservation.context_id!==contextId||reservation.phase!=='prepared'){
+     const existing=await findIntent(body.id);
+     if(existing){sendJson(res,200,intentOutcome(existing.intent));return;}
+     if(reservation?.phase==='submitting'){
+      sendJson(res,200,{txHash:signedHash(body.transaction)||reservation.tx_hash||undefined,state:'uncertain',phase:'submit',error:'This transaction submission is still being processed.'});return;
+     }
+     if(reservation?.phase==='journaled')throw new Error('A saved transaction intent needs reconciliation before another submission.');
+     if(contextId){const staleContext=getContext(contextId);if(staleContext)try{await workerJson(staleContext,'POST','/api/internal/cancel',{id:body.id});}catch{}pendingRequests.delete(body.id);}
+     sendNotSubmitted(res,'This wallet request expired or was already used before submission. No transaction was sent.',signedHash(body.transaction));return;
+    }
     if(genesisAcceptanceOnly)assertGenesisAcceptanceOperation(reserved.operation);
     db.prepare("UPDATE reservations SET phase='submitting' WHERE request_id=? AND phase='prepared'").run(body.id);
-    const context=getContext(contextId),result=await workerJson(context,'POST','/api/external/submit',body);
+    const context=getContext(contextId);let result;
+    try{result=await workerJson(context,'POST','/api/external/submit',body);}
+    catch(error){
+     let intent;try{intent=await inspectIntent(context,body.id);}catch{}
+     if(intent){db.prepare("UPDATE reservations SET phase='journaled',tx_hash=? WHERE request_id=?").run(intent.txHash,body.id);pendingRequests.delete(body.id);sendJson(res,200,intentOutcome(intent));return;}
+     sendJson(res,200,{txHash:signedHash(body.transaction),state:'uncertain',phase:'submit',error:error?.message||String(error)});return;
+    }
     if(result.status!==200){
      const intent=await inspectIntent(context,body.id);
      if(intent)db.prepare("UPDATE reservations SET phase='journaled',tx_hash=? WHERE request_id=?").run(intent.txHash,body.id);
-     else releaseReservation(body.id);
-     pendingRequests.delete(body.id);await proxyResult(res,result);return;
+     else {releaseReservation(body.id);sendNotSubmitted(res,result.data?.error||'The transaction was rejected before submission. No transaction was sent.',signedHash(body.transaction));return;}
+     pendingRequests.delete(body.id);sendJson(res,200,intentOutcome(intent));return;
     }
     pendingRequests.delete(body.id);
     if(result.data.state==='committed')releaseReservation(body.id);

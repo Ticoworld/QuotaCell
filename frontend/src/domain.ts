@@ -79,6 +79,7 @@ export type PreparedTransaction = {
 export type TransactionResult = {
   txHash: string;
   state: string;
+  notSent?: boolean;
   error?: string;
   reason?: string;
   phase?: string;

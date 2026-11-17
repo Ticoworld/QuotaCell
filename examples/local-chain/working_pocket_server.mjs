@@ -220,7 +220,7 @@ async function prepareGenesis(body){
   const tx=built.transaction,client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}),info=await tx.getSignHashInfo(lockFor(body.publicKey),client);
   const next={...environment,Q:{codeHash:built.policy.codeHash,hashType:built.policy.hashType,args:built.policy.args},F:{codeHash:hashes.F,hashType:'data1',args:built.policy.hash()},policy:{txHash:tx.hash(),index:0},ownerFee:{txHash:tx.hash(),index:1},fund:null,seeds:{},expected:{ownerPublicKey:body.publicKey,delegates:body.delegates,sharedLimit:body.sharedLimit}};
   const identities=Object.fromEntries([['owner',body.publicKey],...body.delegates.map((d,i)=>[i?'ben':'alice',d.publicKey])].map(([role,publicKey])=>[role,{publicKey,lock:JSON.parse(JSON.stringify(lockFor(publicKey)))}]));
-  requests.set(body.id,{bytes:tx.toHex(),message:info.message,position:0,publicKey:body.publicKey,points:[ownerInput.outPoint],pocket:built.policy.hash(),amount:'0',recipient:lockFor(body.publicKey).args,operation:'genesis',expires:Date.now()+300000,next,identities});
+  requests.set(body.id,{bytes:tx.toHex(),message:info.message,position:0,publicKey:body.publicKey,points:[ownerInput.outPoint],pocket:built.policy.hash(),amount:'0',recipient:lockFor(body.publicKey).args,operation:'genesis',expires:Date.now()+30*60_000,next,identities});
   const fee=await transactionFee(tx);
   return {id:body.id,transaction:tx.toHex(),publicKey:body.publicKey,genesis:profile.genesisHeader.hash,fee,ownerInputCapacity:ownerInput.cell.output.capacity.toString(),ownerChangeCapacity:tx.outputs[1].capacity.toString(),policyCapacity:tx.outputs[0].capacity.toString(),minimumOwnerInputCapacity:(tx.outputs[0].capacity+6100000000n+BigInt(fee)).toString(),terminalCapacity:'13400000000'};
  }finally{busy=false;}
@@ -238,7 +238,7 @@ async function prepareExternal(body){
   const actor=await live(snap.state.seeds[body.role]),amount=parseCkb(body.amount);
   const tx=buildPayment({policy:snap.p,actor,funds:snap.fs,deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:await selectedFee()});
   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]});const lock=c.Script.from(actors[body.role].lock),info=await tx.getSignHashInfo(lock,client);assert.equal(info.position,1);
-  const record={bytes:tx.toHex(),message:info.message,position:info.position,publicKey:grant.publicKey,points:[snap.state.policy,snap.state.seeds[body.role],...snap.state.funds||[snap.state.fund]],pocket:snap.view.pocket,amount:amount.toString(),recipient:body.recipient,operation:'pay',expires:Date.now()+300000};
+  const record={bytes:tx.toHex(),message:info.message,position:info.position,publicKey:grant.publicKey,points:[snap.state.policy,snap.state.seeds[body.role],...snap.state.funds||[snap.state.fund]],pocket:snap.view.pocket,amount:amount.toString(),recipient:body.recipient,operation:'pay',expires:Date.now()+30*60_000};
   requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash,fee:await transactionFee(tx)};
  }finally{busy=false;}
 }
@@ -386,7 +386,7 @@ async function ownerAction(body,external=false){
   if(external){
    for(const [id,request] of requests)if(request.expires<=Date.now())requests.delete(id);
    assert(requests.size<128,'Too many outstanding signing requests');
-   const record={bytes:tx.toHex(),message:info.message,position,publicKey:actors.owner.publicKey,points:inputs,pocket:snap.view.pocket,amount:amount.toString(),recipient:actors.owner.lock.args,operation:op,expires:Date.now()+300000};
+   const record={bytes:tx.toHex(),message:info.message,position,publicKey:actors.owner.publicKey,points:inputs,pocket:snap.view.pocket,amount:amount.toString(),recipient:actors.owner.lock.args,operation:op,expires:Date.now()+30*60_000};
    requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash,fee:await transactionFee(tx)};
   }
   const secret=await load('keys/owner'),signer=new c.SignerCkbPrivateKey(client,secret.privateKey);assert.equal(signer.publicKey,actors.owner.publicKey);
@@ -435,10 +435,10 @@ const server=http.createServer(async(req,res)=>{
   }
   if(req.method==='POST'&&req.url==='/api/reconcile'){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');assert(!busy,'Another action is in progress');busy=true;
-   try{await verifyEnvironment();const outcomes=[];if(networkMode.startsWith('pudge')){for(const item of rows()){const result=await observePublicTransaction({rpc,hash:item.tx_hash,signed:JSON.parse(item.signed),priorState:item.state});update.run(result.state,item.id);outcomes.push({txHash:item.tx_hash,...result});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));return;}for(const item of rows().filter(x=>x.state!=='committed')){let tx=await rpc('get_transaction',[item.tx_hash]);if(['pending','proposed'].includes(tx?.tx_status?.status)){for(let i=0;i<8;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));tx=await rpc('get_transaction',[item.tx_hash]);if(await canonicalCommit(tx))break;}}if(await canonicalCommit(tx))update.run('committed',item.id);outcomes.push({txHash:item.tx_hash,status:tx?.tx_status?.status||'unknown'});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));}finally{busy=false;}return;
+   try{await verifyEnvironment();const outcomes=[];if(networkMode.startsWith('pudge')){for(const item of rows()){const result=await observePublicTransaction({rpc,hash:item.tx_hash,signed:JSON.parse(item.signed),priorState:item.state});update.run(result.state,item.id);outcomes.push({txHash:item.tx_hash,operation:item.operation,...result});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));return;}for(const item of rows().filter(x=>x.state!=='committed')){let tx=await rpc('get_transaction',[item.tx_hash]);if(['pending','proposed'].includes(tx?.tx_status?.status)){for(let i=0;i<8;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));tx=await rpc('get_transaction',[item.tx_hash]);if(await canonicalCommit(tx))break;}}if(await canonicalCommit(tx))update.run('committed',item.id);outcomes.push({txHash:item.tx_hash,status:tx?.tx_status?.status||'unknown',operation:item.operation});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));}finally{busy=false;}return;
   }
   res.writeHead(404);res.end('Not found');
- }catch(e){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:e.message}));}
+ }catch(e){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:e.message,phase:e.validationPhase}));}
 });
 let shuttingDown=false;
 const shutdown=()=>{

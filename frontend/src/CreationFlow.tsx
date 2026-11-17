@@ -57,6 +57,7 @@ type Props = {
   pudgeReadOnly: boolean;
   prepareOnly: boolean;
   canPrepareCreation: boolean;
+  creationBlocked: boolean;
   connectedIdentity: WalletIdentity | null;
   onConnectParticipant: () => Promise<WalletIdentity>;
   onPrepare: (body: unknown, people: People) => Promise<void>;
@@ -66,7 +67,7 @@ type Props = {
   draftKey: string;
 };
 
-export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, connectedIdentity, onConnectParticipant, onPrepare, onCancel, draftId, draftIndexKey, draftKey }: Props) {
+export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, creationBlocked, connectedIdentity, onConnectParticipant, onPrepare, onCancel, draftId, draftIndexKey, draftKey }: Props) {
   const { t } = useTranslation();
   const [initialDraft] = useState(() => readDraft(draftKey));
   const saved = initialDraft.value;
@@ -312,7 +313,7 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
         </section>
       </div>
       <p className="quiet-note mt-3 text-xs leading-5 text-slate-500">{t('draftCapacity')}</p>
-      {!canPrepareCreation && <p className="quiet-note mt-3 text-sm text-slate-700" role="status">{pudgeReadOnly ? t('readonlyAction') : t('creationUnavailable')}</p>}
+      {!canPrepareCreation && <p className="quiet-note mt-3 text-sm text-slate-700" role="status">{pudgeReadOnly ? t('readonlyAction') : creationBlocked ? t('unresolvedBody') : t('creationUnavailable')}</p>}
     </section>}
 
     {error && <p className="form-error" role="alert">{error}</p>}
