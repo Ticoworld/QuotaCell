@@ -1,10 +1,14 @@
 import type { PocketState, PreparedTransaction, TransactionResult } from './domain';
 
 async function request<T>(url: string, body?: unknown): Promise<T> {
+  const selectedPocket = new URLSearchParams(window.location.search).get('pocket');
+  const scopedBody = selectedPocket && !url.endsWith('/api/external/genesis') && body && typeof body === 'object' && !Array.isArray(body)
+    ? { ...body as Record<string, unknown>, pocket: selectedPocket }
+    : body;
   const response = await fetch(url, body === undefined ? { cache: 'no-store' } : {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(scopedBody),
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data?.error || `Request failed (${response.status}).`);
@@ -16,6 +20,7 @@ export const getPocketState = (publicKey?: string) => {
   if (publicKey) params.set('actor', publicKey);
   return request<PocketState>(`/api/state${params.has('pocket') || publicKey ? `?${new URLSearchParams({ ...(params.has('pocket') ? { pocket: params.get('pocket') || '' } : {}), ...(publicKey ? { actor: publicKey } : {}) })}` : ''}`);
 };
+export const getActorPockets = (publicKey: string) => request<PocketState>(`/api/state?actor=${encodeURIComponent(publicKey)}`);
 export const prepareGenesis = (body: unknown) => request<PreparedTransaction>('/api/external/genesis', body);
 export const preparePayment = (body: unknown) => request<PreparedTransaction>('/api/external/prepare', body);
 export const prepareOwnerAction = (body: unknown) => request<PreparedTransaction>('/api/external/owner', body);

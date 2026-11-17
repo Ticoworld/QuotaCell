@@ -41,6 +41,7 @@ export type PocketState = {
   creationRecovery?: { txHash: string; state: string; reason?: string; recoveryAvailable: boolean };
   networkMode: string;
   genesis: string;
+  multiPocket?: boolean;
   pocket?: string;
   owner?: string;
   fundShannons?: string;
@@ -76,4 +77,5 @@ export type TransactionResult = {
   error?: string;
   reason?: string;
   phase?: string;
+  pocket?: string;
 };

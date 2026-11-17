@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import './i18n';
 import './style.css';
 import { formatCkb, progressPercent, shortHash } from './amount';
-import { checkPudgeTransaction, getPocketState, prepareGenesis, prepareOwnerAction, preparePayment, reconcile, retryJournaledTransaction, submitTransaction } from './api';
+import { checkPudgeTransaction, getActorPockets, getPocketState, prepareGenesis, prepareOwnerAction, preparePayment, reconcile, retryJournaledTransaction, submitTransaction } from './api';
 import { CreationFlow, type People } from './CreationFlow';
 import { importMetadata, loadMetadata, saveMetadata, exportMetadata } from './metadata';
 import type { HistoryItem, PocketMetadata, PocketState, PreparedTransaction, TransactionResult, WalletIdentity } from './domain';
@@ -14,6 +14,8 @@ import { CkbWalletSession, WalletProviderUnavailableError } from './wallet';
 import { RegistrationPage } from './RegistrationPage';
 import { PocketDiscoveryPage } from './PocketDiscoveryPage';
 import { OperationDialog, type Intent, type Operation } from './OperationDialog';
+import { PocketPicker } from './PocketPicker';
+import { createPocketDraft, listPocketDrafts, pocketDraftIndexKey } from './drafts';
 
 const wallet = new CkbWalletSession();
 type ActorRole = 'owner' | 'alice' | 'ben' | 'unrecognized';
@@ -87,6 +89,12 @@ function App() {
   const [pendingSigned, setPendingSigned] = useState<SignedPending | null>(null);
   const [pendingPeople, setPendingPeople] = useState<People | null>(null);
   const [showCreation, setShowCreation] = useState(false);
+  const [showPocketList, setShowPocketList] = useState(false);
+  const [activeDraftId, setActiveDraftId] = useState('');
+  const [activeDraftOwner, setActiveDraftOwner] = useState('');
+  const [pocketChoices, setPocketChoices] = useState<NonNullable<PocketState['discovery']>>([]);
+  const [pocketListLoading, setPocketListLoading] = useState(false);
+  const [pocketListError, setPocketListError] = useState('');
   const [metadata, setMetadata] = useState<PocketMetadata>({});
   const [recipientAddresses, setRecipientAddresses] = useState<Record<string, string>>({});
   const [editPerson, setEditPerson] = useState<Participant | null>(null);
@@ -212,10 +220,9 @@ function App() {
   }, [pendingPeople, state?.pocket, state?.genesis, state?.empty]);
 
   const role = useMemo(() => actorRole(identity, state), [identity, state]);
-  useEffect(() => {
-    const only = state?.discovery?.length === 1 ? state.discovery[0] : undefined;
-    if (only && !only.closed) window.location.search = new URLSearchParams({ pocket: only.pocket }).toString();
-  }, [state?.discovery]);
+  const draftIndexKey = identity && state?.genesis ? pocketDraftIndexKey(state.genesis, identity.publicKey) : '';
+  const savedDrafts = draftIndexKey ? listPocketDrafts(draftIndexKey) : [];
+  const activeDraftKey = draftIndexKey && activeDraftId ? `${draftIndexKey}:draft:${activeDraftId}` : '';
   const delegates = state?.delegates || [];
   const activeDelegate = role === 'alice' || role === 'ben' ? delegates.find((delegate) => delegate.role === role) : undefined;
   const funds = BigInt(state?.fundShannons || 0);
@@ -302,6 +309,7 @@ function App() {
 
   const prepareCreation = async (body: unknown, people: People) => {
     if (stateStale) throw new Error(t('stateRefreshPaused'));
+    if (state?.multiPocket !== true) throw new Error(t('multiPocketRequired'));
     if (pudgeReadOnly) throw new Error(t('readonlyAction'));
     setWorking(true); setOperationError('');
     try {
@@ -314,6 +322,41 @@ function App() {
       throw new Error(localizedError(message, t));
     } finally { setWorking(false); }
   };
+
+  const openPocketList = async () => {
+    setShowCreation(false); setShowPocketList(true); setPocketListError('');
+    if (!identity) { setPocketListError(t('connectToSeeActions')); return; }
+    setPocketListLoading(true);
+    try {
+      const result = await getActorPockets(identity.publicKey);
+      setPocketChoices(result.discovery || []);
+    } catch { setPocketListError(t('pocketListError')); }
+    finally { setPocketListLoading(false); }
+  };
+  const startNewDraft = () => {
+    if (!identity || !state?.genesis) { setIdentityError(t('connectToSeeActions')); return; }
+    try {
+      const indexKey = pocketDraftIndexKey(state.genesis, identity.publicKey);
+      const id = createPocketDraft(indexKey);
+      setActiveDraftId(id); setActiveDraftOwner(identity.publicKey.toLowerCase()); setShowPocketList(false); setShowCreation(true);
+    } catch { setIdentityError(t('draftSaveError')); }
+  };
+  const resumeDraft = (draftId: string) => {
+    if (!identity || !draftIndexKey || !savedDrafts.some((draft) => draft.id === draftId)) return;
+    setActiveDraftId(draftId); setActiveDraftOwner(identity.publicKey.toLowerCase()); setShowPocketList(false); setShowCreation(true);
+  };
+  const openSelectedPocket = async (pocket: string) => {
+    if (!/^0x[0-9a-f]{64}$/i.test(pocket)) return;
+    window.history.replaceState(null, '', `${window.location.pathname}?${new URLSearchParams({ pocket })}`);
+    setShowPocketList(false); setPocketListError(''); setLoadError('');
+    await refresh();
+  };
+  useEffect(() => {
+    if (!showCreation || !identity || !activeDraftOwner || identity.publicKey.toLowerCase() === activeDraftOwner) return;
+    setShowCreation(false); setActiveDraftId(''); setShowPocketList(true); setPocketListError(t('draftOwnerChanged'));
+    setPocketChoices([]); setPocketListLoading(true);
+    void getActorPockets(identity.publicKey).then((result) => setPocketChoices(result.discovery || [])).catch(() => setPocketListError(t('pocketListError'))).finally(() => setPocketListLoading(false));
+  }, [identity?.publicKey, showCreation, activeDraftOwner, t]);
 
   const submitSigned = async (transaction: string, hash?: string) => {
     if (!prepared) return;
@@ -333,6 +376,10 @@ function App() {
         detail: preBroadcastFailure ? `${t('preBroadcastStopped')} ${result.error || ''}`.trim() : result.error,
       });
       setPrepared(null); setIntent(null); setPendingSigned(null);
+      if (intent?.operation === 'genesis' && result.state === 'committed' && result.pocket) {
+        window.history.replaceState(null, '', `${window.location.pathname}?${new URLSearchParams({ pocket: result.pocket })}`);
+        setShowCreation(false); setActiveDraftId(''); setShowPocketList(false);
+      }
       await refresh(true);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -441,7 +488,6 @@ function App() {
     } catch { setIdentityError(t('metadataImportError')); }
   };
 
-  void prepareCreation;
   const dateText = (value: string) => new Intl.DateTimeFormat(i18n.language === 'zh-Hans' ? 'zh-CN' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
   const historyState = (value: string) => {
     const key = value === 'committed' ? 'statusCommitted' : value === 'pending' ? 'statusPending' : value === 'proposed' ? 'statusProposed' : value === 'uncertain' ? 'statusUncertain' : value === 'rejected' ? 'statusRejected' : '';
@@ -464,12 +510,12 @@ function App() {
     {identityError && <div className="wallet-connection-alert inline-alert mx-auto mt-4 w-[min(calc(100%-2rem),64rem)] rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm leading-5 text-red-800" role="alert">{identityError}</div>}
     {stateStale && <div className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)] rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900" role="status">{t('stateRefreshPaused')}</div>}
 
-    {showCreation && identity && state?.genesis ? <CreationFlow key={`${state.genesis}:${identity.publicKey}`} draftKey={`quotacell.draft.v1:${state.genesis}:${identity.publicKey.toLowerCase()}`} pudgeReadOnly={false} connectedIdentity={identity} onConnectParticipant={connectParticipant} onCancel={() => setShowCreation(false)}/> : state?.creationRecovery ? <main className="loading-page mx-auto grid min-h-[55vh] w-[min(100%-2rem,64rem)] place-items-center text-slate-600"><section className="load-error w-full max-w-xl rounded-lg border border-red-200 bg-white p-5 shadow-sm" role="alert"><h1 className="text-lg font-semibold text-red-900">{t('creationRecoveryTitle')}</h1><p className="text-sm leading-6 text-slate-700">{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p className="break-all text-xs text-slate-600"><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
+    {showCreation && identity && state?.genesis && activeDraftId && activeDraftKey ? <CreationFlow key={`${state.genesis}:${activeDraftOwner}:${activeDraftId}`} draftId={activeDraftId} draftIndexKey={draftIndexKey} draftKey={activeDraftKey} pudgeReadOnly={pudgeReadOnly} canPrepareCreation={state.multiPocket === true && !pudgeReadOnly} connectedIdentity={identity} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => { setActiveDraftId(''); setActiveDraftOwner(''); setShowCreation(false); setShowPocketList(false); setPocketListError(''); }}/> : state?.creationRecovery ? <main className="loading-page mx-auto grid min-h-[55vh] w-[min(100%-2rem,64rem)] place-items-center text-slate-600"><section className="load-error w-full max-w-xl rounded-lg border border-red-200 bg-white p-5 shadow-sm" role="alert"><h1 className="text-lg font-semibold text-red-900">{t('creationRecoveryTitle')}</h1><p className="text-sm leading-6 text-slate-700">{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p className="break-all text-xs text-slate-600"><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
       : state?.connectRequired ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><h1 className="mb-2 text-xl font-semibold text-navy">{t('activePocket')}</h1><p className="mb-5 text-sm text-slate-600">{t('pocketLinkConnect')}</p><button className="primary-button" type="button" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button></main>
-      : state?.discovery ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><h1 className="mb-4 text-xl font-semibold text-navy">{t('pocketChoices')}</h1><div className="w-full max-w-2xl divide-y divide-slate-200 border-y border-slate-200">{state.discovery.map((item) => <div key={item.pocket} className="flex flex-col justify-between gap-3 py-4 sm:flex-row sm:items-center"><div><strong className="text-sm text-navy">{item.closed ? t('closedPocket') : t('activePocket')} · {t(item.role === 'owner' ? 'owner' : item.role === 'alice' ? 'delegateOne' : 'delegateTwo')}</strong><code className="mt-1 block break-all text-xs text-slate-600" dir="ltr">{item.pocket}</code></div><button className="primary-button shrink-0" type="button" onClick={() => { window.location.search = new URLSearchParams({ pocket: item.pocket }).toString(); }}>{t('openPocket')}</button></div>)}</div>{identity && <button className="secondary-button mt-5" type="button" onClick={() => setShowCreation(true)}>{t('createPocket')}</button>}</main>
-      : state?.empty ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><div className="empty-cell-mark mb-5 grid size-14 place-items-center rounded-xl border border-blue-100 bg-blue-wash text-blue"><CellMark/></div><h1 className="mb-2 max-w-2xl text-3xl font-bold leading-tight text-navy sm:text-4xl">{t(identity ? 'noPocketsTitle' : 'emptyTitle')}</h1><p className="mb-5 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">{t(identity ? 'noPocketsBody' : 'emptyBody')}</p><button className="primary-button" type="button" disabled={!identity} onClick={() => setShowCreation(true)}>{t('createPocket')} <span aria-hidden="true">→</span></button></main>
+      : showPocketList || state?.discovery || (state?.empty && identity) ? <PocketPicker pockets={showPocketList ? pocketChoices : state?.discovery || []} drafts={savedDrafts} ownerCanCreate={Boolean(identity)} locale={i18n.language} loading={showPocketList && pocketListLoading} error={pocketListError} t={(key) => t(key)} onOpen={(pocket) => void openSelectedPocket(pocket)} onCreate={startNewDraft} onResume={resumeDraft}/>
+      : state?.empty ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><div className="empty-cell-mark mb-5 grid size-14 place-items-center rounded-xl border border-blue-100 bg-blue-wash text-blue"><CellMark/></div><h1 className="mb-2 max-w-2xl text-3xl font-bold leading-tight text-navy sm:text-4xl">{t('emptyTitle')}</h1><p className="mb-5 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">{t('emptyBody')}</p><button className="primary-button" type="button" disabled={!identity} onClick={startNewDraft}>{t('createPocket')} <span aria-hidden="true">→</span></button></main>
       : state && !state.empty ? <main id="home" className="app-page mx-auto w-[min(100%-2rem,64rem)] py-6 sm:py-8">
-        <div className="pocket-heading mb-5 flex items-start justify-between gap-4"><div className="min-w-0"><h1 className="m-0 text-2xl font-bold text-navy sm:text-[28px]">{state.pocket ? t('activePocket') : t('brand')}</h1><p className="mt-1 text-xs text-slate-600 sm:text-sm">{identity ? displayIdentityRole : t('connectToSeeActions')}</p></div><div className="flex shrink-0 items-center gap-2">{role === 'owner' && <button className="secondary-button" type="button" onClick={() => setShowCreation(true)}>{t('createPocket')}</button>}<button className="secondary-button" type="button" onClick={() => void copyPocketId()}>{t('sharePocketLink')}</button><span className={closed ? 'state-mark state-closed' : 'state-mark'}>{closed ? t('closedStatus') : t('active')}</span></div></div>
+        <div className="pocket-heading mb-5 flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><h1 className="m-0 text-2xl font-bold text-navy sm:text-[28px]">{state.pocket ? t('activePocket') : t('brand')}</h1><p className="mt-1 text-xs text-slate-600 sm:text-sm">{identity ? displayIdentityRole : t('connectToSeeActions')}</p></div><div className="flex max-w-full flex-wrap items-center justify-end gap-2"><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('myPockets')}</button><button className="secondary-button" type="button" onClick={() => void copyPocketId()}>{t('sharePocketLink')}</button><span className={closed ? 'state-mark state-closed' : 'state-mark'}>{closed ? t('closedStatus') : t('active')}</span></div></div>
 
         {state.historicalTermsUnavailable && <p className="mb-5 border-l-2 border-amber-500 pl-3 text-sm leading-6 text-amber-900" role="status">{t('terminalHistoryUnavailable')}</p>}
 

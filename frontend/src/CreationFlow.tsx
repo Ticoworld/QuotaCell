@@ -4,6 +4,7 @@ import { parseCkb } from './amount';
 import { resolveRecipient } from './api';
 import type { WalletIdentity } from './domain';
 import { assertUniqueRegistrationIdentities, createRegistrationInvitation, exportLegacyRegistrationJson, importRegistrationProfile, importRegistrationResponse, registrationShareUrl, type RegistrationInvitation } from './registration';
+import { touchPocketDraft } from './drafts';
 
 type Slot = 'owner' | 'alice' | 'ben';
 type Person = WalletIdentity & { name: string; description: string };
@@ -13,28 +14,83 @@ const emptyTerms: Terms = { shared: '', firstLimit: '', firstMax: '', firstRecip
 const initialPeople: People = { owner: null, alice: null, ben: null };
 const keys: Slot[] = ['owner', 'alice', 'ben'];
 
+function savedPerson(value: unknown): Person | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const item = value as Record<string, unknown>;
+  return {
+    publicKey: typeof item.publicKey === 'string' ? item.publicKey.slice(0, 128) : '',
+    address: typeof item.address === 'string' ? item.address.slice(0, 256) : '',
+    name: typeof item.name === 'string' ? item.name.slice(0, 32) : '',
+    description: typeof item.description === 'string' ? item.description.slice(0, 72) : '',
+  };
+}
+
+function savedInvitations(value: unknown): Partial<Record<'alice' | 'ben', RegistrationInvitation>> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const source = value as Record<string, unknown>;
+  return (['alice', 'ben'] as const).reduce<Partial<Record<'alice' | 'ben', RegistrationInvitation>>>((result, key) => {
+    const item = source[key];
+    const slot = key === 'alice' ? 'delegate1' : 'delegate2';
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return result;
+    const invite = item as Record<string, unknown>;
+    if (invite.network === 'ckb_testnet' && invite.slot === slot && typeof invite.requestId === 'string' && /^[0-9a-f]{32}$/i.test(invite.requestId) && typeof invite.code === 'string' && invite.code.length <= 2048) {
+      result[key] = { network: 'ckb_testnet', slot, requestId: invite.requestId, code: invite.code };
+    }
+    return result;
+  }, {});
+}
+
 type Props = {
   pudgeReadOnly: boolean;
+  canPrepareCreation: boolean;
   connectedIdentity: WalletIdentity | null;
   onConnectParticipant: () => Promise<WalletIdentity>;
+  onPrepare: (body: unknown, people: People) => Promise<void>;
   onCancel: () => void;
+  draftId: string;
+  draftIndexKey: string;
   draftKey: string;
 };
 
-export function CreationFlow({ pudgeReadOnly, connectedIdentity, onConnectParticipant, onCancel, draftKey }: Props) {
+export function CreationFlow({ pudgeReadOnly, canPrepareCreation, connectedIdentity, onConnectParticipant, onPrepare, onCancel, draftId, draftIndexKey, draftKey }: Props) {
   const { t } = useTranslation();
   const [saved] = useState(() => { try { return JSON.parse(localStorage.getItem(draftKey) || 'null'); } catch { return null; } });
   const [step, setStep] = useState<number>(saved?.step >= 0 && saved?.step <= 2 ? saved.step : 0);
-  const [people, setPeople] = useState<People>(() => ({ ...initialPeople, ...saved?.people, owner: connectedIdentity ? { ...saved?.people?.owner, ...connectedIdentity, name: saved?.people?.owner?.name || '', description: saved?.people?.owner?.description || '' } : null }));
-  const [terms, setTerms] = useState<Terms>(() => ({ ...emptyTerms, ...saved?.terms }));
+  const [people, setPeople] = useState<People>(() => {
+    const restored = saved?.people && typeof saved.people === 'object' ? saved.people : {};
+    const owner = savedPerson(restored.owner);
+    return {
+      ...initialPeople,
+      owner: connectedIdentity ? { ...(owner || { publicKey: '', address: '', name: '', description: '' }), ...connectedIdentity } : null,
+      alice: savedPerson(restored.alice),
+      ben: savedPerson(restored.ben),
+    };
+  });
+  const [terms, setTerms] = useState<Terms>(() => {
+    const restored = saved?.terms && typeof saved.terms === 'object' ? saved.terms as Record<string, unknown> : {};
+    return Object.fromEntries(Object.keys(emptyTerms).map((key) => [key, typeof restored[key] === 'string' ? (restored[key] as string).slice(0, 256) : ''])) as Terms;
+  });
   const [registering, setRegistering] = useState<Slot | null>(null);
   const [error, setError] = useState('');
-  const preparing = false;
+  const [preparing, setPreparing] = useState(false);
   const [profileText, setProfileText] = useState('');
-  const [profileSlot, setProfileSlot] = useState<Slot>('alice');
-  const [inviteBySlot, setInviteBySlot] = useState<Partial<Record<Slot, RegistrationInvitation>>>(() => saved?.inviteBySlot || {});
+  const [profileSlot, setProfileSlot] = useState<Slot>(saved?.profileSlot === 'ben' ? 'ben' : 'alice');
+  const [inviteBySlot, setInviteBySlot] = useState<Partial<Record<Slot, RegistrationInvitation>>>(() => savedInvitations(saved?.inviteBySlot));
   const [inviteLink, setInviteLink] = useState('');
-  useEffect(() => { try { localStorage.setItem(draftKey, JSON.stringify({ step, people, terms, inviteBySlot })); } catch { setError(t('draftSaveError')); } }, [draftKey, step, people, terms, inviteBySlot, t]);
+  useEffect(() => {
+    try {
+      const publicPeople = Object.fromEntries(keys.map((slot) => {
+        const person = people[slot];
+        return [slot, person ? { publicKey: person.publicKey, address: person.address, name: person.name, description: person.description } : null];
+      }));
+      const publicInvitations = Object.fromEntries((['alice', 'ben'] as const).map((slot) => {
+        const invite = inviteBySlot[slot];
+        return [slot, invite ? { network: invite.network, slot: invite.slot, requestId: invite.requestId, code: invite.code } : null];
+      }));
+      localStorage.setItem(draftKey, JSON.stringify({ step, people: publicPeople, terms, inviteBySlot: publicInvitations, profileSlot }));
+      touchPocketDraft(draftIndexKey, draftId);
+    } catch { setError(t('draftSaveError')); }
+  }, [draftKey, draftIndexKey, draftId, step, people, terms, inviteBySlot, profileSlot, t]);
 
   const updatePerson = (slot: Slot, key: 'name' | 'description', value: string) => {
     setPeople((prev) => ({ ...prev, [slot]: { ...(prev[slot] || { publicKey: '', address: '', name: '', description: '' }), [key]: value } }));
@@ -128,6 +184,22 @@ export function CreationFlow({ pudgeReadOnly, connectedIdentity, onConnectPartic
       setStep((value) => Math.min(value + 1, 2));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   };
+  const prepare = async () => {
+    setError(''); setPreparing(true);
+    try {
+      validatePeople();
+      const value = await validateTerms();
+      await onPrepare({
+        id: crypto.randomUUID(), draftId, publicKey: people.owner!.publicKey,
+        sharedLimit: value.shared.toString(),
+        delegates: [
+          { publicKey: people.alice!.publicKey, recipient: { codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8', hashType: 'type', args: value.firstArgs }, limit: value.firstLimit.toString(), perPayment: value.firstMax.toString() },
+          { publicKey: people.ben!.publicKey, recipient: { codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8', hashType: 'type', args: value.secondArgs }, limit: value.secondLimit.toString(), perPayment: value.secondMax.toString() },
+        ],
+      }, people);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setPreparing(false); }
+  };
   return <main className="setup-page mx-auto w-[min(100%-2rem,64rem)] py-6 md:py-9">
     <button className="text-button setup-back mb-5 inline-flex items-center gap-2 text-sm text-slate-600 hover:text-blue-700" type="button" onClick={onCancel}>← {t('returnPocket')}</button>
     <div className="setup-title flex flex-col gap-4 border-b border-line pb-5 sm:flex-row sm:items-end sm:justify-between"><h1 className="text-2xl font-bold text-navy sm:text-[28px]">{t('draftTitle')}</h1><div className="steps flex items-center justify-between gap-2 sm:gap-5" aria-label={t('setup')}>
@@ -189,12 +261,12 @@ export function CreationFlow({ pudgeReadOnly, connectedIdentity, onConnectPartic
           {(['alice', 'ben'] as const).map((slot, index) => { const isFirst = index === 0; const limit = isFirst ? terms.firstLimit : terms.secondLimit; const max = isFirst ? terms.firstMax : terms.secondMax; const recipient = isFirst ? terms.firstRecipient : terms.secondRecipient; return <div className="review-delegate" key={slot}><strong>{people[slot]?.name.trim() || (isFirst ? t('delegateOne') : t('delegateTwo'))}</strong><div className="review-row"><span>{t('personalAllowance')}</span><b>{limit} CKB</b></div><div className="review-row"><span>{t('perPayment')}</span><b>{max} CKB</b></div><div className="review-row recipient-review"><span>{t('approvedRecipient')}</span><code dir="ltr">{recipient}</code></div></div>; })}
         </section>
       </div>
-      <p className="quiet-note mt-3 text-xs leading-5 text-slate-500">{t('draftCapacity')}</p><p className="quiet-note mt-3 text-sm text-slate-700" role="status">{t('draftUnavailable')}</p>
+      <p className="quiet-note mt-3 text-xs leading-5 text-slate-500">{t('draftCapacity')}</p>
+      {!canPrepareCreation && <p className="quiet-note mt-3 text-sm text-slate-700" role="status">{pudgeReadOnly ? t('readonlyAction') : t('multiPocketRequired')}</p>}
     </section>}
 
     {error && <p className="form-error" role="alert">{error}</p>}
-    {pudgeReadOnly && <p className="readonly-notice" role="status">{t('readonlyAction')}</p>}
-    <div className="setup-actions mx-auto mt-6 flex w-full max-w-[830px] justify-end gap-2">{step > 0 && <button className="secondary-button" type="button" disabled={preparing} onClick={() => { setError(''); setStep(step - 1); }}>{t('back')}</button>}{step < 2 ? <button className="primary-button" type="button" onClick={() => void next()}>{t('next')} <span aria-hidden="true">→</span></button> : <button className="secondary-button" type="button" onClick={onCancel}>{t('returnPocket')}</button>}</div>
+    <div className="setup-actions mx-auto mt-6 flex w-full max-w-[830px] justify-end gap-2">{step > 0 && <button className="secondary-button" type="button" disabled={preparing} onClick={() => { setError(''); setStep(step - 1); }}>{t('back')}</button>}{step < 2 ? <button className="primary-button" type="button" disabled={preparing} onClick={() => void next()}>{t('next')} <span aria-hidden="true">→</span></button> : <button className="primary-button" type="button" disabled={preparing || !canPrepareCreation} onClick={() => void prepare()}>{preparing ? t('preparing') : t('createAndSign')} <span aria-hidden="true">→</span></button>}</div>
   </main>;
 }
 

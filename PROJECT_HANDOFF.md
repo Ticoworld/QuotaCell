@@ -1,5 +1,17 @@
 # QuotaCell Project Handoff
 
+## WO19C Pocket-First Ownership and Remote Collaboration
+
+- Kept the existing Pocket as the primary workflow. Owners can view their discovered active and closed Pockets, open one by exact identity, copy its public link, and start or resume a separate creation draft.
+- Creation drafts are independently identified and scoped in browser storage to the connected owner's public key and CKB genesis. Multiple drafts can be saved for one owner/network. Draft data contains public registration details, QCI1 invitation bindings, terms and navigation state; it stores no private keys, signatures or transactions.
+- The owner and two contributors completed the invitation/response round trip in separate isolated browser contexts with simulated wallets. Wrong slot, stale request, duplicate identity, corrupted response, wrong network and account switching were rejected. QCI1/QCR1 codes are treated as structural identity consistency, not proof of private-key possession.
+- The Review screen remains explicitly a draft. The browser acceptance harness verified that it invoked no genesis preparation, wallet signature or broadcast. The read-only Pudge runtime also keeps creation disabled.
+- Added a loopback-only multi-Pocket supervisor. It gives each draft/Pocket its own existing transaction-engine process and SQLite journal, binds reservations to network/Pocket/request, prevents overlapping input reservations, recovers uncertain intents after restart, and locks a runtime against concurrent standalone/supervisor use. A disposable supervisor isolation test covered owner binding, cross-context requests, shared inputs, journal separation and delayed genesis recovery.
+- Verification: frontend build passed (Vite reports one 535 kB chunk warning). Thirteen focused frontend, discovery, signing, payment, genesis, recovery and supervisor tests passed; guided-terms and RPC retry tests passed. The read-only WO18 discovery regression passed against a disposable copy of the persistent runtime. The Playwright workflow passed with simulated wallets, and the live WO18 QCT4 link passed in a fresh browser context without a wallet or local QuotaCell backend. Screens inspected covered closed Pocket, Pocket picker, draft people, spending rules, Review and public WO18 state across desktop/mobile and English/Simplified Chinese.
+- Historical runtime integrity: `local-state/wo18-pudge-acceptance-20261111/working-pocket.sqlite` SHA-256 remained `EE26B42E50E7FF9755D9328D57ACE2F4D628CC5A8584B2D7A374BC8CEFAAD903`. No public transaction was created, signed or broadcast.
+- Remaining execution gate: `working_pocket_external_submission_test.mjs` could not start because `test-support/binaries/always-success` is absent; its manifest pins SHA-256 `f4ba47fa9a540a74efcee48829dc0cf8b5b9dbba6950ea118aa5d47c42e60d30`. The harness also encountered the pre-existing `examples/local-chain/results/run` directory; it was left untouched. Therefore the supervisor's transaction path has not yet been exercised end-to-end against the real engine on a disposable CKB chain, and no new Pudge Pocket has been qualified with an owner wallet. Independent real-wallet acceptance remains outstanding.
+- Hosted authorized spending remains a later milestone. Do not expose the loopback transaction service publicly.
+
 ## WO19B Public Pocket Viewer
 
 - Added wallet-free direct Pocket lookup at `?view=1&pocket=<type-script-hash>`. Existing `?pocket=...` runtime routing remains unchanged; the public route is selected explicitly with `view=1`.
