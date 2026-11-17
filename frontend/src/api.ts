@@ -5,13 +5,28 @@ async function request<T>(url: string, body?: unknown): Promise<T> {
   const scopedBody = selectedPocket && !url.endsWith('/api/external/genesis') && body && typeof body === 'object' && !Array.isArray(body)
     ? { ...body as Record<string, unknown>, pocket: selectedPocket }
     : body;
-  const response = await fetch(url, body === undefined ? { cache: 'no-store' } : {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(scopedBody),
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data?.error || `Request failed (${response.status}).`);
+  let response: Response;
+  try {
+    response = await fetch(url, body === undefined ? { cache: 'no-store' } : {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(scopedBody),
+    });
+  } catch {
+    throw new Error('Pocket backend is unreachable.');
+  }
+  const text = await response.text();
+  let data: unknown;
+  try {
+    data = text.trim() ? JSON.parse(text) : null;
+  } catch {
+    throw new Error('Pocket backend returned an invalid response.');
+  }
+  if (data === null) throw new Error('Pocket backend returned an empty response.');
+  if (!response.ok) {
+    const message = data && typeof data === 'object' && 'error' in data ? data.error : undefined;
+    throw new Error(typeof message === 'string' ? message : `Request failed (${response.status}).`);
+  }
   return data as T;
 }
 

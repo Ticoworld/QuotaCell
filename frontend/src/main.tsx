@@ -39,6 +39,7 @@ function actorRole(identity: WalletIdentity | null, state: PocketState | null): 
 
 function localizedError(message: string, t: (key: string) => string): string {
   const rules: Array<[RegExp, string]> = [
+    [/pocket backend|failed to fetch|networkerror|invalid response|empty response|unexpected end of json/i, 'backendUnavailable'],
     [/wallet disconnected|not connected|connect again/i, 'walletDisconnectedError'],
     [/only the UTXO Global|verified UTXO Global/i, 'unsupportedWalletError'],
     [/CKB secp256k1|signing scheme/i, 'signingSchemeError'],

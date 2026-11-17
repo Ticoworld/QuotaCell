@@ -93,7 +93,7 @@ async function snapshot({currentIntent}={}){
   let found,fundCells,ownerCells,aliceCells,benCells,unsupportedFunds=[];
   if(networkMode==='isolated'){
    found=await discoverPolicy({rpc,policy:initial.Q,expected:initial.expected});
-   const results=await Promise.all([initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map((lock,i)=>discoverPlainCells({rpc,lock,includeUnsupported:i===0})));[fundCells,ownerCells,aliceCells,benCells]=results.map(r=>r.cells);unsupportedFunds=results[0].unsupported;
+   const results=await Promise.all([initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map((lock,i)=>discoverPlainCells({rpc,lock,includeUnsupported:true})));[fundCells,ownerCells,aliceCells,benCells]=results.map(r=>r.cells);unsupportedFunds=results[0].unsupported;
   }else{
    const results=await withIndexedTipRetry(async()=>{
     const indexedSnapshot=await rpc('get_indexer_tip');
@@ -107,7 +107,14 @@ async function snapshot({currentIntent}={}){
    found=results[0].cells[0];[fundCells,ownerCells]=results.slice(1,3).map(r=>r.cells);if(found.cell.data.content.length!==58)[aliceCells,benCells]=results.slice(3).map(r=>r.cells);else{aliceCells=[];benCells=[];}unsupportedFunds=results[1].unsupported;
   }
   state.policy={txHash:found.outPoint.tx_hash,index:Number(BigInt(found.outPoint.index))};
-  const points=cells=>cells.sort((a,b)=>BigInt(a.cell.output.capacity)>BigInt(b.cell.output.capacity)?-1:1).map(x=>({txHash:x.outPoint.tx_hash,index:Number(BigInt(x.outPoint.index))}));
+  const points=cells=>cells.sort((a,b)=>{
+   const capacityA=BigInt(a.cell.output.capacity),capacityB=BigInt(b.cell.output.capacity);
+   if(capacityA!==capacityB)return capacityA>capacityB?-1:1;
+   const hashOrder=a.outPoint.tx_hash.localeCompare(b.outPoint.tx_hash);
+   if(hashOrder)return hashOrder;
+   const indexA=BigInt(a.outPoint.index),indexB=BigInt(b.outPoint.index);
+   return indexA<indexB?-1:indexA>indexB?1:0;
+  }).map(x=>({txHash:x.outPoint.tx_hash,index:Number(BigInt(x.outPoint.index))}));
   state.unsupportedFunds=unsupportedFunds.map(x=>({outPoint:x.outPoint,capacity:x.cell.output.capacity,hasType:!!x.cell.output.type,dataBytes:(x.cell.data.content.length-2)/2}));const funds=points(fundCells);state.funds=funds;state.fund=funds[0]||null;
   state.ownerFee=points(ownerCells)[0];state.seeds.alice=points(aliceCells)[0];state.seeds.ben=points(benCells)[0];
  }
@@ -202,7 +209,7 @@ async function prepareGenesis(body){
   assert(!initial&&!rows().some(x=>x.operation==='genesis'),'A Pocket creation already exists');assert.match(body.id||'',/^[0-9a-f-]{36}$/);
   assert(!requests.has(body.id),'Intent already exists');assert(requests.size<128,'Too many outstanding signing requests');
   await verifyEnvironment();
-  const found=networkMode==='isolated'?await discoverPlainCells({rpc,lock:lockFor(body.publicKey)}):await discoverIndexedWithRetry({rpc,lock:lockFor(body.publicKey)});
+  const found=networkMode==='isolated'?await discoverPlainCells({rpc,lock:lockFor(body.publicKey),includeUnsupported:true}):await discoverIndexedWithRetry({rpc,lock:lockFor(body.publicKey)});
   const candidate=found.cells.find(x=>BigInt(x.cell.output.capacity)>=66100002000n);assert(candidate,'Owner needs a plain cell covering policy capacity and change');
   const ownerInput=await live({txHash:candidate.outPoint.tx_hash,index:Number(BigInt(candidate.outPoint.index))});
   const built=buildGenesis({ownerPublicKey:body.publicKey,delegates:body.delegates,sharedLimit:body.sharedLimit,ownerInput,deps:environment.allDeps,fee:await selectedFee()});
