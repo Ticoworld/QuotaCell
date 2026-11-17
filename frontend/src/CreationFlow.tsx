@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { parseCkb } from './amount';
 import { resolveRecipient } from './api';
 import type { WalletIdentity } from './domain';
-import { assertUniqueRegistrationIdentities, createRegistrationInvitation, exportLegacyRegistrationJson, importRegistrationProfile, importRegistrationResponse, registrationShareUrl, type RegistrationInvitation } from './registration';
+import { assertUniqueRegistrationIdentities, createRegistrationInvitation, importRegistrationResponse, registrationShareUrl, type RegistrationInvitation } from './registration';
 import { touchPocketDraft } from './drafts';
 
 type Slot = 'owner' | 'alice' | 'ben';
@@ -89,8 +89,6 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
   const [registering, setRegistering] = useState<Slot | null>(null);
   const [error, setError] = useState('');
   const [preparing, setPreparing] = useState(false);
-  const [profileText, setProfileText] = useState('');
-  const [profileSlot, setProfileSlot] = useState<Slot>(saved?.profileSlot === 'ben' ? 'ben' : 'alice');
   const [inviteBySlot, setInviteBySlot] = useState<Partial<Record<Slot, RegistrationInvitation>>>(() => savedInvitations(saved?.inviteBySlot));
   const [responseTexts, setResponseTexts] = useState<Record<'alice' | 'ben', string>>({ alice: '', ben: '' });
   const [responseErrors, setResponseErrors] = useState<Partial<Record<'alice' | 'ben', string>>>({});
@@ -113,11 +111,11 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
         const invite = inviteBySlot[slot];
         return [slot, invite ? { network: invite.network, slot: invite.slot, requestId: invite.requestId, code: invite.code } : null];
       }));
-      localStorage.setItem(draftKey, JSON.stringify({ step, people: publicPeople, terms, inviteBySlot: publicInvitations, profileSlot }));
+      localStorage.setItem(draftKey, JSON.stringify({ step, people: publicPeople, terms, inviteBySlot: publicInvitations }));
       touchPocketDraft(draftIndexKey, draftId);
       setSaveStatus('saved');
     } catch { setSaveStatus('error'); }
-  }, [draftKey, draftIndexKey, draftId, step, people, terms, inviteBySlot, profileSlot, saveAttempt, saveBlocked]);
+  }, [draftKey, draftIndexKey, draftId, step, people, terms, inviteBySlot, saveAttempt, saveBlocked]);
 
   const updatePerson = (slot: Slot, key: 'name' | 'description', value: string) => {
     setPeople((prev) => ({ ...prev, [slot]: { ...(prev[slot] || { publicKey: '', address: '', name: '', description: '' }), [key]: value } }));
@@ -183,21 +181,6 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
       setLinkFallback(slot);
       setResponseErrors((previous) => ({ ...previous, [slot]: t('clipboardUnavailable') }));
     }
-  };
-  const importAdvancedJson = async () => {
-    setError('');
-    try {
-      if (profileSlot !== 'alice' && profileSlot !== 'ben') throw new Error(t('ownerIdentityConnectedOnly'));
-      const response = await importRegistrationProfile(profileText);
-      const invite = inviteBySlot[profileSlot];
-      const expectedSlot = profileSlot === 'alice' ? 'delegate1' : 'delegate2';
-      if (response.slot && response.slot !== expectedSlot) throw new Error(t('responseWrongSlot'));
-      if (invite && (response.requestId !== invite.requestId || response.slot !== invite.slot)) throw new Error(t('responseWrongInvitation'));
-      const identity = response.identity;
-      assertUniqueRegistrationIdentities(keys.map((slot) => slot === profileSlot ? identity : people[slot]));
-      setPeople((previous) => ({ ...previous, [profileSlot]: { ...identity, name: previous[profileSlot]?.name || '', description: previous[profileSlot]?.description || '' } }));
-      setProfileText('');
-    } catch (cause) { setError(registrationError(cause, t)); }
   };
   const validatePeople = () => {
     if (!connectedIdentity || !people.owner || people.owner.publicKey.toLowerCase() !== connectedIdentity.publicKey.toLowerCase() || people.owner.address !== connectedIdentity.address) throw new Error(t('ownerIdentityConnectedOnly'));
@@ -293,7 +276,6 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
           </article>;
         })}
       </div>
-      <details className="advanced-registration"><summary>{t('advancedRegistration')}</summary><div className="advanced-registration-body"><label>{t('profileTarget')}<select value={profileSlot} onChange={(event) => setProfileSlot(event.target.value as Slot)}><option value="alice">{t('delegateOne')}</option><option value="ben">{t('delegateTwo')}</option></select></label><label>{t('legacyJson')}<textarea value={profileText} onChange={(event) => setProfileText(event.target.value)} placeholder={t('profilePlaceholder')}/></label><div className="flex flex-wrap gap-2"><button className="secondary-button" type="button" disabled={!profileText.trim()} onClick={() => void importAdvancedJson()}>{t('importProfile')}</button>{connectedIdentity && <button className="secondary-button" type="button" onClick={() => { const data = new Blob([exportLegacyRegistrationJson(connectedIdentity)], { type: 'application/json' }); const url = URL.createObjectURL(data); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'quotacell-registration-v1.json'; anchor.click(); URL.revokeObjectURL(url); }}>{t('exportProfile')}</button>}</div></div></details>
     </section>}
 
     {step === 1 && <section className="setup-section mx-auto mt-7 w-full max-w-[830px]">

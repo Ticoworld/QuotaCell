@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CkbWalletSession, WalletProviderUnavailableError } from './wallet';
 import type { WalletIdentity } from './domain';
-import { createRegistrationProfile, exportLegacyRegistrationJson, parseRegistrationInvitation, registrationShareUrl, type RegistrationInvitation } from './registration';
+import { createRegistrationProfile, parseRegistrationInvitation, registrationShareUrl, type RegistrationInvitation } from './registration';
 
 const wallet = new CkbWalletSession();
 
@@ -88,7 +88,6 @@ export function RegistrationPage() {
         <details className="contextual-help mt-3"><summary>{t('registrationMeaning')}</summary><p>{t('contributorResponseLimits')}</p></details>
         {showResponseFallback && response && <label className="mt-4 grid gap-2 text-xs font-semibold text-slate-700">{t('registrationResponse')}<textarea className="min-h-28 rounded-md border border-slate-300 bg-white p-3 font-mono text-xs" readOnly value={response} onFocus={(event) => event.currentTarget.select()} /></label>}
       </section>}
-      <details className="mt-6"><summary className="cursor-pointer text-xs font-medium text-slate-600">{t('advancedRegistration')}</summary><p className="mt-3 text-xs leading-5 text-slate-500">{t('legacyJsonNote')}</p>{identity && <button className="secondary-button mt-3" type="button" onClick={() => { const blob = new Blob([exportLegacyRegistrationJson(identity)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'quotacell-registration-v1.json'; anchor.click(); URL.revokeObjectURL(url); }}>{t('exportProfile')}</button>}</details>
       {error && <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm leading-5 text-red-800" role="alert">{error}</p>}
     </main>
   </>;

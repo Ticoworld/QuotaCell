@@ -107,18 +107,13 @@
   .participant-hint { margin: 0 0 10px; color: #5d6b80; font-size: 13px; line-height: 1.5; }
   .delegate-invitation { margin-top: 12px; }
   .copy-status { margin: 5px 0 0; color: var(--success); font-size: 12px; }
-  .contextual-help summary, .advanced-registration summary, .participant-details summary { width: fit-content; color: var(--blue); cursor: pointer; font-size: 12px; font-weight: 600; }
+  .contextual-help summary, .participant-details summary { width: fit-content; color: var(--blue); cursor: pointer; font-size: 12px; font-weight: 600; }
   .contextual-help p, .participant-details p { max-width: 660px; margin: 8px 0 0; color: #5d6b80; font-size: 12px; line-height: 1.5; }
   .participant-details { margin-top: 12px; }
   .participant-details .person-inputs { margin-top: 10px; }
   .person-inputs { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
   .person-inputs label, .field-block { @apply grid gap-1.5 text-xs font-semibold text-slate-700; }
   .person-inputs input { margin-top: 5px; }
-  .advanced-registration { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
-  .advanced-registration-body { display: grid; gap: 12px; margin-top: 12px; }
-  .advanced-registration-body label { display: grid; gap: 6px; color: #52627a; font-size: 12px; font-weight: 600; }
-  .advanced-registration-body select { width: fit-content; min-width: 180px; height: 40px; padding: 0 10px; background: white; border: 1px solid #cbd5e1; border-radius: 6px; }
-  .advanced-registration-body textarea { min-height: 92px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: var(--mono); font-size: 12px; }
   input { @apply h-[42px] min-w-0 rounded-md border border-slate-300 bg-white px-[11px] py-[9px] text-[13px] text-ink; }
   input::placeholder { color: #8995a7; }
   input:hover { border-color: #8599b6; }
