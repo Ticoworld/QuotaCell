@@ -32,10 +32,19 @@ async function request<T>(url: string, body?: unknown): Promise<T> {
 
 export const getPocketState = (publicKey?: string) => {
   const params = new URLSearchParams(window.location.search);
+  if (publicKey && !params.has('pocket')) return getActorPockets(publicKey);
   if (publicKey) params.set('actor', publicKey);
   return request<PocketState>(`/api/state${params.has('pocket') || publicKey ? `?${new URLSearchParams({ ...(params.has('pocket') ? { pocket: params.get('pocket') || '' } : {}), ...(publicKey ? { actor: publicKey } : {}) })}` : ''}`);
 };
-export const getActorPockets = (publicKey: string) => request<PocketState>(`/api/state?actor=${encodeURIComponent(publicKey)}`);
+export async function getActorPockets(publicKey: string) {
+  const url = `/api/state?actor=${encodeURIComponent(publicKey)}`;
+  let result = await request<PocketState>(url);
+  for (let retry = 0; retry < 4 && result.empty; retry++) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1200));
+    result = await request<PocketState>(url);
+  }
+  return result;
+}
 export const prepareGenesis = (body: unknown) => request<PreparedTransaction>('/api/external/genesis', body);
 export const preparePayment = (body: unknown) => request<PreparedTransaction>('/api/external/prepare', body);
 export const prepareOwnerAction = (body: unknown) => request<PreparedTransaction>('/api/external/owner', body);

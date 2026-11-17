@@ -69,6 +69,11 @@ export type PreparedTransaction = {
   publicKey: string;
   genesis: string;
   fee: string;
+  ownerInputCapacity?: string;
+  ownerChangeCapacity?: string;
+  policyCapacity?: string;
+  minimumOwnerInputCapacity?: string;
+  terminalCapacity?: string;
 };
 
 export type TransactionResult = {

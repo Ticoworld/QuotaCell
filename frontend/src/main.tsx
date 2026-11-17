@@ -32,7 +32,7 @@ function restorePendingTransaction(): TransactionNotice | null {
 }
 
 function actorRole(identity: WalletIdentity | null, state: PocketState | null): ActorRole | null {
-  if (!identity || !state || state.empty) return null;
+  if (!identity || !state || state.empty || state.discovery || state.connectRequired) return null;
   if (state.owner?.toLowerCase() === identity.publicKey.toLowerCase()) return 'owner';
   return state.delegates?.find((delegate) => delegate.publicKey && delegate.publicKey.toLowerCase() === identity.publicKey.toLowerCase())?.role || 'unrecognized';
 }
@@ -78,6 +78,8 @@ function App() {
   const refreshInFlightActor = useRef<string | null>(null);
   const [stateStale, setStateStale] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [stateActor, setStateActor] = useState<string | null>(null);
+  const stateActorRef = useRef<string | null>(null);
   const [identity, setIdentity] = useState<WalletIdentity | null>(null);
   const [identityError, setIdentityError] = useState('');
   const [walletBusy, setWalletBusy] = useState(false);
@@ -106,21 +108,22 @@ function App() {
 
   const refresh = useCallback(async (quiet = false) => {
     const actor = identity?.publicKey ?? null;
+    const showProgress = !quiet || Boolean(actor && stateActorRef.current === actor.toLowerCase() && lastGoodState.current?.empty);
     while (refreshInFlight.current) {
       const current = refreshInFlight.current;
       if (refreshInFlightActor.current === actor) {
-        if (!quiet) setRefreshing(true);
+        if (showProgress) setRefreshing(true);
         try { return await current; }
-        finally { if (!quiet) setRefreshing(false); }
+        finally { if (showProgress) setRefreshing(false); }
       }
-      if (!quiet) setRefreshing(true);
+      if (showProgress) setRefreshing(true);
       await current;
       if (refreshInFlight.current === current) {
         refreshInFlight.current = null;
         refreshInFlightActor.current = null;
       }
     }
-    if (!quiet) setRefreshing(true);
+    if (showProgress) setRefreshing(true);
     const task = (async (): Promise<PocketState | null> => {
       try {
         const next = await getPocketState(actor ?? undefined);
@@ -130,18 +133,25 @@ function App() {
         }
         lastGoodState.current = next;
         setState(next);
+        stateActorRef.current = actor?.toLowerCase() ?? null;
+        setStateActor(stateActorRef.current);
         setStateStale(false);
         setLoadError('');
         return next;
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
-        if (lastGoodState.current) setStateStale(true);
+        if (actor && stateActorRef.current !== actor.toLowerCase()) {
+          setState(null);
+          stateActorRef.current = null;
+          setStateActor(null);
+          setLoadError(message);
+        } else if (lastGoodState.current) setStateStale(true);
         else { setState(null); setLoadError(message); }
         return null;
       } finally {
         refreshInFlight.current = null;
         refreshInFlightActor.current = null;
-        if (!quiet) setRefreshing(false);
+        if (showProgress) setRefreshing(false);
       }
     })();
     refreshInFlight.current = task;
@@ -171,6 +181,7 @@ function App() {
         if (current.publicKey.toLowerCase() !== identity.publicKey.toLowerCase() || current.address !== identity.address) {
           setIdentity(current);
           setIdentityError('');
+          setLoadError('');
         }
       } catch (cause) {
         if (!active) return;
@@ -237,7 +248,9 @@ function App() {
   const history = state?.history || [];
   const pudge = Boolean(state?.networkMode?.startsWith('pudge'));
   const pudgeReadOnly = state?.networkMode === 'pudge-readonly';
-  const retryableIntent = Boolean(identity && pudge && transactionNotice?.hash && history.some((item) => {
+  const pudgePrepareOnly = state?.networkMode === 'pudge-prepare-only';
+  const pudgeActionsDisabled = pudgeReadOnly || pudgePrepareOnly;
+  const retryableIntent = Boolean(identity && pudge && !pudgeActionsDisabled && transactionNotice?.hash && history.some((item) => {
     if (item.tx_hash.toLowerCase() !== transactionNotice.hash?.toLowerCase() || !['uncertain', 'submitted'].includes(item.state) || item.phase?.startsWith('retry-')) return false;
     return item.operation === 'deposit'
       ? role === 'owner' && item.actor.toLowerCase() === identity.publicKey.toLowerCase()
@@ -261,22 +274,22 @@ function App() {
 
   const connectWallet = async () => {
     setWalletBusy(true); setIdentityError('');
-    try { const connected = await wallet.connect(); setIdentity(connected); }
+    try { const connected = await wallet.connect(); setIdentity(connected); setLoadError(''); }
     catch (cause) { setIdentityError(localizedConnectionError(cause, t)); wallet.disconnect(); setIdentity(null); }
     finally { setWalletBusy(false); }
   };
   const connectParticipant = async () => {
-    wallet.disconnect(); setIdentity(null); setWalletBusy(true); setIdentityError('');
+    wallet.disconnect(); setIdentity(null); setWalletBusy(true); setIdentityError(''); setLoadError('');
     try { const connected = await wallet.connect(); setIdentity(connected); return connected; }
     catch (cause) { const translated = localizedConnectionError(cause, t); setIdentityError(translated); wallet.disconnect(); throw new Error(translated); }
     finally { setWalletBusy(false); }
   };
   const connectExpectedSigner = async (expectedPublicKey: string) => {
-    wallet.disconnect(); setIdentity(null); setWalletBusy(true); setIdentityError('');
+    wallet.disconnect(); setIdentity(null); setWalletBusy(true); setIdentityError(''); setLoadError('');
     try {
       const connected = await wallet.connect();
       if (connected.publicKey.toLowerCase() !== expectedPublicKey.toLowerCase()) throw new Error(t('signerMismatch'));
-      setIdentity(connected);
+      setIdentity(connected); setLoadError('');
     } catch (cause) {
       wallet.disconnect();
       throw new Error(localizedConnectionError(cause, t));
@@ -360,6 +373,7 @@ function App() {
   }, [identity?.publicKey, showCreation, activeDraftOwner, t]);
 
   const submitSigned = async (transaction: string, hash?: string) => {
+    if (pudgePrepareOnly) { setOperationError(t('prepareOnlyNotice')); return; }
     if (!prepared) return;
     if (pudge && hash) {
       const notice = { state: 'uncertain', hash, detail: t('submitUnknown') };
@@ -393,6 +407,7 @@ function App() {
 
   const signPrepared = async (request: PreparedTransaction) => {
     if (stateStale) { setOperationError(t('stateRefreshPaused')); return; }
+    if (pudgePrepareOnly) { setOperationError(t('prepareOnlyNotice')); return; }
     setWorking(true); setOperationError('');
     try {
       if (!identity || request.publicKey.toLowerCase() !== identity.publicKey.toLowerCase()) throw new Error(t('signerMismatch'));
@@ -496,12 +511,13 @@ function App() {
   };
   const explorerUrl = (hash: string) => `https://pudge.explorer.nervos.org/transaction/${hash}`;
   const displayIdentityRole = role === 'owner' ? t('owner') : role === 'alice' ? labelFor(delegates.find((d) => d.role === 'alice')?.publicKey, t('delegateOne')) : role === 'ben' ? labelFor(delegates.find((d) => d.role === 'ben')?.publicKey, t('delegateTwo')) : role === 'unrecognized' ? t('unknownRole') : '';
+  const identityDiscoveryLoading = Boolean(identity && !loadError && (stateActor !== identity.publicKey.toLowerCase() || (state?.empty && refreshing)));
   const noticeTitle = transactionNotice?.state === 'uncertain' ? t('statusUncertain') : transactionNotice?.state === 'error' ? t('statusFailed') : transactionNotice?.state === 'checked' ? t('checkedStatus') : transactionNotice?.state === 'metadata' ? t('metadataLocal') : transactionNotice ? historyState(transactionNotice.state) : '';
 
   return <>
     <header className="topbar sticky top-0 z-40 flex h-16 w-full items-center justify-between gap-3 border-b border-line bg-white/95 px-4 backdrop-blur sm:px-6 lg:px-[max(26px,calc((100vw-1160px)/2))]"><a className="brand inline-flex shrink-0 items-center gap-2.5 text-lg font-bold text-navy no-underline" href="#home" aria-label={t('brand')}><CellMark/><span>{t('brand')}</span></a>
       <div className="topbar-controls flex min-w-0 items-center justify-end gap-1.5 sm:gap-3">
-        {state && <div className={`network-state ${pudgeReadOnly ? 'is-readonly' : ''}`} role="status" aria-label={`${pudge ? t('networkPudge') : t('networkLocal')}${pudgeReadOnly ? ` · ${t('readOnly')}` : ''}`}><i aria-hidden="true"/><span className="network-full" aria-hidden="true">{pudge ? t('networkPudge') : t('networkLocal')}</span><span className="network-compact" aria-hidden="true">{pudge ? t('networkPudgeShort') : t('networkLocalShort')}</span>{pudgeReadOnly && <small>{t('readOnly')}</small>}</div>}
+        {state && <div className={`network-state ${pudgeActionsDisabled ? 'is-readonly' : ''}`} role="status" aria-label={`${pudge ? t('networkPudge') : t('networkLocal')}${pudgeReadOnly ? ` · ${t('readOnly')}` : pudgePrepareOnly ? ` · ${t('prepareOnly')}` : ''}`}><i aria-hidden="true"/><span className="network-full" aria-hidden="true">{pudge ? t('networkPudge') : t('networkLocal')}</span><span className="network-compact" aria-hidden="true">{pudge ? t('networkPudgeShort') : t('networkLocalShort')}</span>{pudgeReadOnly && <small>{t('readOnly')}</small>}{pudgePrepareOnly && <small>{t('prepareOnly')}</small>}</div>}
         <label className="language-control"><span className="sr-only">{t('language')}</span><select value={i18n.language === 'zh-Hans' ? 'zh-Hans' : 'en'} onChange={(event) => void i18n.changeLanguage(event.target.value)} aria-label={t('language')}><option value="en">EN</option><option value="zh-Hans">简</option></select></label>
         <button className="icon-button refresh-button" type="button" onClick={() => void refresh()} disabled={refreshing} aria-label={refreshing ? t('refreshing') : t('refresh')} title={t('refresh')}>{refreshing ? '…' : '↻'}</button>
         {identity ? <div className="connected-account"><div><strong>{displayIdentityRole || t('connected')}</strong><code dir="ltr">{shortHash(identity.address, 12, 7)}</code></div><button className="text-button disconnect-button" onClick={() => { wallet.disconnect(); setIdentity(null); setIdentityError(''); }} type="button">×</button></div> : <button className="connect-button" type="button" disabled={walletBusy} onClick={() => void connectWallet()}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button>}
@@ -511,9 +527,9 @@ function App() {
     {identityError && <div className="wallet-connection-alert inline-alert mx-auto mt-4 w-[min(calc(100%-2rem),64rem)] rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm leading-5 text-red-800" role="alert">{identityError}</div>}
     {stateStale && <div className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)] rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900" role="status">{t('stateRefreshPaused')}</div>}
 
-    {showCreation && identity && state?.genesis && activeDraftId && activeDraftKey ? <CreationFlow key={`${state.genesis}:${activeDraftOwner}:${activeDraftId}`} draftId={activeDraftId} draftIndexKey={draftIndexKey} draftKey={activeDraftKey} pudgeReadOnly={pudgeReadOnly} canPrepareCreation={state.multiPocket === true && !pudgeReadOnly} connectedIdentity={identity} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => { setActiveDraftId(''); setActiveDraftOwner(''); setShowCreation(false); setShowPocketList(false); setPocketListError(''); }}/> : state?.creationRecovery ? <main className="loading-page mx-auto grid min-h-[55vh] w-[min(100%-2rem,64rem)] place-items-center text-slate-600"><section className="load-error w-full max-w-xl rounded-lg border border-red-200 bg-white p-5 shadow-sm" role="alert"><h1 className="text-lg font-semibold text-red-900">{t('creationRecoveryTitle')}</h1><p className="text-sm leading-6 text-slate-700">{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p className="break-all text-xs text-slate-600"><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
+    {showCreation && identity && state?.genesis && activeDraftId && activeDraftKey ? <CreationFlow key={`${state.genesis}:${activeDraftOwner}:${activeDraftId}`} draftId={activeDraftId} draftIndexKey={draftIndexKey} draftKey={activeDraftKey} pudgeReadOnly={pudgeReadOnly} prepareOnly={pudgePrepareOnly} canPrepareCreation={state.multiPocket === true && !pudgeReadOnly} connectedIdentity={identity} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => { setActiveDraftId(''); setActiveDraftOwner(''); setShowCreation(false); setShowPocketList(false); setPocketListError(''); }}/> : state?.creationRecovery ? <main className="loading-page mx-auto grid min-h-[55vh] w-[min(100%-2rem,64rem)] place-items-center text-slate-600"><section className="load-error w-full max-w-xl rounded-lg border border-red-200 bg-white p-5 shadow-sm" role="alert"><h1 className="text-lg font-semibold text-red-900">{t('creationRecoveryTitle')}</h1><p className="text-sm leading-6 text-slate-700">{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p className="break-all text-xs text-slate-600"><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
       : state?.connectRequired ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><h1 className="mb-2 text-xl font-semibold text-navy">{t('activePocket')}</h1><p className="mb-5 text-sm text-slate-600">{t('pocketLinkConnect')}</p><button className="primary-button" type="button" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button></main>
-      : showPocketList || state?.discovery || (state?.empty && identity) ? <PocketPicker pockets={showPocketList ? pocketChoices : state?.discovery || []} drafts={savedDrafts} ownerCanCreate={Boolean(identity)} locale={i18n.language} loading={showPocketList && pocketListLoading} error={pocketListError} t={(key) => t(key)} onOpen={(pocket) => void openSelectedPocket(pocket)} onCreate={startNewDraft} onResume={resumeDraft}/>
+      : showPocketList || state?.discovery || (state?.empty && identity) || identityDiscoveryLoading ? <PocketPicker pockets={showPocketList ? pocketChoices : state?.discovery || []} drafts={savedDrafts} ownerCanCreate={Boolean(identity)} locale={i18n.language} loading={showPocketList ? pocketListLoading : identityDiscoveryLoading} error={pocketListError} t={(key) => t(key)} onOpen={(pocket) => void openSelectedPocket(pocket)} onCreate={startNewDraft} onResume={resumeDraft}/>
       : state?.empty ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><div className="empty-cell-mark mb-5 grid size-14 place-items-center rounded-xl border border-blue-100 bg-blue-wash text-blue"><CellMark/></div><h1 className="mb-2 max-w-2xl text-3xl font-bold leading-tight text-navy sm:text-4xl">{t('emptyTitle')}</h1><p className="mb-5 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">{t('emptyBody')}</p><button className="primary-button" type="button" disabled={!identity} onClick={startNewDraft}>{t('createPocket')} <span aria-hidden="true">→</span></button></main>
       : state && !state.empty ? <main id="home" className="app-page mx-auto w-[min(100%-2rem,64rem)] py-6 sm:py-8">
         <div className="pocket-heading mb-5 flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><h1 className="m-0 text-2xl font-bold text-navy sm:text-[28px]">{state.pocket ? t('activePocket') : t('brand')}</h1><p className="mt-1 text-xs text-slate-600 sm:text-sm">{identity ? displayIdentityRole : t('connectToSeeActions')}</p></div><div className="flex max-w-full flex-wrap items-center justify-end gap-2"><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('myPockets')}</button><button className="secondary-button" type="button" onClick={() => void copyPocketId()}>{t('sharePocketLink')}</button><span className={closed ? 'state-mark state-closed' : 'state-mark'}>{closed ? t('closedStatus') : t('active')}</span></div></div>
@@ -532,14 +548,14 @@ function App() {
         {!identity && <section className="connect-prompt mb-6 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div><h2 className="mb-1 text-base font-semibold text-navy">{t('connectToContinue')}</h2><p className="m-0 max-w-xl text-xs leading-5 text-slate-600">{t('localDisclosure')}</p></div><button className="primary-button w-full sm:w-auto" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')} <span aria-hidden="true">→</span></button></section>}
         {identity && role === 'unrecognized' && <p className="role-message" role="status">{t('unknownRole')}</p>}
 
-        {identity && role === 'owner' && !closed && <section className="owner-actions mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div className="section-title"><div><h2 className="text-base font-semibold text-navy">{t('ownerControls')}</h2><p className="mt-1 text-xs text-slate-600">{t('ownerDescription')}</p></div></div><div className="owner-action-list flex w-full flex-wrap gap-2 sm:w-auto"><button className="secondary-button flex-1 sm:flex-none" disabled={pudgeReadOnly || actionsBlocked} onClick={() => beginOperation('deposit')}>{t('fund')}</button>{state.hasFund && <button className="secondary-button flex-1 sm:flex-none" disabled={pudgeReadOnly || actionsBlocked} onClick={() => beginOperation('close')}>{t('closePocket')}</button>}</div></section>}
-        {identity && role === 'owner' && closed && <section className="owner-actions late-funds mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center"><div><h2 className="text-sm font-semibold text-amber-950">{state.hasFund ? t('lateFunds') : t('lateDepositTitle')}</h2><p className="mt-1 text-sm text-amber-900">{state.hasFund ? `${formatCkb(funds)} CKB` : t('lateDepositBody')}</p></div>{state.hasFund ? <button className="primary-button" disabled={pudgeReadOnly || actionsBlocked} onClick={() => beginOperation('sweep')}>{t('sweep')} <span aria-hidden="true">→</span></button> : <button className="primary-button" disabled={pudgeReadOnly || actionsBlocked} onClick={() => beginOperation('deposit')}>{t('lateDepositTitle')} <span aria-hidden="true">→</span></button>}</section>}
+        {identity && role === 'owner' && !closed && <section className="owner-actions mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div className="section-title"><div><h2 className="text-base font-semibold text-navy">{t('ownerControls')}</h2><p className="mt-1 text-xs text-slate-600">{t('ownerDescription')}</p></div></div><div className="owner-action-list flex w-full flex-wrap gap-2 sm:w-auto"><button className="secondary-button flex-1 sm:flex-none" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('deposit')}>{t('fund')}</button>{state.hasFund && <button className="secondary-button flex-1 sm:flex-none" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('close')}>{t('closePocket')}</button>}</div></section>}
+        {identity && role === 'owner' && closed && <section className="owner-actions late-funds mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center"><div><h2 className="text-sm font-semibold text-amber-950">{state.hasFund ? t('lateFunds') : t('lateDepositTitle')}</h2><p className="mt-1 text-sm text-amber-900">{state.hasFund ? `${formatCkb(funds)} CKB` : t('lateDepositBody')}</p></div>{state.hasFund ? <button className="primary-button" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('sweep')}>{t('sweep')} <span aria-hidden="true">→</span></button> : <button className="primary-button" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('deposit')}>{t('lateDepositTitle')} <span aria-hidden="true">→</span></button>}</section>}
 
         {identity && (role === 'alice' || role === 'ben') && activeDelegate && !closed && <section className="delegate-focus mb-7 rounded-lg border border-t-[3px] border-t-blue border-line bg-white p-4 sm:p-5">
           <div className="delegate-focus-heading flex items-start justify-between gap-3"><div className="flex min-w-0 items-start gap-2.5"><span className={`permission-dot mt-2 size-2 shrink-0 rounded-full ${activeDelegate.enabled ? 'bg-emerald-600' : 'is-revoked bg-red-600'}`} aria-hidden="true"/><div className="min-w-0"><h2 className="m-0 text-lg font-semibold text-navy">{labelFor(activeDelegate.publicKey, role === 'alice' ? t('delegateOne') : t('delegateTwo'))}</h2>{descriptionFor(activeDelegate.publicKey) && <p className="mt-1 text-xs text-slate-600">{descriptionFor(activeDelegate.publicKey)}</p>}</div></div><span className={activeDelegate.enabled ? 'permission-status' : 'permission-status is-revoked'}>{activeDelegate.enabled ? t('active') : t('revoked')}</span></div>
           <div className="delegate-summary mt-5 grid grid-cols-2 gap-3 border-y border-slate-100 py-4 sm:grid-cols-3 sm:gap-4"><div className="min-w-0"><span className="text-xs font-medium text-slate-600">{t('remaining')}</span><strong className="my-1 block break-words text-xl font-semibold tabular-nums text-navy">{formatCkb(BigInt(activeDelegate.limit) > BigInt(activeDelegate.used) ? BigInt(activeDelegate.limit) - BigInt(activeDelegate.used) : 0n)} <i className="text-xs font-normal not-italic text-slate-500">CKB</i></strong><small className="text-[11px] leading-4 text-slate-500">{formatCkb(activeDelegate.used)} {t('usedOf')} {formatCkb(activeDelegate.limit)} CKB</small></div><div className="min-w-0"><span className="text-xs font-medium text-slate-600">{t('maxPayment')}</span><strong className="my-1 block break-words text-xl font-semibold tabular-nums text-navy">{formatCkb(activeDelegate.perPayment)} <i className="text-xs font-normal not-italic text-slate-500">CKB</i></strong><small className="text-[11px] leading-4 text-slate-500">{t('perPaymentHint')}</small></div><div className="col-span-2 min-w-0 border-t border-slate-100 pt-3 sm:col-span-1 sm:border-0 sm:pt-0"><span className="text-xs font-medium text-slate-600">{t('sharedRemaining')}</span><strong className="my-1 block break-words text-xl font-semibold tabular-nums text-navy">{formatCkb(sharedRemaining)} <i className="text-xs font-normal not-italic text-slate-500">CKB</i></strong><small className="text-[11px] leading-4 text-slate-500">{t('sharedAuthorityHint')}</small></div></div>
           <div className="approved-recipient mt-3 flex flex-col gap-1 border-t border-slate-100 pt-3 sm:flex-row sm:justify-between sm:gap-4"><span className="text-xs font-medium text-slate-600">{t('recipient')}</span><code className="min-w-0 break-all text-left text-xs text-slate-700 sm:max-w-[70%] sm:text-right" dir="ltr" title={recipientAddress(activeDelegate.recipient)}>{recipientAddress(activeDelegate.recipient)}</code></div>
-          {activeDelegate.enabled && <button className="primary-button pay-button mt-4 min-w-40" disabled={pudgeReadOnly || actionsBlocked || !state.hasFund} onClick={() => beginOperation('pay', activeDelegate.role)}>{t('pay')} <span aria-hidden="true">→</span></button>}
+          {activeDelegate.enabled && <button className="primary-button pay-button mt-4 min-w-40" disabled={pudgeActionsDisabled || actionsBlocked || !state.hasFund} onClick={() => beginOperation('pay', activeDelegate.role)}>{t('pay')} <span aria-hidden="true">→</span></button>}
           {!activeDelegate.enabled && <p className="revoked-message" role="status">{t('permissionRevokedMessage')}</p>}
         </section>}
 
@@ -551,7 +567,7 @@ function App() {
             return <article className="permission-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t border-line px-3 py-3 first:border-0 sm:grid-cols-[minmax(0,1.5fr)_minmax(120px,.8fr)_auto] sm:gap-4 sm:px-4">
               <div className="permission-person"><div className="participant-mark" aria-hidden="true">{index + 1}</div><div><div className="permission-name"><h3>{name}</h3><span className={delegate.enabled ? 'permission-status' : 'permission-status is-revoked'}>{delegate.enabled ? t('active') : t('revoked')}</span><button type="button" className="text-button edit-name" onClick={() => setEditPerson({ publicKey: delegate.publicKey, role: delegate.role, fallback: name })}>{t('rename')}</button></div>{descriptionFor(delegate.publicKey) && <p>{descriptionFor(delegate.publicKey)}</p>}<span className="permission-subline">{formatCkb(remaining)} / {formatCkb(delegate.limit)} CKB · {t('maxPayment').toLowerCase()} {formatCkb(delegate.perPayment)} CKB</span></div></div>
               <div className="permission-recipient"><span>{t('recipient')}</span><code dir="ltr" title={recipientAddress(delegate.recipient)}>{shortHash(recipientAddress(delegate.recipient), 18, 8)}</code></div>
-              <div className="permission-actions"><details className="participant-inspector"><summary>{t('details')}</summary><div><span>{t('publicKey')}</span><code dir="ltr">{delegate.publicKey}</code><span>{t('recipient')}</span><code dir="ltr">{recipientAddress(delegate.recipient)}</code><span>{t('used')}</span><code>{formatCkb(delegate.used)} CKB</code></div></details><button type="button" className="text-button revoke-button" disabled={!delegate.enabled || actionsBlocked || pudgeReadOnly || closed} onClick={() => beginOperation('revoke', delegate.role, name)}>{t('revoke')}</button></div>
+            <div className="permission-actions"><details className="participant-inspector"><summary>{t('details')}</summary><div><span>{t('publicKey')}</span><code dir="ltr">{delegate.publicKey}</code><span>{t('recipient')}</span><code dir="ltr">{recipientAddress(delegate.recipient)}</code><span>{t('used')}</span><code>{formatCkb(delegate.used)} CKB</code></div></details><button type="button" className="text-button revoke-button" disabled={!delegate.enabled || actionsBlocked || pudgeActionsDisabled || closed} onClick={() => beginOperation('revoke', delegate.role, name)}>{t('revoke')}</button></div>
             </article>;
           })}</div>
         </section>}
@@ -581,7 +597,7 @@ function App() {
       <AlertDialog.Portal><AlertDialog.Overlay className="dialog-overlay fixed inset-0 z-50 bg-slate-950/55 backdrop-blur-[1px]"/><AlertDialog.Content className="dialog-content alert-dialog fixed left-1/2 top-1/2 z-[51] max-h-[min(88dvh,850px)] w-[min(500px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6" aria-modal="true">
         <span className="dialog-symbol warning-symbol mb-3 grid size-8 place-items-center rounded-lg border border-amber-200 bg-amber-50 font-bold text-amber-800" aria-hidden="true">!</span><AlertDialog.Title className="dialog-title text-xl font-semibold text-navy">{t('pudgeBroadcastTitle')}</AlertDialog.Title><AlertDialog.Description className="dialog-description mb-4 mt-1.5 block text-xs leading-5 text-slate-600">{t('pudgeBroadcastBody')}</AlertDialog.Description>
         {pendingSigned && <div className="signed-hash grid gap-1.5 rounded-md border border-line bg-slate-50 p-3"><span className="text-[11px] text-slate-500">{t('txId')}</span><code className="break-all text-xs text-slate-700" dir="ltr">{pendingSigned.hash}</code></div>}
-        <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2"><AlertDialog.Cancel asChild><button className="secondary-button" disabled={working}>{t('discardSignature')}</button></AlertDialog.Cancel><AlertDialog.Action asChild><button className="primary-button" disabled={working || pudgeReadOnly} onClick={(event) => { event.preventDefault(); if (pendingSigned) void submitSigned(pendingSigned.transaction, pendingSigned.hash); }}>{working ? t('submitting') : t('sendToPudge')}</button></AlertDialog.Action></div>
+        <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2"><AlertDialog.Cancel asChild><button className="secondary-button" disabled={working}>{t('discardSignature')}</button></AlertDialog.Cancel><AlertDialog.Action asChild><button className="primary-button" disabled={working || pudgeActionsDisabled} onClick={(event) => { event.preventDefault(); if (pendingSigned) void submitSigned(pendingSigned.transaction, pendingSigned.hash); }}>{working ? t('submitting') : t('sendToPudge')}</button></AlertDialog.Action></div>
       </AlertDialog.Content></AlertDialog.Portal>
     </AlertDialog.Root>
 

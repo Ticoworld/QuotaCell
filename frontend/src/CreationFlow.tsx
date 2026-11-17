@@ -42,6 +42,7 @@ function savedInvitations(value: unknown): Partial<Record<'alice' | 'ben', Regis
 
 type Props = {
   pudgeReadOnly: boolean;
+  prepareOnly: boolean;
   canPrepareCreation: boolean;
   connectedIdentity: WalletIdentity | null;
   onConnectParticipant: () => Promise<WalletIdentity>;
@@ -52,7 +53,7 @@ type Props = {
   draftKey: string;
 };
 
-export function CreationFlow({ pudgeReadOnly, canPrepareCreation, connectedIdentity, onConnectParticipant, onPrepare, onCancel, draftId, draftIndexKey, draftKey }: Props) {
+export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, connectedIdentity, onConnectParticipant, onPrepare, onCancel, draftId, draftIndexKey, draftKey }: Props) {
   const { t } = useTranslation();
   const [saved] = useState(() => { try { return JSON.parse(localStorage.getItem(draftKey) || 'null'); } catch { return null; } });
   const [step, setStep] = useState<number>(saved?.step >= 0 && saved?.step <= 2 ? saved.step : 0);
@@ -266,7 +267,7 @@ export function CreationFlow({ pudgeReadOnly, canPrepareCreation, connectedIdent
     </section>}
 
     {error && <p className="form-error" role="alert">{error}</p>}
-    <div className="setup-actions mx-auto mt-6 flex w-full max-w-[830px] justify-end gap-2">{step > 0 && <button className="secondary-button" type="button" disabled={preparing} onClick={() => { setError(''); setStep(step - 1); }}>{t('back')}</button>}{step < 2 ? <button className="primary-button" type="button" disabled={preparing} onClick={() => void next()}>{t('next')} <span aria-hidden="true">→</span></button> : <button className="primary-button" type="button" disabled={preparing || !canPrepareCreation} onClick={() => void prepare()}>{preparing ? t('preparing') : t('createAndSign')} <span aria-hidden="true">→</span></button>}</div>
+    <div className="setup-actions mx-auto mt-6 flex w-full max-w-[830px] justify-end gap-2">{step > 0 && <button className="secondary-button" type="button" disabled={preparing} onClick={() => { setError(''); setStep(step - 1); }}>{t('back')}</button>}{step < 2 ? <button className="primary-button" type="button" disabled={preparing} onClick={() => void next()}>{t('next')} <span aria-hidden="true">→</span></button> : <button className="primary-button" type="button" disabled={preparing || !canPrepareCreation} onClick={() => void prepare()}>{preparing ? t('preparing') : t(prepareOnly ? 'prepareForReview' : 'createAndSign')} <span aria-hidden="true">→</span></button>}</div>
   </main>;
 }
 

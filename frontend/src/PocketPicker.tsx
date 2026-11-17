@@ -21,7 +21,13 @@ export function PocketPicker({ pockets, drafts, ownerCanCreate, locale, loading,
       <h1 className="m-0 text-2xl font-bold text-navy">{t('myPockets')}</h1>
       {ownerCanCreate && <button className="primary-button" type="button" onClick={onCreate}>{t('newPocket')} <span aria-hidden="true">→</span></button>}
     </div>
-    {loading && <p className="text-sm text-slate-600" role="status">{t('discoveringPockets')}</p>}
+    {loading && <section className="border-y border-slate-200" aria-busy="true" aria-label={t('checkingPocketList')}>
+      <p className="py-3 text-sm text-slate-600" role="status">{t('checkingPocketList')}</p>
+      {Array.from({ length: 2 }, (_, index) => <div key={index} className="flex flex-col justify-between gap-3 border-t border-slate-200 py-4 sm:flex-row sm:items-center" aria-hidden="true">
+        <div className="min-w-0 flex-1 animate-pulse space-y-2"><div className="h-4 w-36 rounded-sm bg-slate-200"/><div className="h-3 w-[min(100%,28rem)] rounded-sm bg-slate-100"/><div className="h-3 w-48 rounded-sm bg-slate-100"/></div>
+        <div className="h-10 w-32 animate-pulse rounded-md bg-slate-100"/>
+      </div>)}
+    </section>}
     {error && <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm leading-5 text-red-800" role="alert">{error}</p>}
     {!loading && pockets.length > 0 && <section aria-label={t('myPockets')}>
       <div className="divide-y divide-slate-200 border-y border-slate-200">{pockets.map((item) => <div key={item.pocket} className="flex flex-col justify-between gap-3 py-4 sm:flex-row sm:items-center">

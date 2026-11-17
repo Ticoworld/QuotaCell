@@ -33,6 +33,7 @@ export function OperationDialog({ intent, prepared, state, identity, delegates, 
   const [walletPickerActive, setWalletPickerActive] = useState(false);
   const networkMode = state?.networkMode || '';
   const readOnly = networkMode === 'pudge-readonly';
+  const prepareOnly = networkMode === 'pudge-prepare-only';
   const selected = intent?.role ? delegates.find((delegate) => delegate.role === intent.role) : undefined;
   const selectedRecipient = selected ? recipientAddresses[selected.recipient] || selected.recipient : '';
   const isPrepared = Boolean(prepared);
@@ -66,7 +67,7 @@ export function OperationDialog({ intent, prepared, state, identity, delegates, 
   const submitPreparation = async () => {
     if (!intent || !identity) { setValidation(t('connect')); return; }
     setValidation('');
-    if (readOnly) { setValidation(t('readonlyAction')); return; }
+    if (readOnly || (prepareOnly && intent.operation !== 'genesis')) { setValidation(t(prepareOnly ? 'prepareOnlyNotice' : 'readonlyAction')); return; }
     let amount = '';
     try {
       if (intent.operation === 'pay') { parseCkb(paymentAmount, t('minAmount')); amount = paymentAmount; }
@@ -128,17 +129,27 @@ export function OperationDialog({ intent, prepared, state, identity, delegates, 
           {validation && <p className="form-error rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-800" role="alert">{validation}</p>}
           {error && <p className="form-error rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-800" role="alert">{error}</p>}
           {readOnly && <p className="readonly-notice rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900" role="status">{t('readonlyAction')}</p>}
-          <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2"><Dialog.Close asChild><button className="secondary-button" type="button" disabled={working}>{t('cancel')}</button></Dialog.Close><button className="primary-button" type="button" disabled={working || readOnly || !identity} onClick={() => void submitPreparation()}>{working ? t('preparing') : intent.operation === 'pay' ? t('reviewPayment') : t('continueToReview')} <span aria-hidden="true">→</span></button></div>
+          {prepareOnly && intent.operation !== 'genesis' && <p className="readonly-notice rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900" role="status">{t('prepareOnlyNotice')}</p>}
+          <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2"><Dialog.Close asChild><button className="secondary-button" type="button" disabled={working}>{t('cancel')}</button></Dialog.Close><button className="primary-button" type="button" disabled={working || readOnly || (prepareOnly && intent.operation !== 'genesis') || !identity} onClick={() => void submitPreparation()}>{working ? t('preparing') : intent.operation === 'pay' ? t('reviewPayment') : t('continueToReview')} <span aria-hidden="true">→</span></button></div>
         </div>}
 
         {prepared && intent && <div className="transaction-review grid gap-3">
           <p className="transaction-operation">{title}</p>
           <div className="transaction-facts">
-            {intent.operation === 'pay' && <div className="transaction-amount">{paymentAmount} <span>CKB</span></div>}
+          {intent.operation === 'pay' && <div className="transaction-amount">{paymentAmount} <span>CKB</span></div>}
             {intent.operation === 'deposit' && <div className="transaction-amount">{depositAmount} <span>CKB</span></div>}
             {intent.operation === 'close' && <div className="transaction-amount">{formatCkb(state?.fundShannons || '0')} <span>CKB</span></div>}
             {intent.operation === 'sweep' && <div className="transaction-amount">{formatCkb(state?.fundShannons || '0')} <span>CKB</span></div>}
             <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('actualFee')}</span><strong className="font-semibold tabular-nums text-slate-800">{formatCkb(prepared.fee)} CKB</strong></div>
+            {intent.operation === 'genesis' && <section className="grid gap-2 border-t border-line pt-3 text-xs">
+              <h3 className="m-0 text-sm font-semibold text-navy">{t('capitalReview')}</h3>
+              <div className="inline-facts flex justify-between gap-3"><span>{t('activePolicyCapacity')}</span><strong className="text-right tabular-nums">{formatCkb(prepared.policyCapacity || '60000000000')} CKB</strong></div>
+              {prepared.ownerInputCapacity && <div className="inline-facts flex justify-between gap-3"><span>{t('ownerInput')}</span><strong className="text-right tabular-nums">{formatCkb(prepared.ownerInputCapacity)} CKB</strong></div>}
+              {prepared.ownerChangeCapacity && <div className="inline-facts flex justify-between gap-3"><span>{t('ownerChange')}</span><strong className="text-right tabular-nums">{formatCkb(prepared.ownerChangeCapacity)} CKB</strong></div>}
+              {prepared.minimumOwnerInputCapacity && <div className="inline-facts flex justify-between gap-3"><span>{t('minimumOwnerInput')}</span><strong className="text-right tabular-nums">{formatCkb(prepared.minimumOwnerInputCapacity)} CKB</strong></div>}
+              <div className="inline-facts flex justify-between gap-3 border-t border-slate-100 pt-2"><span>{t('terminalCapacity')}</span><strong className="text-right tabular-nums">{formatCkb(prepared.terminalCapacity || '13400000000')} CKB</strong></div>
+              <p className="m-0 text-slate-600">{t('terminalCapacityHint')}</p>
+            </section>}
             <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('network')}</span><strong className="text-right font-semibold text-slate-800">{networkMode.startsWith('pudge') ? t('networkPudge') : t('networkLocal')}</strong></div>
             <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('signer')}</span><code className="text-right text-slate-800" dir="ltr">{identity ? shortHash(identity.address, 13, 8) : '—'}</code></div>
             {intent.operation === 'pay' && selected && <div className="review-row"><span>{t('target')}</span><code dir="ltr">{selectedRecipient}</code></div>}
@@ -150,6 +161,7 @@ export function OperationDialog({ intent, prepared, state, identity, delegates, 
           {intent.operation === 'close' && <div className="consequence-box rounded-lg border border-line bg-slate-50 p-3.5"><p className="m-0 text-xs leading-5 text-slate-700">{t('closeConsequences')}</p></div>}
           {intent.operation === 'sweep' && <div className="consequence-box rounded-lg border border-line bg-slate-50 p-3.5"><p className="m-0 text-xs leading-5 text-slate-700">{t('sweepConsequences')}</p></div>}
           <div className="critical-note rounded-md border-l-2 border-blue-300 bg-blue-50 px-3 py-2.5 text-xs leading-5 text-slate-700">{t('localDisclosure')}</div>
+          {prepareOnly && intent.operation === 'genesis' && <p className="readonly-notice rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900" role="status">{t('prepareOnlyNotice')}</p>}
           {!signerMatches && <div className="readonly-notice"><p>{t('signerMismatch')}</p><button type="button" className="text-button" onClick={() => void reconnectExpectedSigner()}>{t('reconnectSigner')}</button></div>}
           {validation && <p className="form-error rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-800" role="alert">{validation}</p>}
           <details className="technical-details border-t border-line pt-2" open={detailsOpen} onToggle={(event) => setDetailsOpen(event.currentTarget.open)}><summary className="cursor-pointer py-1.5 text-xs font-medium text-slate-600">{t('technical')}</summary>
@@ -158,7 +170,7 @@ export function OperationDialog({ intent, prepared, state, identity, delegates, 
           </details>
           {error && <p className="form-error rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-800" role="alert">{error}</p>}
           {history.some((item) => item.state === 'uncertain') && <p className="readonly-notice rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900">{t('unresolvedBody')}</p>}
-          <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2"><Dialog.Close asChild><button className="secondary-button" type="button" disabled={working}>{t('cancel')}</button></Dialog.Close><button className="primary-button" type="button" disabled={working || readOnly || !signerMatches} onClick={() => void onSign(prepared)}>{working ? t('walletApproval') : t('continueWallet')} <span aria-hidden="true">→</span></button></div>
+          <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2"><Dialog.Close asChild><button className="secondary-button" type="button" disabled={working}>{t('cancel')}</button></Dialog.Close><button className="primary-button" type="button" disabled={working || readOnly || prepareOnly || !signerMatches} onClick={() => void onSign(prepared)}>{working ? t('walletApproval') : prepareOnly ? t('signingDisabled') : t('continueWallet')} <span aria-hidden="true">→</span></button></div>
         </div>}
       </Dialog.Content>
     </Dialog.Portal>
