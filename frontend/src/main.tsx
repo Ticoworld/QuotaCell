@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import * as Dialog from '@radix-ui/react-dialog';
+import { Toaster, toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 import './style.css';
@@ -20,7 +21,7 @@ import { createPocketDraft, listPocketDrafts, pocketDraftIndexKey } from './draf
 const wallet = new CkbWalletSession();
 type ActorRole = 'owner' | 'alice' | 'ben' | 'unrecognized';
 type SignedPending = { transaction: string; hash: string };
-type TransactionNotice = { state: string; hash?: string; detail?: string; phase?: string };
+type TransactionNotice = { state: string; hash?: string; detail?: string; phase?: string; technicalError?: string };
 type Participant = { publicKey: string; fallback: string; role: 'owner' | 'alice' | 'ben' };
 const PENDING_TRANSACTION_KEY = 'quotacell.pending-pudge-transaction';
 
@@ -332,8 +333,8 @@ function App() {
     if (!state?.pocket) return;
     const url = new URL(window.location.href);
     url.search = new URLSearchParams({ view: '1', pocket: state.pocket }).toString();
-    try { await navigator.clipboard.writeText(url.toString()); setTransactionNotice({ state: 'metadata', detail: t('pocketLinkCopied') }); }
-    catch { setIdentityError(url.toString()); }
+    try { await navigator.clipboard.writeText(url.toString()); toast.success(t('pocketLinkCopied')); }
+    catch { toast.error(t('clipboardWriteFailed')); setIdentityError(url.toString()); }
   };
 
   const beginOperation = (operation: Operation, selectedRole?: 'alice' | 'ben', displayName?: string) => {
@@ -449,17 +450,25 @@ function App() {
       const notice = { state: 'pending', hash, detail: t('submitting') };
       try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
       setTransactionNotice(notice);
+      toast.loading(t('submitting'), { id: 'quotacell-transaction-submit' });
     }
     setWorking(true); setOperationError('');
     try {
       const result: TransactionResult = await submitTransaction(prepared.id, transaction);
       const preBroadcastFailure = ['network-check', 'pocket-check', 'input-fee-check', 'dry-run', 'pool-admission'].includes(result.phase || '');
-      setTransactionNotice({
-        state: preBroadcastFailure ? 'error' : result.state,
-        hash: result.txHash || hash,
-        phase: result.phase,
-        detail: preBroadcastFailure ? `${t('preBroadcastStopped')} ${result.error || ''}`.trim() : result.error,
-      });
+      const detail = preBroadcastFailure ? t('transactionNotSent')
+        : result.state === 'committed' ? t('transactionConfirmed')
+          : ['pending', 'proposed', 'submitted'].includes(result.state) ? t('transactionSubmitted')
+            : result.state === 'rejected' ? t('transactionRejected') : t('submitUnknown');
+      const notice: TransactionNotice = { state: preBroadcastFailure ? 'error' : result.state, hash: result.txHash || hash, phase: result.phase, detail, technicalError: result.error || result.reason };
+      setTransactionNotice(notice);
+      if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
+      const toastOptions = { id: 'quotacell-transaction-submit' };
+      if (preBroadcastFailure) toast.error(t('transactionNotSent'), toastOptions);
+      else if (result.state === 'committed') toast.success(t('transactionConfirmed'), toastOptions);
+      else if (['pending', 'proposed', 'submitted'].includes(result.state)) toast.info(t('transactionSubmitted'), toastOptions);
+      else if (result.state === 'rejected') toast.error(t('transactionRejected'), toastOptions);
+      else toast.warning(t('submitUnknown'), toastOptions);
       setPrepared(null); setIntent(null); setPendingSigned(null);
       if (intent?.operation === 'genesis' && result.state === 'committed' && result.pocket) {
         window.history.replaceState(null, '', `${window.location.pathname}?${new URLSearchParams({ pocket: result.pocket })}`);
@@ -468,7 +477,10 @@ function App() {
       await refresh(true);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      setTransactionNotice({ state: 'uncertain', hash, phase: 'submit', detail: `${t('submitUnknown')} ${message}` });
+      const notice: TransactionNotice = { state: 'uncertain', hash, phase: 'submit', detail: t('submitUnknown'), technicalError: message };
+      setTransactionNotice(notice);
+      if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
+      toast.warning(t('submitUnknown'), { id: 'quotacell-transaction-submit' });
       setOperationError(localizedError(message, t));
       setPrepared(null); setIntent(null); setPendingSigned(null);
       await refresh(true);
@@ -500,20 +512,24 @@ function App() {
   const closeDialog = () => { if (working || pendingSigned) return; setIntent(null); setPrepared(null); setOperationError(''); };
 
   const runReconcile = async () => {
-    setReconcileBusy(true); setTransactionNotice(null);
+    setReconcileBusy(true);
     try {
       const result = await reconcile();
       const unresolved = result.outcomes.find((outcome) => outcome.state === 'uncertain' || outcome.status === 'unknown');
-      const localOutcome = transactionNotice?.hash && result.outcomes.find((outcome) => outcome.txHash.toLowerCase() === transactionNotice.hash?.toLowerCase());
+      const localOutcome = transactionNotice?.hash ? result.outcomes.find((outcome) => outcome.txHash.toLowerCase() === transactionNotice.hash?.toLowerCase()) : undefined;
+      const remainsUnresolved = Boolean(unresolved || (transactionNotice?.hash && !localOutcome) || localOutcome?.state === 'uncertain' || localOutcome?.status === 'unknown');
       setTransactionNotice(localOutcome
         ? { state: localOutcome.state || localOutcome.status || 'uncertain', hash: localOutcome.txHash }
         : transactionNotice?.hash
           ? { ...transactionNotice, state: 'uncertain', detail: t('txNotInJournal') }
           : unresolved ? { state: 'uncertain', hash: unresolved.txHash } : { state: 'checked' });
+      if (remainsUnresolved) toast.warning(t('submitUnknown'));
+      else toast.success(t('checkedStatus'));
       await refresh(true);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      setTransactionNotice({ state: 'error', detail: localizedError(message, t) });
+      setTransactionNotice({ state: 'error', detail: t('statusCouldNotConfirm'), technicalError: message });
+      toast.error(t('statusCouldNotConfirm'));
     } finally { setReconcileBusy(false); }
   };
 
@@ -527,15 +543,24 @@ function App() {
         ? `${t('statusCommitted')} · ${t('blockNumber')} ${result.blockNumber || '—'}`
         : status === 'pending' ? t('statusPending')
           : status === 'proposed' ? t('statusProposed')
-            : status === 'rejected' ? `${t('statusRejected')}: ${result.reason || '—'}`
-              : status === 'uncertain' ? `${t('statusCheckFailed')} ${result.reason || ''}`
+            : status === 'rejected' ? t('transactionRejected')
+              : status === 'uncertain' ? t('statusCouldNotConfirm')
                 : t('txStillUnknown');
       const preBroadcastFailure = transactionNotice.phase && ['network-check', 'pocket-check', 'input-fee-check', 'dry-run', 'pool-admission'].includes(transactionNotice.phase);
-      setTransactionNotice({ state: status === 'unknown' && preBroadcastFailure ? 'error' : status, hash: transactionNotice.hash, phase: transactionNotice.phase, detail: status === 'unknown' && preBroadcastFailure ? `${t('preBroadcastStopped')} ${transactionNotice.detail || ''}`.trim() : detail });
+      const notice: TransactionNotice = { state: status === 'unknown' && preBroadcastFailure ? 'error' : status, hash: transactionNotice.hash, phase: transactionNotice.phase, detail: status === 'unknown' && preBroadcastFailure ? t('transactionNotSent') : detail, technicalError: result.reason };
+      setTransactionNotice(notice);
+      if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
+      if (status === 'committed') toast.success(t('transactionConfirmed'));
+      else if (status === 'pending' || status === 'proposed') toast.info(t('transactionSubmitted'));
+      else if (status === 'rejected') toast.error(t('transactionRejected'));
+      else toast.warning(t('submitUnknown'));
       if (status === 'committed') await refresh(true);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      setTransactionNotice({ state: 'uncertain', hash: transactionNotice.hash, phase: transactionNotice.phase, detail: `${t('statusCheckFailed')} ${message}` });
+      const notice: TransactionNotice = { state: 'uncertain', hash: transactionNotice.hash, phase: transactionNotice.phase, detail: t('statusCouldNotConfirm'), technicalError: message };
+      setTransactionNotice(notice);
+      try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
+      toast.error(t('statusCouldNotConfirm'));
     } finally { setNoticeCheckBusy(false); }
   };
 
@@ -576,13 +601,13 @@ function App() {
 
   const dateText = (value: string) => new Intl.DateTimeFormat(i18n.language === 'zh-Hans' ? 'zh-CN' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
   const historyState = (value: string) => {
-    const key = value === 'committed' ? 'statusCommitted' : value === 'pending' ? 'statusPending' : value === 'proposed' ? 'statusProposed' : value === 'uncertain' ? 'statusUncertain' : value === 'rejected' ? 'statusRejected' : '';
+    const key = value === 'committed' ? 'statusCommitted' : value === 'pending' ? 'statusPending' : value === 'proposed' ? 'statusProposed' : value === 'submitted' ? 'statusSubmitted' : value === 'uncertain' || value === 'unknown' ? 'statusUncertain' : value === 'rejected' ? 'statusRejected' : value === 'failed' || value === 'error' ? 'statusFailed' : '';
     return key ? t(key) : value;
   };
   const explorerUrl = (hash: string) => `https://pudge.explorer.nervos.org/transaction/${hash}`;
   const displayIdentityRole = role === 'owner' ? t('owner') : role === 'alice' ? labelFor(delegates.find((d) => d.role === 'alice')?.publicKey, t('delegateOne')) : role === 'ben' ? labelFor(delegates.find((d) => d.role === 'ben')?.publicKey, t('delegateTwo')) : role === 'unrecognized' ? t('unknownRole') : '';
   const identityDiscoveryLoading = Boolean(identity && !loadError && (stateActor !== identity.publicKey.toLowerCase() || (state?.empty && refreshing)));
-  const noticeTitle = transactionNotice?.state === 'uncertain' ? t('statusUncertain') : transactionNotice?.state === 'error' ? t('statusFailed') : transactionNotice?.state === 'checked' ? t('checkedStatus') : transactionNotice?.state === 'metadata' ? t('metadataLocal') : transactionNotice ? historyState(transactionNotice.state) : '';
+  const noticeTitle = transactionNotice?.state === 'uncertain' ? t('statusUncertain') : transactionNotice?.state === 'error' && ['network-check', 'pocket-check', 'input-fee-check', 'dry-run', 'pool-admission'].includes(transactionNotice.phase || '') ? t('statusNotSent') : transactionNotice?.state === 'error' ? t('statusFailed') : transactionNotice?.state === 'checked' ? t('checkedStatus') : transactionNotice?.state === 'metadata' ? t('metadataLocal') : transactionNotice ? historyState(transactionNotice.state) : '';
 
   return <>
     <header className="topbar sticky top-0 z-40 flex h-16 w-full items-center justify-between gap-3 border-b border-line bg-white/95 px-4 backdrop-blur sm:px-6 lg:px-[max(26px,calc((100vw-1160px)/2))]"><a className="brand inline-flex shrink-0 items-center gap-2.5 text-lg font-bold text-navy no-underline" href="#home" aria-label={t('brand')}><CellMark/><span>{t('brand')}</span></a>
@@ -594,9 +619,11 @@ function App() {
       </div>
     </header>
 
+    <Toaster position="top-right" theme="light" richColors closeButton visibleToasts={3} offset={72} toastOptions={{ className: 'quotacell-toast', duration: 5000 }}/>
+
     {identityError && <div className="wallet-connection-alert inline-alert mx-auto mt-4 w-[min(calc(100%-2rem),64rem)] rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm leading-5 text-red-800" role="alert">{identityError}</div>}
     {stateStale && !selectedPocketLoading && !selectedPocketError && !showPocketList && <div className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)] rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900" role="status">{t('stateRefreshPaused')}</div>}
-    {showCreation && transactionNotice && <div className={`transaction-notice mx-auto mt-3 flex w-[min(calc(100%-2rem),64rem)] items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3.5 ${['uncertain', 'error', 'rejected', 'unknown'].includes(transactionNotice.state) ? 'notice-warning border-amber-200 bg-amber-50' : ''}`} role={['uncertain', 'error', 'rejected', 'unknown'].includes(transactionNotice.state) ? 'alert' : 'status'} aria-live="polite"><span className="notice-marker grid size-6 shrink-0 place-items-center rounded-full bg-success text-xs font-bold text-white" aria-hidden="true">{['uncertain', 'error', 'rejected', 'unknown'].includes(transactionNotice.state) ? '!' : '✓'}</span><div className="min-w-0 flex-1"><strong className="text-sm font-semibold text-slate-800">{noticeTitle}</strong><p className="mt-1 break-words text-xs leading-5 text-slate-600">{transactionNotice.detail || (transactionNotice.hash ? transactionNotice.state : t('noUncertainTransactions'))}</p>{transactionNotice.hash && <div className="mt-2 grid gap-1.5"><code className="break-all text-[11px] text-slate-700" dir="ltr">{transactionNotice.hash}</code>{pudge && <a className="text-xs text-blue underline" href={explorerUrl(transactionNotice.hash)} target="_blank" rel="noreferrer">{t('explorer')}</a>}</div>}</div>{pudge && transactionNotice.hash && ['uncertain', 'pending', 'proposed', 'submitted', 'unknown'].includes(transactionNotice.state) && <button type="button" className="secondary-button shrink-0" disabled={noticeCheckBusy} onClick={() => void checkNoticeStatus()}>{noticeCheckBusy ? t('checkingStatus') : t('checkStatus')}</button>}</div>}
+    {showCreation && transactionNotice && <TransactionNoticePanel notice={transactionNotice} title={noticeTitle} pudge={pudge} explorerUrl={explorerUrl} t={t} className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)]" onCheckStatus={() => void checkNoticeStatus()} checkingStatus={noticeCheckBusy}/>}
 
     {showCreation && identity && state?.genesis && activeDraftId && activeDraftKey ? <CreationFlow key={`${state.genesis}:${activeDraftOwner}:${activeDraftId}`} draftId={activeDraftId} draftIndexKey={draftIndexKey} draftKey={activeDraftKey} pudgeReadOnly={pudgeReadOnly} prepareOnly={pudgePrepareOnly} canPrepareCreation={state.multiPocket === true && !pudgeReadOnly} connectedIdentity={identity} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => { setActiveDraftId(''); setActiveDraftOwner(''); setShowCreation(false); setShowPocketList(false); setPocketListError(''); }}/> : state?.creationRecovery ? <main className="loading-page mx-auto grid min-h-[55vh] w-[min(100%-2rem,64rem)] place-items-center text-slate-600"><section className="load-error w-full max-w-xl rounded-lg border border-red-200 bg-white p-5 shadow-sm" role="alert"><h1 className="text-lg font-semibold text-red-900">{t('creationRecoveryTitle')}</h1><p className="text-sm leading-6 text-slate-700">{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p className="break-all text-xs text-slate-600"><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
       : selectedPocketLoading ? <main className="mx-auto min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] py-7 sm:py-10" aria-busy="true"><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><h1 className="m-0 text-2xl font-bold text-navy">{t('openingPocket')}</h1><p className="mt-1 text-sm text-slate-600" role="status">{t('verifyingPocket')}</p></div><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('backToMyPockets')}</button></div><section className="grid grid-cols-1 gap-3 md:grid-cols-2" aria-hidden="true"><div className="animate-pulse rounded-lg border border-line bg-white p-5"><div className="mb-4 h-3 w-28 rounded-sm bg-slate-200"/><div className="mb-3 h-9 w-40 rounded-sm bg-slate-100"/><div className="h-3 w-3/4 rounded-sm bg-slate-100"/></div><div className="animate-pulse rounded-lg border border-line bg-white p-5"><div className="mb-4 h-3 w-32 rounded-sm bg-slate-200"/><div className="mb-3 h-9 w-36 rounded-sm bg-slate-100"/><div className="h-3 w-2/3 rounded-sm bg-slate-100"/></div></section><div className="mt-7 divide-y divide-slate-200 border-y border-slate-200" aria-hidden="true">{[0, 1, 2].map((item) => <div key={item} className="flex items-center justify-between gap-4 py-4"><div className="animate-pulse space-y-2"><div className="h-3 w-32 rounded-sm bg-slate-200"/><div className="h-3 w-56 max-w-[70vw] rounded-sm bg-slate-100"/></div><div className="h-10 w-28 animate-pulse rounded-md bg-slate-100"/></div>)}</div></main>
@@ -609,7 +636,7 @@ function App() {
 
         {state.historicalTermsUnavailable && <p className="mb-5 border-l-2 border-amber-500 pl-3 text-sm leading-6 text-amber-900" role="status">{t('terminalHistoryUnavailable')}</p>}
 
-        {transactionNotice && <div className={`transaction-notice mb-4 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3.5 ${['uncertain', 'error', 'rejected'].includes(transactionNotice.state) ? 'notice-warning border-amber-200 bg-amber-50' : ''}`} role="status" aria-live="polite"><span className="notice-marker grid size-6 shrink-0 place-items-center rounded-full bg-success text-xs font-bold text-white" aria-hidden="true">{['uncertain', 'error', 'rejected'].includes(transactionNotice.state) ? '!' : '✓'}</span><div className="min-w-0 flex-1"><strong className="text-sm font-semibold text-slate-800">{noticeTitle}</strong><p className="mt-1 break-words text-xs leading-5 text-slate-600">{transactionNotice.detail || (transactionNotice.hash ? transactionNotice.state : t('noUncertainTransactions'))}</p>{transactionNotice.hash && <div className="mt-2 grid gap-1.5"><code className="break-all text-[11px] text-slate-700" dir="ltr">{transactionNotice.hash}</code>{pudge && <a className="text-xs text-blue underline" href={explorerUrl(transactionNotice.hash)} target="_blank" rel="noreferrer">{t('explorer')}</a>}</div>}</div>{pudge && transactionNotice.hash && ['uncertain', 'pending', 'proposed', 'submitted'].includes(transactionNotice.state) && <button type="button" className="secondary-button shrink-0" disabled={noticeCheckBusy} onClick={() => void checkNoticeStatus()}>{noticeCheckBusy ? t('checkingStatus') : t('checkStatus')}</button>}{retryableIntent && ['error', 'uncertain', 'unknown', 'submitted'].includes(transactionNotice.state) && <button type="button" className="secondary-button shrink-0" disabled={retryBusy} onClick={() => setRetryDialogOpen(true)}>{t('retrySameTransaction')}</button>}<button type="button" className="text-button rounded p-1 text-slate-500 hover:bg-white/70" onClick={() => { setTransactionNotice(null); try { sessionStorage.removeItem(PENDING_TRANSACTION_KEY); } catch { /* Session storage is optional. */ } }} aria-label={t('close')}>×</button></div>}
+        {transactionNotice && <TransactionNoticePanel notice={transactionNotice} title={noticeTitle} pudge={pudge} explorerUrl={explorerUrl} t={t} className="mb-4" onCheckStatus={() => void checkNoticeStatus()} checkingStatus={noticeCheckBusy} onRetry={retryableIntent && ['error', 'uncertain', 'unknown', 'submitted'].includes(transactionNotice.state) ? () => setRetryDialogOpen(true) : undefined} retryBusy={retryBusy} onDismiss={() => { setTransactionNotice(null); try { sessionStorage.removeItem(PENDING_TRANSACTION_KEY); } catch { /* Session storage is optional. */ } }}/>}
 
         {state.unresolved && <section className="unresolved-banner mb-4 flex flex-col items-start justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center" role="alert"><div><strong className="text-sm font-semibold text-amber-950">{t('unresolvedTitle')}</strong><p className="mt-1 text-xs leading-5 text-amber-900">{t('unresolvedBody')}</p></div><button type="button" className="secondary-button shrink-0" disabled={reconcileBusy || pudgeReadOnly} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section>}
 
@@ -682,6 +709,35 @@ function App() {
       </AlertDialog.Content></AlertDialog.Portal>
     </AlertDialog.Root>
   </>;
+}
+
+function TransactionNoticePanel({ notice, title, pudge, explorerUrl, t, className = '', onCheckStatus, checkingStatus, onRetry, retryBusy, onDismiss }: {
+  notice: TransactionNotice;
+  title: string;
+  pudge: boolean;
+  explorerUrl: (hash: string) => string;
+  t: (key: string) => string;
+  className?: string;
+  onCheckStatus?: () => void;
+  checkingStatus?: boolean;
+  onRetry?: () => void;
+  retryBusy?: boolean;
+  onDismiss?: () => void;
+}) {
+  const tone = notice.state === 'committed' || notice.state === 'checked' ? 'success'
+    : ['uncertain', 'unknown'].includes(notice.state) ? 'warning'
+      : ['error', 'rejected', 'failed'].includes(notice.state) ? 'error' : 'info';
+  const canCheck = Boolean(pudge && notice.hash && onCheckStatus && ['uncertain', 'pending', 'proposed', 'submitted', 'unknown'].includes(notice.state));
+  const message = notice.detail || (notice.hash ? notice.state : t('noUncertainTransactions'));
+  const canDismiss = Boolean(onDismiss && ['committed', 'checked', 'error', 'rejected', 'failed'].includes(notice.state));
+  return <section className={`transaction-notice notice-${tone} ${className}`} role={tone === 'error' || tone === 'warning' ? 'alert' : 'status'} aria-live={tone === 'error' || tone === 'warning' ? 'assertive' : 'polite'} aria-atomic="true">
+    <span className="notice-marker" aria-hidden="true">{tone === 'success' ? '✓' : tone === 'info' ? 'i' : '!'}</span>
+    <div className="notice-content"><strong>{title}</strong><p>{message}</p>
+      {notice.hash && <div className="notice-transaction"><code dir="ltr">{notice.hash}</code>{pudge && <a href={explorerUrl(notice.hash)} target="_blank" rel="noreferrer">{t('explorer')}</a>}</div>}
+      {(notice.technicalError || notice.phase) && <details className="notice-technical"><summary>{t('technical')}</summary>{notice.phase && <p><code>{notice.phase}</code></p>}{notice.technicalError && <pre dir="ltr">{notice.technicalError}</pre>}</details>}
+    </div>
+    <div className="notice-actions">{canCheck && <button type="button" className="secondary-button" disabled={checkingStatus} onClick={onCheckStatus}>{checkingStatus ? t('checkingStatus') : t('checkStatus')}</button>}{onRetry && <button type="button" className="secondary-button" disabled={retryBusy} onClick={onRetry}>{t('retrySameTransaction')}</button>}{canDismiss && <button type="button" className="icon-button notice-dismiss" onClick={onDismiss} aria-label={t('close')}>×</button>}</div>
+  </section>;
 }
 
 function HistoryRow({ item, locale, label, stateLabel, explorer, t }: { item: HistoryItem; locale: string; label: string; stateLabel: string; explorer?: string; t: (key: string) => string }) {

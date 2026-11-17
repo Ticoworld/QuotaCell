@@ -157,15 +157,32 @@
   .state-mark::before, .permission-status:not(.is-revoked)::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #248253; }
   .state-mark.state-closed, .permission-status.is-revoked { color: #8b3038; background: #fff4f4; border-color: #e5c2c5; }
   .state-mark.state-closed::before, .permission-status.is-revoked::before { background: #b14b54; }
-  .transaction-notice, .unresolved-banner { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 18px; padding: 14px 15px; background: #f0f8f3; border: 1px solid #c5dfce; border-radius: 8px; }
-  .transaction-notice.notice-warning, .unresolved-banner { background: #fff9ed; border-color: #ead5ae; }
-  .notice-marker { width: 23px; height: 23px; display: grid; flex: none; place-items: center; color: #fff; background: var(--success); border-radius: 50%; font-size: 13px; font-weight: 700; }
-  .notice-warning .notice-marker, .unresolved-banner .notice-marker { color: #fff; background: var(--warning); }
-  .transaction-notice > div, .unresolved-banner > div { flex: 1; min-width: 0; }
-  .transaction-notice strong, .unresolved-banner strong { color: #26364e; font-size: 13px; }
-  .transaction-notice p, .unresolved-banner p { margin: 3px 0 0; color: #59687d; font-size: 12px; overflow-wrap: anywhere; }
+  .transaction-notice, .unresolved-banner { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 18px; padding: 14px 15px; background: #fff; border: 1px solid #d7e0ed; border-radius: 8px; }
+  .transaction-notice { border-left: 3px solid #3572d4; box-shadow: 0 1px 2px rgb(20 40 70 / 5%); }
+  .transaction-notice.notice-success { background: #f7fcf9; border-color: #cfe5d8; border-left-color: #25815a; }
+  .transaction-notice.notice-info { background: #f7faff; border-color: #d2e0f5; border-left-color: #3572d4; }
+  .transaction-notice.notice-warning, .unresolved-banner { background: #fffaf0; border-color: #ead9b4; border-left-color: #b7791f; }
+  .transaction-notice.notice-error { background: #fff8f8; border-color: #edcece; border-left-color: #bd3f49; }
+  .notice-marker { width: 23px; height: 23px; display: grid; flex: none; place-items: center; color: #205bb4; background: #e9f1ff; border-radius: 50%; font-size: 13px; font-weight: 700; }
+  .notice-success .notice-marker { color: #17643f; background: #e7f5ed; }
+  .notice-warning .notice-marker, .unresolved-banner .notice-marker { color: #805312; background: #f9edcf; }
+  .notice-error .notice-marker { color: #a12f39; background: #fbe8e8; }
+  .notice-content { flex: 1; min-width: 0; }
+  .notice-content strong, .unresolved-banner strong { color: #26364e; font-size: 13px; }
+  .notice-content > p, .unresolved-banner p { margin: 3px 0 0; color: #59687d; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+  .notice-transaction { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 12px; margin-top: 9px; }
+  .notice-transaction code { min-width: 0; color: #34445c; font-size: 11px; overflow-wrap: anywhere; }
+  .notice-transaction a { color: #1c5bbd; font-size: 12px; text-decoration: underline; text-underline-offset: 2px; }
+  .notice-actions { display: flex; flex: none; flex-wrap: wrap; align-items: flex-start; justify-content: flex-end; gap: 7px; }
+  .notice-dismiss { width: 30px; height: 30px; flex: none; }
+  .notice-technical { margin-top: 9px; color: #56657a; font-size: 11px; }
+  .notice-technical summary { width: fit-content; cursor: pointer; color: #385579; }
+  .notice-technical pre { max-height: 120px; margin: 7px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 5px; background: #f1f4f8; padding: 8px; color: #475569; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .quotacell-toast { font-family: var(--sans); }
+  .unresolved-banner { border-left-width: 3px; }
+  .unresolved-banner > div { flex: 1; min-width: 0; }
+  @media (max-width: 600px) { .transaction-notice { flex-wrap: wrap; } .notice-content { flex-basis: calc(100% - 38px); } .notice-actions { width: 100%; justify-content: flex-end; } }
   .unresolved-banner { align-items: center; }
-  .unresolved-banner > div { flex: 1; }
   .inline-alert { margin: 0 0 16px; }
   .metrics { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 14px; margin: 0 0 29px; }
   .metric { @apply min-w-0 rounded-lg border border-line bg-white px-[21px] pb-[18px] pt-5; }
