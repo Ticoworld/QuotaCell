@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import { useTranslation } from 'react-i18next';
 import { parseCkb } from './amount';
-import { resolveRecipient } from './api';
+import { ApiError, resolveRecipient } from './api';
 import type { WalletIdentity } from './domain';
 import { assertUniqueRegistrationIdentities, createRegistrationInvitation, importRegistrationResponse, registrationShareUrl, type RegistrationInvitation } from './registration';
 import { touchPocketDraft } from './drafts';
@@ -99,6 +99,11 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
   const [creatingInvitation, setCreatingInvitation] = useState<'alice' | 'ben' | null>(null);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'error' | null>(null);
   const [saveAttempt, setSaveAttempt] = useState(0);
+  const [resumePreparation, setResumePreparation] = useState(() => {
+    try { return Boolean(sessionStorage.getItem(`quotacell.genesis-preparation:${draftKey}`)); }
+    catch { return false; }
+  });
+  const pendingGenesisRef = useRef<{ id: string; fingerprint: string } | null>(null);
   const saveBlocked = Boolean(initialDraft.error);
   const draftReadErrorKey = initialDraft.error === 'unavailable' ? 'draftStorageUnavailable' : 'draftCorruptError';
   useEffect(() => {
@@ -224,15 +229,40 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
     try {
       validatePeople();
       const value = await validateTerms();
-      await onPrepare({
-        id: crypto.randomUUID(), draftId, publicKey: people.owner!.publicKey,
+      const payload = {
+        draftId, publicKey: people.owner!.publicKey,
         sharedLimit: value.shared.toString(),
         delegates: [
           { publicKey: people.alice!.publicKey, recipient: { codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8', hashType: 'type', args: value.firstArgs }, limit: value.firstLimit.toString(), perPayment: value.firstMax.toString() },
           { publicKey: people.ben!.publicKey, recipient: { codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8', hashType: 'type', args: value.secondArgs }, limit: value.secondLimit.toString(), perPayment: value.secondMax.toString() },
         ],
-      }, people);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+      };
+      const fingerprint = JSON.stringify(payload);
+      let pending = pendingGenesisRef.current;
+      if (!pending || pending.fingerprint !== fingerprint) {
+        try {
+          const stored = JSON.parse(sessionStorage.getItem(`quotacell.genesis-preparation:${draftKey}`) || 'null') as { id?: unknown; fingerprint?: unknown } | null;
+          if (stored && stored.fingerprint === fingerprint && typeof stored.id === 'string' && /^[0-9a-f-]{36}$/i.test(stored.id)) {
+            pending = { id: stored.id, fingerprint };
+          } else pending = null;
+        } catch { pending = null; }
+      }
+      pending ||= { id: crypto.randomUUID(), fingerprint };
+      pendingGenesisRef.current = pending;
+      try { sessionStorage.setItem(`quotacell.genesis-preparation:${draftKey}`, JSON.stringify(pending)); } catch { /* The in-memory request ID still supports retry in this tab. */ }
+      await onPrepare({ id: pending.id, ...payload }, people);
+      pendingGenesisRef.current = null;
+      setResumePreparation(false);
+      try { sessionStorage.removeItem(`quotacell.genesis-preparation:${draftKey}`); } catch { /* Session storage is optional. */ }
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.retryable) setResumePreparation(true);
+      else {
+        pendingGenesisRef.current = null;
+        try { sessionStorage.removeItem(`quotacell.genesis-preparation:${draftKey}`); } catch { /* Session storage is optional. */ }
+        setResumePreparation(false);
+      }
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
     finally { setPreparing(false); }
   };
   const ownerIsConnected = Boolean(connectedIdentity && people.owner && people.owner.publicKey.toLowerCase() === connectedIdentity.publicKey.toLowerCase() && people.owner.address === connectedIdentity.address);
@@ -317,7 +347,7 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
     </section>}
 
     {error && <p className="form-error" role="alert">{error}</p>}
-    <div className="setup-actions mx-auto mt-6 flex w-full max-w-[830px] justify-end gap-2">{step > 0 && <button className="secondary-button" type="button" disabled={preparing} onClick={() => { setError(''); setStep(step - 1); }}>{t('back')}</button>}{step < 2 ? <button className="primary-button" type="button" disabled={preparing} onClick={() => void next()}>{t('continue')} <span aria-hidden="true">→</span></button> : <button className="primary-button" type="button" disabled={preparing || !canPrepareCreation} onClick={() => void prepare()}>{preparing ? t('preparing') : t(prepareOnly ? 'prepareForReview' : 'createAndSign')} <span aria-hidden="true">→</span></button>}</div>
+    <div className="setup-actions mx-auto mt-6 flex w-full max-w-[830px] justify-end gap-2">{step > 0 && <button className="secondary-button" type="button" disabled={preparing} onClick={() => { setError(''); setStep(step - 1); }}>{t('back')}</button>}{step < 2 ? <button className="primary-button" type="button" disabled={preparing} onClick={() => void next()}>{t('continue')} <span aria-hidden="true">→</span></button> : <button className="primary-button" type="button" disabled={preparing || !canPrepareCreation} onClick={() => void prepare()}>{preparing ? t('preparing') : resumePreparation ? t('resumePreparation') : t(prepareOnly ? 'prepareForReview' : 'createAndSign')} <span aria-hidden="true">→</span></button>}</div>
     <AlertDialog.Root open={Boolean(replaceSlot)} onOpenChange={(open) => { if (!open) setReplaceSlot(null); }}>
       <AlertDialog.Portal><AlertDialog.Overlay className="dialog-overlay"/><AlertDialog.Content className="dialog-content alert-dialog" aria-modal="true"><AlertDialog.Title className="dialog-title">{people[replaceSlot || 'alice']?.publicKey ? t('replaceContributorTitle') : t('replaceInvitationTitle')}</AlertDialog.Title><AlertDialog.Description className="dialog-description">{people[replaceSlot || 'alice']?.publicKey ? t('replaceContributorBody') : t('replaceInvitationBody')}</AlertDialog.Description><div className="dialog-actions"><AlertDialog.Cancel asChild><button className="secondary-button" type="button">{t('cancel')}</button></AlertDialog.Cancel><AlertDialog.Action asChild><button className="primary-button" type="button" onClick={() => { if (replaceSlot) void createInvitation(replaceSlot, true); }}>{t('confirmReplace')}</button></AlertDialog.Action></div></AlertDialog.Content></AlertDialog.Portal>
     </AlertDialog.Root>

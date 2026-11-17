@@ -40,6 +40,7 @@ function actorRole(identity: WalletIdentity | null, state: PocketState | null): 
 
 function localizedError(message: string, t: (key: string) => string): string {
   const rules: Array<[RegExp, string]> = [
+    [/preparation is taking longer than expected/i, 'preparationStillProcessing'],
     [/pocket backend|failed to fetch|networkerror|invalid response|empty response|unexpected end of json/i, 'backendUnavailable'],
     [/wallet disconnected|not connected|connect again/i, 'walletDisconnectedError'],
     [/only the UTXO Global|verified UTXO Global/i, 'unsupportedWalletError'],
@@ -368,7 +369,9 @@ function App() {
       setIntent({ operation: 'genesis' });
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      throw new Error(localizedError(message, t));
+      const localized = localizedError(message, t);
+      if (cause instanceof ApiError) throw new ApiError(localized, cause.retryable, cause.status, cause.timedOut);
+      throw new Error(localized);
     } finally { setWorking(false); }
   };
 

@@ -3,12 +3,14 @@ import type { PocketState, PreparedTransaction, TransactionResult } from './doma
 export class ApiError extends Error {
   readonly retryable: boolean;
   readonly status?: number;
+  readonly timedOut: boolean;
 
-  constructor(message: string, retryable: boolean, status?: number) {
+  constructor(message: string, retryable: boolean, status?: number, timedOut = false) {
     super(message);
     this.name = 'ApiError';
     this.retryable = retryable;
     this.status = status;
+    this.timedOut = timedOut;
   }
 }
 
@@ -25,8 +27,9 @@ async function request<T>(url: string, body?: unknown, timeoutMs = 20_000): Prom
       body: JSON.stringify(scopedBody),
       signal: AbortSignal.timeout(timeoutMs),
     });
-  } catch {
-    throw new ApiError('Pocket backend is unreachable.', true);
+  } catch (cause) {
+    const timedOut = cause instanceof DOMException && cause.name === 'TimeoutError';
+    throw new ApiError(timedOut ? 'Pocket preparation is taking longer than expected; retry will resume the same request.' : 'Pocket backend is unreachable.', true, undefined, timedOut);
   }
   let text: string;
   try { text = await response.text(); }
@@ -60,7 +63,7 @@ export async function getActorPockets(publicKey: string) {
   }
   return result;
 }
-export const prepareGenesis = (body: unknown) => request<PreparedTransaction>('/api/external/genesis', body);
+export const prepareGenesis = (body: unknown) => request<PreparedTransaction>('/api/external/genesis', body, 120_000);
 export const preparePayment = (body: unknown) => request<PreparedTransaction>('/api/external/prepare', body);
 export const prepareOwnerAction = (body: unknown) => request<PreparedTransaction>('/api/external/owner', body);
 export const submitTransaction = (id: string, transaction: string) => request<TransactionResult>('/api/external/submit', { id, transaction }, 15_000);

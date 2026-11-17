@@ -48,7 +48,7 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
  const getDraft=(draftId,owner)=>db.prepare('SELECT * FROM contexts WHERE draft_id=? AND owner=?').get(draftId,owner.toLowerCase())||null;
  const reservations=()=>db.prepare('SELECT * FROM reservations ORDER BY created').all();
  const getReservation=id=>db.prepare('SELECT * FROM reservations WHERE request_id=?').get(id)||null;
- const workers=new Map(),pendingRequests=new Map();
+ const workers=new Map(),pendingRequests=new Map(),preparedResponses=new Map(),preparingRequests=new Map(),draftContextRequests=new Map();
  let stopping=false;
 
  function absoluteDirectory(context){
@@ -115,8 +115,16 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
   assert(uuidPattern.test(draftId||''),'Invalid Pocket draft identity');assert(actorPattern.test(owner||''),'Invalid owner identity');
   draftId=draftId.toLowerCase();
   const found=getDraft(draftId,owner);if(found)return found;
-  assert(!db.prepare('SELECT 1 FROM contexts WHERE draft_id=?').get(draftId),'Draft identity is already bound to another owner');
-  return createContext('draft',{owner,draftId});
+  const active=draftContextRequests.get(draftId);
+  if(active){assert.equal(active.owner,owner.toLowerCase(),'Draft identity is already bound to another owner');return active.promise;}
+  const pending={owner:owner.toLowerCase(),promise:null};
+  pending.promise=(async()=>{
+   assert(!db.prepare('SELECT 1 FROM contexts WHERE draft_id=?').get(draftId),'Draft identity is already bound to another owner');
+   return createContext('draft',{owner,draftId});
+  })();
+  draftContextRequests.set(draftId,pending);
+  try{return await pending.promise;}
+  finally{if(draftContextRequests.get(draftId)===pending)draftContextRequests.delete(draftId);}
  }
  async function contextForPocket(pocket,actor){
   assert(pocketPattern.test(pocket||''),'Pocket link must contain an exact policy identity');assert(actorPattern.test(actor||''),'Connect the authorized CKB wallet to open this Pocket');
@@ -159,7 +167,7 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
   }catch(error){db.exec('ROLLBACK');throw error;}
   pendingRequests.set(id,context.id);
  }
- function releaseReservation(id){db.prepare('DELETE FROM reservations WHERE request_id=?').run(id);pendingRequests.delete(id);}
+ function releaseReservation(id){db.prepare('DELETE FROM reservations WHERE request_id=?').run(id);pendingRequests.delete(id);preparedResponses.delete(id);}
  async function inspectIntent(context,id){const result=await workerJson(context,'GET',`/api/internal/intent?id=${encodeURIComponent(id)}`);assert.equal(result.status,200);return result.data.intent;}
  async function findIntent(id){const found=await Promise.all(contexts().map(async context=>{const intent=await inspectIntent(context,id);return intent?{context,intent}:null;}));return found.find(Boolean)||null;}
  function intentOutcome(intent){return {txHash:intent.txHash,state:['committed','pending','proposed','submitted','rejected'].includes(intent.state)?intent.state:'uncertain',phase:intent.phase,operation:intent.operation,pocket:intent.operation==='genesis'?intent.pocket:undefined};}
@@ -208,7 +216,7 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
    const context=getContext(item.context_id),value=context?workers.get(context.id):null;
    if(value)try{await workerRequest(value,'POST','/api/internal/cancel',{id:item.request_id});}catch{}
    if(item.operation==='genesis')db.prepare('UPDATE contexts SET pocket=NULL WHERE id=? AND kind=\'draft\' AND NOT EXISTS (SELECT 1 FROM reservations WHERE context_id=? AND phase IN (\'submitting\',\'journaled\'))').run(item.context_id,item.context_id);
-   db.prepare('DELETE FROM reservations WHERE request_id=? AND phase=\'prepared\'').run(item.request_id);pendingRequests.delete(item.request_id);
+   releaseReservation(item.request_id);
   }
  }
  async function reservePrepared(context,body,result,isGenesis){
@@ -228,11 +236,38 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
   if(isGenesis){try{db.prepare('UPDATE contexts SET pocket=? WHERE id=?').run(pocket,context.id);}catch(error){releaseReservation(id);throw error;}}
  }
  async function prepare(context,pathname,body,isGenesis){
-  const result=await workerJson(context,'POST',pathname,body);
-  if(result.status!==200)return result;
-  try{await reservePrepared(context,body,result.data,isGenesis);}
-  catch(error){try{await workerJson(context,'POST','/api/internal/cancel',{id:body.id});}catch{}throw error;}
-  return result;
+  const fingerprint=JSON.stringify({pathname,body}),cached=preparedResponses.get(body.id);
+  if(cached){
+   assert.equal(cached.contextId,context.id,'Signing request belongs to another Pocket context');
+   assert.equal(cached.fingerprint,fingerprint,'Signing request ID was reused with different Pocket rules');
+   const reservation=getReservation(body.id);
+   if(reservation?.phase==='prepared'&&reservation.expires>Date.now()&&cached.expires>Date.now())return cached.result;
+   assert(!reservation||reservation.phase==='prepared','Signing request is no longer available');
+   preparedResponses.delete(body.id);
+   if(reservation?.phase==='prepared'){
+    const value=workers.get(context.id);
+    if(value)try{await workerRequest(value,'POST','/api/internal/cancel',{id:body.id});}catch{}
+    releaseReservation(body.id);
+   }
+  }
+  const active=preparingRequests.get(body.id);
+  if(active){
+   assert.equal(active.contextId,context.id,'Signing request belongs to another Pocket context');
+   assert.equal(active.fingerprint,fingerprint,'Signing request ID was reused with different Pocket rules');
+   return active.promise;
+  }
+  const pending={contextId:context.id,fingerprint,promise:null};
+  pending.promise=(async()=>{
+   const result=await workerJson(context,'POST',pathname,body);
+   if(result.status!==200)return result;
+   try{await reservePrepared(context,body,result.data,isGenesis);}
+   catch(error){try{await workerJson(context,'POST','/api/internal/cancel',{id:body.id});}catch{}throw error;}
+   preparedResponses.set(body.id,{contextId:context.id,fingerprint,result,expires:Date.now()+29*60_000});
+   return result;
+  })();
+  preparingRequests.set(body.id,pending);
+  try{return await pending.promise;}
+  finally{if(preparingRequests.get(body.id)===pending)preparingRequests.delete(body.id);}
  }
  function validOuterOrigin(value){if(!value)return true;try{const parsed=new URL(value);return parsed.protocol==='http:'&&parsed.hostname==='127.0.0.1';}catch{return false;}}
  async function proxyResult(res,result){res.writeHead(result.status,{'content-type':result.contentType,'cache-control':'no-store','x-content-type-options':'nosniff'});res.end(result.text);}
@@ -274,6 +309,7 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
     }
     if(genesisAcceptanceOnly)assertGenesisAcceptanceOperation(reserved.operation);
     db.prepare("UPDATE reservations SET phase='submitting' WHERE request_id=? AND phase='prepared'").run(body.id);
+    preparedResponses.delete(body.id);
     const context=getContext(contextId);let result;
     try{result=await workerJson(context,'POST','/api/external/submit',body);}
     catch(error){

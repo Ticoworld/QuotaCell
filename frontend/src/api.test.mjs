@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {ApiError,getActorPockets,getPocketState,resolvePudgeTransaction,submitTransaction} from './api.ts';
+import {ApiError,getActorPockets,getPocketState,prepareGenesis,resolvePudgeTransaction,submitTransaction} from './api.ts';
 
 globalThis.window={location:{search:''}};
 
@@ -16,6 +16,14 @@ test('a transient submission response failure is marked safe to retry with the s
  globalThis.fetch=async()=>new Response(JSON.stringify({error:'supervisor restarting'}),{status:503});
  try{
   await assert.rejects(()=>submitTransaction('request-id','0x00'),(error)=>error instanceof ApiError&&error.retryable&&error.status===503);
+ }finally{globalThis.fetch=originalFetch;}
+});
+
+test('a preparation timeout is distinguished from an offline backend and can be resumed',async()=>{
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async()=>{throw new DOMException('deadline exceeded','TimeoutError');};
+ try{
+  await assert.rejects(()=>prepareGenesis({id:'request-id'}),(error)=>error instanceof ApiError&&error.retryable&&error.timedOut&&/resume the same request/.test(error.message));
  }finally{globalThis.fetch=originalFetch;}
 });
 

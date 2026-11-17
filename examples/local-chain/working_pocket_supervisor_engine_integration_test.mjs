@@ -134,7 +134,8 @@ try{
  const delegates=['alice','ben'].map(role=>({publicKey:actors[role].publicKey,recipient:actors[role+'Recipient'].lock,limit:(200n*ckb).toString(),perPayment:(100n*ckb).toString()}));
  const sharedLimit=(250n*ckb).toString(),draftA=randomUUID(),draftB=randomUUID(),genesisId=randomUUID();
  const genesisBody={draftId:draftA,id:genesisId,publicKey:owner,delegates,sharedLimit};
- const staleGenesis=await api(origin,'/api/external/genesis',genesisBody);assert.equal(staleGenesis.status,200,JSON.stringify(staleGenesis.value));
+ const [staleGenesis,replayedGenesis]=await Promise.all([api(origin,'/api/external/genesis',genesisBody),api(origin,'/api/external/genesis',genesisBody)]);assert.equal(staleGenesis.status,200,JSON.stringify(staleGenesis.value));assert.equal(replayedGenesis.status,200,JSON.stringify(replayedGenesis.value));assert.equal(replayedGenesis.value.transaction,staleGenesis.value.transaction,'Concurrent retries must receive the same unsigned transaction');
+ const conflictingGenesis=await api(origin,'/api/external/genesis',{...genesisBody,sharedLimit:(251n*ckb).toString()});assert.equal(conflictingGenesis.status,400,'A request ID cannot be reused with changed Pocket rules');
  const staleSignedGenesis=await signPrepared(staleGenesis.value);
  const supervisorDbPath=path.join(run,'pocket-supervisor.sqlite'),expiredReservationDb=new DatabaseSync(supervisorDbPath);
  expiredReservationDb.prepare('DELETE FROM reservations WHERE request_id=?').run(genesisId);expiredReservationDb.close();
