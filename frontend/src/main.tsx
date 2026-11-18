@@ -1,24 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Toaster, toast } from 'sonner';
+import { Provider as CccProvider, ccc, useCcc } from '@ckb-ccc/connector-react';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 import './style.css';
 import { formatCkb, progressPercent, shortHash } from './amount';
-import { ApiError, checkPudgeTransaction, getActorPockets, getPocketState, prepareGenesis, prepareOwnerAction, preparePayment, reconcile, resolvePudgeTransaction, retryJournaledTransaction, submitTransaction } from './api';
+import { ApiError, cancelPreparation, checkPudgeTransaction, getActorPockets, getPocketState, prepareGenesis, prepareOwnerAction, preparePayment, reconcile, resolvePudgeTransaction, retryJournaledTransaction, submitTransaction } from './api';
 import { CreationFlow, type People } from './CreationFlow';
 import { importMetadata, loadMetadata, saveMetadata, exportMetadata } from './metadata';
 import type { HistoryItem, PocketMetadata, PocketState, PreparedTransaction, TransactionResult, WalletIdentity } from './domain';
-import { CkbWalletSession, isVerifiedPudgeContext, WalletProviderUnavailableError } from './wallet';
+import { isTemporaryWalletError, isVerifiedPudgeContext, wallet, WalletProviderUnavailableError } from './wallet';
 import { RegistrationPage } from './RegistrationPage';
 import { PocketDiscoveryPage } from './PocketDiscoveryPage';
 import { OperationDialog, type Intent, type Operation } from './OperationDialog';
 import { PocketPicker } from './PocketPicker';
 import { createPocketDraft, listPocketDrafts, pocketDraftIndexKey, removePocketDraft } from './drafts';
+import { clearPaymentIntent, paymentRequestFromIntent, readSavedPaymentIntent, type SavedPaymentIntent } from './paymentIntent';
 
-const wallet = new CkbWalletSession();
 type ActorRole = 'owner' | 'alice' | 'ben' | 'unrecognized';
 type SignedPending = { transaction: string; hash: string };
 type TransactionNotice = { state: string; hash?: string; detail?: string; phase?: string; technicalError?: string; operation?: string; draftIndexKey?: string; draftId?: string };
@@ -65,6 +66,8 @@ function localizedError(message: string, t: (key: string) => string): string {
     [/User rejected|rejected.*wallet|canceled/i, 'walletCanceledError'],
     [/Recipient changed|approved recipient/i, 'recipientPolicyError'],
     [/An earlier outcome is uncertain|outcome is uncertain/i, 'unresolvedBody'],
+    [/signing request ID was reused|parameters changed|request belongs to another Pocket/i, 'preparationParametersChanged'],
+    [/already has a signed transaction outcome/i, 'unresolvedBody'],
     [/payment exceeds|allowance|maximum per payment|personal.*limit/i, 'paymentBoundsError'],
     [/not live|stale|expired/i, 'inputChangedError'],
   ];
@@ -91,9 +94,10 @@ function App() {
   const stateActorRef = useRef<string | null>(null);
   const [identity, setIdentity] = useState<WalletIdentity | null>(null);
   const [identityError, setIdentityError] = useState('');
-  const [walletBusy, setWalletBusy] = useState(false);
+  const [walletBusy, setWalletBusy] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [intent, setIntent] = useState<Intent | null>(null);
+  const [resumePayment, setResumePayment] = useState<SavedPaymentIntent | null>(() => readSavedPaymentIntent());
   const [prepared, setPrepared] = useState<PreparedTransaction | null>(null);
   const [working, setWorking] = useState(false);
   const [operationError, setOperationError] = useState('');
@@ -228,18 +232,37 @@ function App() {
   }, [identity?.publicKey, loadSelectedPocket, selectedPocketId, state?.connectRequired, state?.pocket]);
   useEffect(() => {
     let active = true;
-    setWalletBusy(true);
-    void wallet.restore(async () => {
-      const context = await getPocketState();
-      return isVerifiedPudgeContext(context, selectedPocketId);
-    }).then((restored) => {
-      if (!active || !restored) return;
-      setIdentity(restored);
-      setIdentityError('');
-      setLoadError('');
-    }).finally(() => { if (active) setWalletBusy(false); });
-    return () => { active = false; };
-  }, [selectedPocketId]);
+    let checking = false;
+    const restoreSession = async () => {
+      if (checking || !wallet.connectorReady) return;
+      checking = true;
+      setWalletBusy(true);
+      try {
+        const restored = await wallet.restore();
+        if (!active) return;
+        if (restored) {
+          setIdentity(restored);
+          setIdentityError('');
+          setLoadError('');
+        } else if (!wallet.hasSigner) {
+          setIdentity(null);
+        }
+      } finally {
+        checking = false;
+        if (active) setWalletBusy(false);
+      }
+    };
+    const unsubscribe = wallet.subscribe(() => {
+      if (!wallet.hasSigner) {
+        setIdentity(null);
+        setWalletBusy(false);
+        return;
+      }
+      void restoreSession();
+    });
+    void restoreSession();
+    return () => { active = false; unsubscribe(); };
+  }, []);
   useEffect(() => {
     if (!transactionNotice?.hash) return;
     try {
@@ -264,6 +287,10 @@ function App() {
         }
       } catch (cause) {
         if (!active) return;
+        if (isTemporaryWalletError(cause)) {
+          setIdentityError(t('walletCheckTemporary'));
+          return;
+        }
         setIdentity(null);
         setIdentityError(localizedConnectionError(cause, t));
       } finally { checking = false; }
@@ -350,6 +377,15 @@ function App() {
     ...delegates.filter((delegate) => Boolean(delegate.publicKey)).map((delegate, index) => ({ publicKey: delegate.publicKey, fallback: index === 0 ? t('delegateOne') : t('delegateTwo'), role: delegate.role })),
   ];
 
+  useEffect(() => {
+    if (!resumePayment || !identity || !state?.pocket || state.pocket.toLowerCase() !== resumePayment.pocket.toLowerCase()) return;
+    const delegate = state.delegates?.find((item) => item.role === resumePayment.role);
+    if (!delegate?.enabled || delegate.publicKey.toLowerCase() !== resumePayment.publicKey.toLowerCase()
+      || delegate.recipient.toLowerCase() !== resumePayment.recipient.toLowerCase()
+      || identity.publicKey.toLowerCase() !== resumePayment.publicKey.toLowerCase()) return;
+    setIntent((current) => current || { operation: 'pay', role: resumePayment.role });
+  }, [identity?.publicKey, resumePayment, state?.pocket, state?.delegates]);
+
   const connectWallet = async () => {
     setWalletBusy(true); setIdentityError('');
     try {
@@ -358,7 +394,7 @@ function App() {
       if (context.networkMode?.startsWith('pudge') && !isVerifiedPudgeContext(context, selectedPocketId)) throw new Error('Pudge testnet could not be verified.');
       setIdentity(connected); setLoadError('');
     }
-    catch (cause) { setIdentityError(localizedConnectionError(cause, t)); setIdentity(null); }
+    catch (cause) { setIdentityError(localizedConnectionError(cause, t)); if (!isTemporaryWalletError(cause)) setIdentity(null); }
     finally { setWalletBusy(false); }
   };
   const connectParticipant = async () => {
@@ -398,7 +434,22 @@ function App() {
       setPrepared(request);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      setOperationError(localizedError(message, t));
+      const localized = localizedError(message, t);
+      setOperationError(cause instanceof ApiError && localized.startsWith(`${t('actionFailed')} `) ? t('preparationFailed') : localized);
+    } finally { setWorking(false); }
+  };
+
+  const cancelPaymentPreparation = async (saved: SavedPaymentIntent) => {
+    setWorking(true); setOperationError('');
+    try {
+      const result = await cancelPreparation(paymentRequestFromIntent(saved), 'payment');
+      if (!['cancelled', 'expired', 'failed', 'not-found'].includes(result.state)) throw new Error(t('preparationCancelPending'));
+      clearPaymentIntent();
+      setResumePayment(null);
+      setPrepared(null);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      throw new Error(localizedError(message, t));
     } finally { setWorking(false); }
   };
 
@@ -616,6 +667,7 @@ function App() {
       const signed = await wallet.sign(request.transaction, request.publicKey);
       const { Transaction } = await import('@ckb-ccc/connector');
       const hash = Transaction.fromBytes(signed).hash();
+      if (intent?.operation === 'pay') { clearPaymentIntent(); setResumePayment(null); }
       if (pudge) {
         setPendingSigned({ transaction: signed, hash });
         setWorking(false);
@@ -876,7 +928,7 @@ function App() {
 
     {state && !state.empty && !state.discovery && !state.connectRequired && !showPocketList && !selectedPocketLoading && !selectedPocketError && <footer className="app-footer mx-auto flex w-[min(100%-2rem,64rem)] flex-col justify-between gap-2 pb-6 text-[11px] text-slate-500 sm:flex-row sm:gap-5"><span className="max-w-2xl">{t('localDisclosure')}</span></footer>}
 
-    {state && <OperationDialog intent={intent} prepared={prepared} pendingSigned={pendingSigned} state={state} identity={identity} delegates={delegates} history={history} recipientAddresses={recipientAddresses} working={working} error={operationError} onPrepare={prepareOperation} onSign={signPrepared} onSubmitSigned={({ transaction, hash }) => submitSigned(transaction, hash)} onDiscardSigned={discardPending} canSubmitSigned={!pudgeActionsDisabled} onConnectSigner={connectExpectedSigner} onClose={closeDialog}/>}
+    {state && <OperationDialog intent={intent} prepared={prepared} pendingSigned={pendingSigned} state={state} identity={identity} delegates={delegates} history={history} recipientAddresses={recipientAddresses} working={working} error={operationError} resumePayment={resumePayment} onPrepare={prepareOperation} onCancelPreparation={cancelPaymentPreparation} onSign={signPrepared} onSubmitSigned={({ transaction, hash }) => submitSigned(transaction, hash)} onDiscardSigned={discardPending} canSubmitSigned={!pudgeActionsDisabled} onConnectSigner={connectExpectedSigner} onClose={closeDialog}/>}
     {editPerson && <EditParticipantDialog participant={editPerson} initial={metadata[editPerson.publicKey]} onClose={() => setEditPerson(null)} onSave={saveName} t={t}/>}
 
     <AlertDialog.Root open={retryDialogOpen} onOpenChange={(open) => { if (!retryBusy) setRetryDialogOpen(open); }}>
@@ -940,4 +992,24 @@ function AppRouter() {
   return <App/>;
 }
 
-createRoot(document.getElementById('root')!).render(<AppRouter/>);
+function CccSessionBridge() {
+  const connection = useCcc();
+  useLayoutEffect(() => {
+    wallet.attachConnectorState({
+      ready: true,
+      signer: connection.signerInfo?.signer as any,
+      walletName: connection.wallet?.name,
+      open: connection.open,
+      disconnect: connection.disconnect,
+      isOpen: connection.isOpen,
+    });
+  }, [connection.signerInfo?.signer, connection.wallet?.name, connection.open, connection.disconnect, connection.isOpen]);
+  return <AppRouter/>;
+}
+
+const cccClient = new ccc.ClientPublicTestnet({ url: 'https://testnet.ckb.dev/', fallbacks: [] });
+createRoot(document.getElementById('root')!).render(
+  <CccProvider name="QuotaCell" hideKhie defaultClient={cccClient}>
+    <CccSessionBridge/>
+  </CccProvider>,
+);

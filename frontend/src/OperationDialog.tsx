@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
 import { formatCkb, parseCkb, shortHash } from './amount';
-import { minimumProtectedFundingShannons, REQUIRED_PROTECTED_CHANGE_RESERVE_SHANNONS } from './funding';
+import { MINIMUM_PAYMENT_SHANNONS, minimumProtectedFundingShannons, REQUIRED_PROTECTED_CHANGE_RESERVE_SHANNONS } from './funding';
 import type { DelegateState, HistoryItem, PocketState, PreparedTransaction, WalletIdentity } from './domain';
+import { clearPaymentIntent, paymentRequestFromIntent, savePaymentIntent, type SavedPaymentIntent } from './paymentIntent';
 
 export type Operation = 'genesis' | 'pay' | 'deposit' | 'revoke' | 'close' | 'sweep';
 export type Intent = { operation: Operation; role?: 'alice' | 'ben'; displayName?: string };
@@ -19,7 +20,9 @@ type Props = {
   recipientAddresses: Record<string, string>;
   working: boolean;
   error: string;
+  resumePayment: SavedPaymentIntent | null;
   onPrepare: (body: Record<string, unknown>) => Promise<void>;
+  onCancelPreparation: (intent: SavedPaymentIntent) => Promise<void>;
   onSign: (prepared: PreparedTransaction) => Promise<void>;
   onSubmitSigned: (pending: { transaction: string; hash: string }) => Promise<void>;
   onDiscardSigned: () => void;
@@ -28,7 +31,7 @@ type Props = {
   onClose: () => void;
 };
 
-export function OperationDialog({ intent, prepared, pendingSigned, state, identity, delegates, history, recipientAddresses, working, error, onPrepare, onSign, onSubmitSigned, onDiscardSigned, canSubmitSigned, onConnectSigner, onClose }: Props) {
+export function OperationDialog({ intent, prepared, pendingSigned, state, identity, delegates, history, recipientAddresses, working, error, resumePayment, onPrepare, onCancelPreparation, onSign, onSubmitSigned, onDiscardSigned, canSubmitSigned, onConnectSigner, onClose }: Props) {
   const { t, i18n } = useTranslation();
   const [paymentAmount, setPaymentAmount] = useState('');
   const [depositAmount, setDepositAmount] = useState('');
@@ -36,7 +39,9 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
   const [transactionDetails, setTransactionDetails] = useState<{ hash: string; inputs: string[]; outputs: string[] } | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [walletPickerActive, setWalletPickerActive] = useState(false);
+  const [savedPayment, setSavedPayment] = useState<SavedPaymentIntent | null>(null);
   const preparationRequest = useRef<{ fingerprint: string; id: string } | null>(null);
+  const [paymentRequestBound, setPaymentRequestBound] = useState(false);
   const networkMode = state?.networkMode || '';
   const readOnly = networkMode === 'pudge-readonly';
   const prepareOnly = networkMode === 'pudge-prepare-only';
@@ -54,7 +59,20 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
   useEffect(() => {
     setPaymentAmount(''); setDepositAmount(''); setValidation(''); setDetailsOpen(false); setTransactionDetails(null);
     preparationRequest.current = null;
+    setPaymentRequestBound(false);
+    setSavedPayment(null);
   }, [intent?.operation, intent?.role]);
+
+  useEffect(() => {
+    if (!intent || intent.operation !== 'pay' || !resumePayment || resumePayment.role !== intent.role || !selected || !identity || resumePayment.publicKey.toLowerCase() !== identity.publicKey.toLowerCase()) return;
+    const request = paymentRequestFromIntent(resumePayment);
+    const { id: ignoredId, ...parameters } = request;
+    void ignoredId;
+    setSavedPayment(resumePayment);
+    setPaymentAmount(resumePayment.amount);
+    preparationRequest.current = { fingerprint: JSON.stringify(parameters), id: resumePayment.id };
+    setPaymentRequestBound(true);
+  }, [identity?.publicKey, intent?.operation, intent?.role, resumePayment?.id, selected?.recipient]);
 
   useEffect(() => {
     if (!prepared) { setTransactionDetails(null); return; }
@@ -77,7 +95,12 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
     if (readOnly || (prepareOnly && intent.operation !== 'genesis')) { setValidation(t(prepareOnly ? 'prepareOnlyNotice' : 'readonlyAction')); return; }
     let amount = '';
     try {
-      if (intent.operation === 'pay') { parseCkb(paymentAmount, t('minAmount')); amount = paymentAmount; }
+      if (intent.operation === 'pay') {
+        const parsed = parseCkb(paymentAmount, t('minAmount'));
+        if (parsed < MINIMUM_PAYMENT_SHANNONS) throw new Error(t('paymentMinimum'));
+        if (paymentLimits && parsed > paymentLimits.effective) throw new Error(t('paymentBoundsError'));
+        amount = paymentAmount;
+      }
       if (intent.operation === 'deposit') { const value = parseCkb(depositAmount, t('minAmount')); if (value < REQUIRED_PROTECTED_CHANGE_RESERVE_SHANNONS) throw new Error(t('depositMinimum')); amount = depositAmount; }
     } catch (cause) { setValidation(cause instanceof Error ? cause.message : t('minAmount')); return; }
     const request: Record<string, unknown> = { publicKey: identity.publicKey };
@@ -85,11 +108,31 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
     else if (intent.operation === 'genesis') return;
     else Object.assign(request, { operation: intent.operation, ...(intent.role ? { role: intent.role } : {}), ...(amount ? { amount } : {}) });
     const fingerprint = JSON.stringify(request);
-    if (!preparationRequest.current || preparationRequest.current.fingerprint !== fingerprint) {
-      preparationRequest.current = { fingerprint, id: crypto.randomUUID() };
+    if (intent.operation === 'pay' && paymentRequestBound && preparationRequest.current?.fingerprint !== fingerprint) {
+      setValidation(t('preparationParametersChanged'));
+      return;
     }
+    if (!preparationRequest.current || preparationRequest.current.fingerprint !== fingerprint) preparationRequest.current = { fingerprint, id: crypto.randomUUID() };
     const body = { ...request, id: preparationRequest.current.id };
+    if (intent.operation === 'pay' && selected && state?.pocket) {
+      const saved: SavedPaymentIntent = { version: 1, id: preparationRequest.current.id, pocket: state.pocket, publicKey: identity.publicKey, role: selected.role, amount, recipient: selected.recipient };
+      try { savePaymentIntent(saved); setPaymentRequestBound(true); setSavedPayment(saved); }
+      catch { setValidation(t('draftStorageUnavailable')); return; }
+    }
     await onPrepare(body);
+  };
+  const discardPreparation = async () => {
+    const saved = savedPayment || resumePayment;
+    if (!saved || pendingSigned) return;
+    setValidation('');
+    try {
+      await onCancelPreparation(saved);
+      clearPaymentIntent();
+      preparationRequest.current = null;
+      setPaymentRequestBound(false);
+      setSavedPayment(null);
+      setPaymentAmount('');
+    } catch (cause) { setValidation(cause instanceof Error ? cause.message : t('actionFailed')); }
   };
   const reconnectExpectedSigner = async () => {
     if (!prepared) return;
@@ -104,6 +147,15 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
   };
 
   const locale = i18n.language === 'zh-Hans' ? 'zh-CN' : 'en-US';
+  const paymentLimits = useMemo(() => {
+    if (!selected) return null;
+    const personal = BigInt(selected.limit) > BigInt(selected.used) ? BigInt(selected.limit) - BigInt(selected.used) : 0n;
+    const shared = BigInt(state?.sharedLimit || 0) > BigInt(state?.sharedUsed || 0) ? BigInt(state?.sharedLimit || 0) - BigInt(state?.sharedUsed || 0) : 0n;
+    const funds = BigInt(state?.fundShannons || 0);
+    const protectedLiquidity = funds > REQUIRED_PROTECTED_CHANGE_RESERVE_SHANNONS ? funds - REQUIRED_PROTECTED_CHANGE_RESERVE_SHANNONS : 0n;
+    const authorized = [BigInt(selected.perPayment), personal, shared].reduce((limit, value) => value < limit ? value : limit);
+    return { personal, shared, protectedLiquidity, effective: authorized < protectedLiquidity ? authorized : protectedLiquidity };
+  }, [selected, state?.fundShannons, state?.sharedLimit, state?.sharedUsed]);
   const statusLabel = (stateValue: string) => {
     const normalized = stateValue.toLowerCase();
     if (normalized === 'committed' || normalized === 'confirmed') return t('statusCommitted');
@@ -125,10 +177,16 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
         </Dialog.Description>
 
         {!isPrepared && intent && <div className="dialog-form grid gap-3">
-          {intent.operation === 'pay' && selected && <>
-            <label className="field-block grid gap-1.5 text-xs font-semibold text-slate-700">{t('paymentAmount')}<span className="input-unit flex min-w-0 items-center rounded-md border border-slate-300 bg-white focus-within:border-blue focus-within:ring-2 focus-within:ring-blue/20"><input className="h-11 min-w-0 flex-1 rounded-md border-0 bg-transparent px-3 text-base text-ink outline-none" autoFocus inputMode="decimal" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} placeholder="0"/><i className="px-3 text-xs not-italic text-slate-500">CKB</i></span></label>
-            <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('remaining')}</span><strong className="text-right font-semibold tabular-nums text-slate-800">{formatCkb(BigInt(selected.limit) > BigInt(selected.used) ? BigInt(selected.limit) - BigInt(selected.used) : 0n)} CKB</strong></div>
-            <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('sharedRemaining')}</span><strong className="text-right font-semibold tabular-nums text-slate-800">{formatCkb(BigInt(state?.sharedLimit || 0) > BigInt(state?.sharedUsed || 0) ? BigInt(state?.sharedLimit || 0) - BigInt(state?.sharedUsed || 0) : 0n)} CKB</strong></div>
+          {intent.operation === 'pay' && selected && paymentLimits && <>
+            <label className="field-block grid gap-1.5 text-xs font-semibold text-slate-700">{t('paymentAmount')}<span className="input-unit flex min-w-0 items-center rounded-md border border-slate-300 bg-white focus-within:border-blue focus-within:ring-2 focus-within:ring-blue/20"><input className="h-11 min-w-0 flex-1 rounded-md border-0 bg-transparent px-3 text-base text-ink outline-none" autoFocus inputMode="decimal" value={paymentAmount} disabled={working || paymentRequestBound} onChange={(event) => setPaymentAmount(event.target.value)} placeholder="0"/><i className="px-3 text-xs not-italic text-slate-500">CKB</i></span></label>
+            <section className="grid gap-1 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs">
+              <div className="inline-facts flex justify-between gap-3"><span>{t('effectivePaymentLimit')}</span><strong className="text-right tabular-nums">{formatCkb(paymentLimits.effective)} CKB</strong></div>
+              <div className="inline-facts flex justify-between gap-3"><span>{t('personalRemaining')}</span><strong className="text-right tabular-nums">{formatCkb(paymentLimits.personal)} CKB</strong></div>
+              <div className="inline-facts flex justify-between gap-3"><span>{t('sharedRemaining')}</span><strong className="text-right tabular-nums">{formatCkb(paymentLimits.shared)} CKB</strong></div>
+              <div className="inline-facts flex justify-between gap-3"><span>{t('maxPayment')}</span><strong className="text-right tabular-nums">{formatCkb(selected.perPayment)} CKB</strong></div>
+              <div className="inline-facts flex justify-between gap-3 border-t border-slate-200 pt-2"><span>{t('protectedLiquidityAfterReserve')}</span><strong className="text-right tabular-nums">{formatCkb(paymentLimits.protectedLiquidity)} CKB</strong></div>
+              <p className="m-0 leading-5 text-slate-600">{t('paymentLimitHint', { minimum: formatCkb(MINIMUM_PAYMENT_SHANNONS) })}</p>
+            </section>
             <div className="review-row flex justify-between gap-3 py-2 text-xs text-slate-600"><span>{t('recipient')}</span><code className="max-w-[68%] break-all text-right text-slate-800" dir="ltr">{selectedRecipient}</code></div>
           </>}
           {intent.operation === 'deposit' && <>
@@ -150,7 +208,7 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
           {error && <p className="form-error rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-800" role="alert">{error}</p>}
           {readOnly && <p className="readonly-notice rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900" role="status">{t('readonlyAction')}</p>}
           {prepareOnly && intent.operation !== 'genesis' && <p className="readonly-notice rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900" role="status">{t('prepareOnlyNotice')}</p>}
-          <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2"><Dialog.Close asChild><button className="secondary-button" type="button" disabled={working}>{t('cancel')}</button></Dialog.Close><button className="primary-button" type="button" disabled={working || readOnly || (prepareOnly && intent.operation !== 'genesis') || !identity} onClick={() => void submitPreparation()}>{working ? t('preparing') : intent.operation === 'pay' ? t('reviewPayment') : t('continueToReview')} <span aria-hidden="true">→</span></button></div>
+          <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2">{intent.operation === 'pay' && paymentRequestBound && (savedPayment || resumePayment) && <button className="text-button" type="button" disabled={working} onClick={() => void discardPreparation()}>{t('cancelPreparation')}</button>}<Dialog.Close asChild><button className="secondary-button" type="button" disabled={working}>{t('cancel')}</button></Dialog.Close><button className="primary-button" type="button" disabled={working || readOnly || (prepareOnly && intent.operation !== 'genesis') || !identity} onClick={() => void submitPreparation()}>{working ? t('preparing') : intent.operation === 'pay' && paymentRequestBound ? t('resumePreparation') : intent.operation === 'pay' ? t('reviewPayment') : t('continueToReview')} <span aria-hidden="true">→</span></button></div>
         </div>}
 
         {prepared && intent && <div className="transaction-review grid gap-3">
@@ -160,6 +218,12 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
             {intent.operation === 'deposit' && <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('selectedDeposit')}</span><strong className="font-semibold tabular-nums text-slate-800">{formatCkb(parseCkb(depositAmount))} CKB</strong></div>}
             {intent.operation === 'close' && <div className="transaction-amount">{formatCkb(state?.fundShannons || '0')} <span>CKB</span></div>}
             {intent.operation === 'sweep' && <div className="transaction-amount">{formatCkb(state?.fundShannons || '0')} <span>CKB</span></div>}
+            {intent.operation === 'pay' && paymentLimits && <section className="grid gap-1 border-y border-slate-100 py-2 text-xs">
+              <div className="inline-facts flex justify-between gap-3"><span>{t('effectivePaymentLimit')}</span><strong className="text-right tabular-nums">{formatCkb(paymentLimits.effective)} CKB</strong></div>
+              <div className="inline-facts flex justify-between gap-3"><span>{t('personalRemaining')}</span><strong className="text-right tabular-nums">{formatCkb(paymentLimits.personal)} CKB</strong></div>
+              <div className="inline-facts flex justify-between gap-3"><span>{t('sharedRemaining')}</span><strong className="text-right tabular-nums">{formatCkb(paymentLimits.shared)} CKB</strong></div>
+              <div className="inline-facts flex justify-between gap-3"><span>{t('protectedLiquidityAfterReserve')}</span><strong className="text-right tabular-nums">{formatCkb(paymentLimits.protectedLiquidity)} CKB</strong></div>
+            </section>}
             <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('actualFee')}</span><strong className="font-semibold tabular-nums text-slate-800">{formatCkb(prepared.fee)} CKB</strong></div>
             {intent.operation === 'genesis' && <section className="grid gap-2 border-t border-line pt-3 text-xs">
               <h3 className="m-0 text-sm font-semibold text-navy">{t('capitalReview')}</h3>
@@ -171,7 +235,7 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
               <p className="m-0 text-slate-600">{t('terminalCapacityHint')}</p>
             </section>}
             <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('network')}</span><strong className="text-right font-semibold text-slate-800">{networkMode.startsWith('pudge') ? t('networkPudge') : t('networkLocal')}</strong></div>
-            <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('signer')}</span><code className="text-right text-slate-800" dir="ltr">{identity ? shortHash(identity.address, 13, 8) : '—'}</code></div>
+            <div className="inline-facts flex flex-col gap-1 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('signer')}</span><code className="break-all text-slate-800" dir="ltr">{identity?.address || '—'}</code></div>
             {pendingSigned && <div className="grid gap-1 border-b border-slate-100 py-2 text-xs"><span className="text-slate-600">{t('txId')}</span><code className="break-all text-slate-800" dir="ltr">{pendingSigned.hash}</code></div>}
             {intent.operation === 'pay' && selected && <div className="review-row"><span>{t('recipient')}</span><code dir="ltr">{selectedRecipient}</code></div>}
             {intent.operation === 'revoke' && <div className="inline-facts"><span>{t('revoke')}</span><strong>{intent.displayName || t(intent.role === 'alice' ? 'delegateOne' : 'delegateTwo')}</strong></div>}
@@ -191,7 +255,7 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
           </details>
           {error && <p className="form-error rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-800" role="alert">{error}</p>}
           {history.some((item) => item.state === 'uncertain') && <p className="readonly-notice rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900">{t('unresolvedBody')}</p>}
-          <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2">{pendingSigned ? <><button className="secondary-button" type="button" disabled={working} onClick={onDiscardSigned}>{t('discardSignature')}</button><button className="primary-button" type="button" disabled={working || !canSubmitSigned} onClick={() => void onSubmitSigned(pendingSigned)}>{working ? t('submitting') : t('sendToPudge')}</button></> : <><Dialog.Close asChild><button className="secondary-button" type="button" disabled={working}>{t('cancel')}</button></Dialog.Close><button className="primary-button" type="button" disabled={working || readOnly || prepareOnly || !signerMatches} onClick={() => void onSign(prepared)}>{working ? t('walletApproval') : prepareOnly ? t('signingDisabled') : t('continueWallet')} <span aria-hidden="true">→</span></button></>}</div>
+          <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2">{pendingSigned ? <><button className="secondary-button" type="button" disabled={working} onClick={onDiscardSigned}>{t('discardSignature')}</button><button className="primary-button" type="button" disabled={working || !canSubmitSigned} onClick={() => void onSubmitSigned(pendingSigned)}>{working ? t('submitting') : t('sendToPudge')}</button></> : <>{intent.operation === 'pay' && paymentRequestBound && (savedPayment || resumePayment) && <button className="text-button" type="button" disabled={working} onClick={() => void discardPreparation()}>{t('discardUnsignedPreparation')}</button>}<Dialog.Close asChild><button className="secondary-button" type="button" disabled={working}>{t('cancel')}</button></Dialog.Close><button className="primary-button" type="button" disabled={working || readOnly || prepareOnly || !signerMatches} onClick={() => void onSign(prepared)}>{working ? t('walletApproval') : prepareOnly ? t('signingDisabled') : t('continueWallet')} <span aria-hidden="true">→</span></button></>}</div>
         </div>}
       </Dialog.Content>
     </Dialog.Portal>

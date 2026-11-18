@@ -11,7 +11,7 @@ const script=s=>c.Script.from({codeHash:s.code_hash??s.codeHash,hashType:s.hash_
 const raw=s=>({code_hash:s.codeHash,hash_type:s.hashType,args:s.args});
 async function captureSnapshot({rpc,indexedSnapshot,maxIndexerLag}){
  assert(Number.isSafeInteger(maxIndexerLag)&&maxIndexerLag>=0&&maxIndexerLag<=10000,'Invalid indexer lag bound');
- const tip=await rpc('get_tip_header'),indexed=indexedSnapshot||await rpc('get_indexer_tip');
+ const [tip,indexed]=await Promise.all([rpc('get_tip_header'),indexedSnapshot?Promise.resolve(indexedSnapshot):rpc('get_indexer_tip')]);
  assert(tip&&/^0x[0-9a-f]+$/i.test(tip.number)&&/^0x[0-9a-f]{64}$/i.test(tip.hash),'Invalid node tip');
  assert(indexed&&/^0x[0-9a-f]+$/i.test(indexed.block_number)&&/^0x[0-9a-f]{64}$/i.test(indexed.block_hash),'Invalid indexer tip');
  const nodeHeight=BigInt(tip.number),indexerHeight=BigInt(indexed.block_number);
@@ -22,13 +22,17 @@ async function captureSnapshot({rpc,indexedSnapshot,maxIndexerLag}){
  return {tip,indexed};
 }
 async function verifySnapshotCanonical({rpc,tip,indexed}){
- assert.equal((await rpc('get_block_hash',[indexed.block_number])).toLowerCase(),indexed.block_hash.toLowerCase(),'Chain reorganized during scan');
- assert.equal((await rpc('get_block_hash',[tip.number])).toLowerCase(),tip.hash.toLowerCase(),'Node tip changed during scan');
+ const [indexedHash,tipHash]=await Promise.all([rpc('get_block_hash',[indexed.block_number]),rpc('get_block_hash',[tip.number])]);
+ assert.equal(indexedHash.toLowerCase(),indexed.block_hash.toLowerCase(),'Chain reorganized during scan');
+ assert.equal(tipHash.toLowerCase(),tip.hash.toLowerCase(),'Node tip changed during scan');
 }
-export async function discoverIndexed({rpc,lock,policy,expected,includeUnsupported=false,maxPages=100,pageSize=100,indexedSnapshot,maxIndexerLag=MAX_INDEXER_LAG}){
- assert((await rpc('get_consensus')).id==='ckb_testnet','Wrong network');
- assert.equal(await rpc('get_block_hash',['0x0']),PUDGE_GENESIS,'Wrong network genesis');
- const {tip,indexed}=await captureSnapshot({rpc,indexedSnapshot,maxIndexerLag});
+async function mapConcurrent(items,limit,callback){
+ const results=new Array(items.length);let next=0;
+ await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{for(;;){const index=next++;if(index>=items.length)return;results[index]=await callback(items[index],index);}}));
+ return results;
+}
+async function scanIndexed({rpc,lock,policy,expected,includeUnsupported,maxPages,pageSize,snapshot,verified}){
+ const {tip,indexed}=snapshot;
  assert(Number.isSafeInteger(maxPages)&&maxPages>0&&Number.isSafeInteger(pageSize)&&pageSize>0&&pageSize<=1000,'Invalid pagination bounds');
  const type=policy?'type':'lock',target=script(policy||lock);
  if(policy)assert(target.codeHash===Q&&target.hashType==='data2'&&/^0x[0-9a-f]{64}$/i.test(target.args),'Invalid QCN4 policy identity');
@@ -36,28 +40,64 @@ export async function discoverIndexed({rpc,lock,policy,expected,includeUnsupport
  for(let page=0;page<maxPages;page++){
   const args=[key,'asc','0x'+pageSize.toString(16)];if(cursor!==undefined)args.push(cursor);
   const result=await rpc('get_cells',args);assert(result&&Array.isArray(result.objects)&&typeof result.last_cursor==='string','Invalid indexer response');
-  for(const item of result.objects){
+  const validated=await mapConcurrent(result.objects,12,async item=>{
    const point=item.out_point;assert(point&&/^0x[0-9a-f]{64}$/i.test(point.tx_hash)&&/^0x[0-9a-f]+$/i.test(point.index),'Invalid outpoint');
    assert(BigInt(item.block_number)<=BigInt(indexed.block_number),'Indexer returned a Cell beyond its snapshot tip');
    const id=point.tx_hash+':'+point.index;assert(!seen.has(id),'Duplicate indexer outpoint');seen.add(id);
    const live=await rpc('get_live_cell',[point,true]);assert.equal(live.status,'live','Stale indexed cell');
    assert.deepEqual(live.cell.output,item.output,'Indexer output mismatch');assert.equal(live.cell.data.content,item.output_data,'Indexer data mismatch');
    const output=live.cell.output;assert(output[type]&&script(output[type]).eq(target),'Indexed script mismatch');
-   const tx=await rpc('get_transaction',[point.tx_hash]);assert.equal(tx?.tx_status?.status,'committed','Uncommitted indexed transaction');
-   const header=await rpc('get_header',[tx.tx_status.block_hash]);assert(header&&header.number===item.block_number,'Indexed block mismatch');
-   assert.equal(await rpc('get_block_hash',[header.number]),header.hash,'Noncanonical cell transaction');
-   const n=Number(BigInt(point.index));assert.deepEqual(tx.transaction.outputs[n],output,'Transaction output mismatch');assert.equal(tx.transaction.outputs_data[n],live.cell.data.content,'Transaction data mismatch');
-   if(policy)validatePolicy(live.cell,target,expected);else if(output.type||live.cell.data.content!=='0x'){assert(includeUnsupported,'Unsupported matching cell');unsupported.push({outPoint:point,cell:live.cell,blockHash:header.hash,blockNumber:header.number});continue;}
-   cells.push({outPoint:point,cell:live.cell,blockHash:header.hash,blockNumber:header.number});
-  }
+   if(policy){
+    const {tx,header}=await verified.transaction(point.tx_hash,item.block_number),n=Number(BigInt(point.index));
+    assert.deepEqual(tx.transaction.outputs[n],output,'Transaction output mismatch');assert.equal(tx.transaction.outputs_data[n],live.cell.data.content,'Transaction data mismatch');
+    validatePolicy(live.cell,target,expected);return {kind:'cell',value:{outPoint:point,cell:live.cell,blockHash:header.hash,blockNumber:header.number}};
+   }
+   if(output.type||live.cell.data.content!=='0x'){assert(includeUnsupported,'Unsupported matching cell');return {kind:'unsupported',value:{outPoint:point,cell:live.cell}};}
+   return {kind:'cell',value:{outPoint:point,cell:live.cell}};
+  });
+  for(const item of validated)(item.kind==='cell'?cells:unsupported).push(item.value);
   if(result.objects.length<pageSize){finished=true;break;}
   assert(result.last_cursor!=='0x'&&result.last_cursor!==cursor,'Indexer cursor did not advance');cursor=result.last_cursor;
  }
  assert(finished,'Indexer pagination limit exceeded');
- await verifySnapshotCanonical({rpc,tip,indexed});
- for(const item of [...cells,...unsupported]){const current=await rpc('get_live_cell',[item.outPoint,true]);assert.equal(current.status,'live','Cell became stale');assert.deepEqual(current.cell,item.cell,'Cell changed during scan');}
  if(policy)assert.equal(cells.length,1,cells.length?'Ambiguous live policy':'Policy not found');
  return {cells,unsupported,indexedTip:indexed,genesis:PUDGE_GENESIS};
+}
+export async function discoverIndexedBatch({rpc,queries,indexedSnapshot,maxIndexerLag=MAX_INDEXER_LAG,networkVerified=false,finalCellValidation=true}){
+ assert(Array.isArray(queries)&&queries.length>0,'Indexed discovery needs at least one query');
+ if(!networkVerified){
+  const [consensus,genesis]=await Promise.all([rpc('get_consensus'),rpc('get_block_hash',['0x0'])]);
+  assert(consensus.id==='ckb_testnet','Wrong network');assert.equal(genesis,PUDGE_GENESIS,'Wrong network genesis');
+ }
+ const snapshot=await captureSnapshot({rpc,indexedSnapshot,maxIndexerLag});
+ const verified={
+  transactions:new Map(),
+  headers:new Map(),
+  transaction(txHash,expectedNumber){
+   const key=txHash.toLowerCase();
+   if(!this.transactions.has(key))this.transactions.set(key,(async()=>{
+    const tx=await rpc('get_transaction',[txHash]);assert.equal(tx?.tx_status?.status,'committed','Uncommitted indexed transaction');
+    const header=await rpc('get_header',[tx.tx_status.block_hash]);assert(header&&BigInt(header.number)===BigInt(expectedNumber),'Indexed block mismatch');
+    const height=BigInt(header.number).toString();
+    if(!this.headers.has(height))this.headers.set(height,(async()=>rpc('get_block_hash',[header.number]))());
+    assert.equal((await this.headers.get(height)).toLowerCase(),header.hash.toLowerCase(),'Noncanonical cell transaction');
+    return {tx,header};
+   })());
+   return this.transactions.get(key).then(proof=>{assert(BigInt(proof.header.number)===BigInt(expectedNumber),'Indexed block mismatch');return proof;});
+  }
+ };
+ const results=await Promise.all(queries.map(query=>scanIndexed({rpc,includeUnsupported:false,maxPages:100,pageSize:100,...query,snapshot,verified})));
+ await verifySnapshotCanonical({rpc,...snapshot});
+ const candidates=new Map();
+ for(const result of results)for(const item of [...result.cells,...result.unsupported])candidates.set(item.outPoint.txHash+':'+item.outPoint.index,item);
+ if(finalCellValidation)await mapConcurrent([...candidates.values()],12,async item=>{
+  const current=await rpc('get_live_cell',[item.outPoint,true]);assert.equal(current.status,'live','Cell became stale');assert.deepEqual(current.cell,item.cell,'Cell changed during scan');
+ });
+ return results;
+}
+export async function discoverIndexed(options){
+ const [result]=await discoverIndexedBatch({rpc:options.rpc,queries:[options],indexedSnapshot:options.indexedSnapshot,maxIndexerLag:options.maxIndexerLag});
+ return result;
 }
 
 const transientTipDrift=['Indexer is ahead of node tip','Indexer returned a Cell beyond its snapshot tip','Node tip changed during scan','Chain reorganized during scan','Stale indexed cell','Cell became stale','Cell changed during scan'];

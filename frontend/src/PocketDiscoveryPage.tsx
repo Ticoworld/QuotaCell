@@ -2,10 +2,9 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { WalletIdentity } from './domain';
 import { formatCkb } from './amount';
-import { CkbWalletSession, WalletProviderUnavailableError } from './wallet';
+import { isTemporaryWalletError, wallet, WalletProviderUnavailableError } from './wallet';
 import { discoverPublicPocket, discoverPublicPockets, publicDiscoveryNetwork } from './publicDiscovery';
 
-const wallet = new CkbWalletSession();
 type FoundPocket = Awaited<ReturnType<typeof discoverPublicPockets>>[number];
 
 export function PocketDiscoveryPage() {
@@ -19,7 +18,16 @@ export function PocketDiscoveryPage() {
   const [pocketInput, setPocketInput] = useState(new URLSearchParams(window.location.search).get('pocket') || '');
   const directId = new URLSearchParams(window.location.search).get('pocket');
 
-  useEffect(() => () => wallet.disconnect(), []);
+  useEffect(() => {
+    let active = true;
+    const restore = () => { void wallet.restore().then((restored) => { if (active && restored) setIdentity(restored); }); };
+    const unsubscribe = wallet.subscribe(() => {
+      if (wallet.hasSigner) restore();
+      else if (active) { setIdentity(null); setPockets([]); }
+    });
+    restore();
+    return () => { active = false; unsubscribe(); };
+  }, []);
   useEffect(() => {
     if (!directId) return;
     let canceled = false;
@@ -49,7 +57,8 @@ export function PocketDiscoveryPage() {
         const current = await wallet.identity();
         if (active && (current.publicKey !== identity.publicKey || current.address !== identity.address)) setIdentity(current);
       } catch (cause) {
-        if (active) { setIdentity(null); setPockets([]); setError(walletError(cause, t)); }
+        if (active && isTemporaryWalletError(cause)) setError(t('walletCheckTemporary'));
+        else if (active) { setIdentity(null); setPockets([]); setError(walletError(cause, t)); }
       }
     };
     const stop = wallet.onAccountOrNetworkChange(() => window.setTimeout(() => void sync(), 0));
@@ -60,7 +69,7 @@ export function PocketDiscoveryPage() {
   const connect = async () => {
     setBusy(true); setError('');
     try { setIdentity(await wallet.connect()); }
-    catch (cause) { wallet.disconnect(); setIdentity(null); setError(walletError(cause, t)); setBusy(false); }
+    catch (cause) { setError(walletError(cause, t)); if (!isTemporaryWalletError(cause)) setIdentity(null); setBusy(false); }
   };
   const roleLabel = (role: FoundPocket['role']) => t(role === 'owner' ? 'owner' : role === 'alice' ? 'delegateOne' : 'delegateTwo');
   const chosen = pockets.find((pocket) => pocket.pocket === selected);

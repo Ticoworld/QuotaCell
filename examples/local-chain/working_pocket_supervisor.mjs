@@ -2,7 +2,7 @@
 import * as c from '@ckb-ccc/core';
 import {DatabaseSync} from 'node:sqlite';
 import {spawn} from 'node:child_process';
-import {randomBytes,randomUUID} from 'node:crypto';
+import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
@@ -37,7 +37,7 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
  const runtimeLock=await acquireRuntimeLock(root);
  await fs.mkdir(path.join(root,'contexts'),{recursive:true});
  const db=new DatabaseSync(path.join(root,'pocket-supervisor.sqlite'));
- db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS contexts (id TEXT PRIMARY KEY, kind TEXT NOT NULL, directory TEXT NOT NULL, owner TEXT, draft_id TEXT, pocket TEXT, created TEXT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS contexts_pocket_unique ON contexts(pocket) WHERE pocket IS NOT NULL; CREATE UNIQUE INDEX IF NOT EXISTS contexts_draft_owner_unique ON contexts(draft_id,owner) WHERE draft_id IS NOT NULL; CREATE TABLE IF NOT EXISTS reservations (request_id TEXT PRIMARY KEY, context_id TEXT NOT NULL, genesis TEXT NOT NULL, pocket TEXT NOT NULL, inputs_json TEXT NOT NULL, phase TEXT NOT NULL, expires INTEGER, tx_hash TEXT, operation TEXT NOT NULL, created TEXT NOT NULL)");
+ db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS contexts (id TEXT PRIMARY KEY, kind TEXT NOT NULL, directory TEXT NOT NULL, owner TEXT, draft_id TEXT, pocket TEXT, created TEXT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS contexts_pocket_unique ON contexts(pocket) WHERE pocket IS NOT NULL; CREATE UNIQUE INDEX IF NOT EXISTS contexts_draft_owner_unique ON contexts(draft_id,owner) WHERE draft_id IS NOT NULL; CREATE TABLE IF NOT EXISTS reservations (request_id TEXT PRIMARY KEY, context_id TEXT NOT NULL, genesis TEXT NOT NULL, pocket TEXT NOT NULL, inputs_json TEXT NOT NULL, phase TEXT NOT NULL, expires INTEGER, tx_hash TEXT, operation TEXT NOT NULL, created TEXT NOT NULL); CREATE TABLE IF NOT EXISTS preparation_bindings (request_id TEXT PRIMARY KEY, context_id TEXT NOT NULL, pocket TEXT NOT NULL, fingerprint TEXT NOT NULL, state TEXT NOT NULL, expires INTEGER, tx_hash TEXT, created TEXT NOT NULL)");
  const insertContext=db.prepare('INSERT INTO contexts (id,kind,directory,owner,draft_id,pocket,created) VALUES (?,?,?,?,?,?,?)');
  const contexts=()=>db.prepare('SELECT * FROM contexts ORDER BY created').all();
  const getContext=id=>db.prepare('SELECT * FROM contexts WHERE id=?').get(id)||null;
@@ -45,7 +45,8 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
  const getDraft=(draftId,owner)=>db.prepare('SELECT * FROM contexts WHERE draft_id=? AND owner=?').get(draftId,owner.toLowerCase())||null;
  const reservations=()=>db.prepare('SELECT * FROM reservations ORDER BY created').all();
  const getReservation=id=>db.prepare('SELECT * FROM reservations WHERE request_id=?').get(id)||null;
- const workers=new Map(),pendingRequests=new Map(),preparedResponses=new Map(),preparingRequests=new Map(),draftContextRequests=new Map();
+ const getPreparationBinding=id=>db.prepare('SELECT * FROM preparation_bindings WHERE request_id=?').get(id)||null;
+ const workers=new Map(),pendingRequests=new Map(),preparedResponses=new Map(),preparingRequests=new Map(),draftContextRequests=new Map(),terminalPreparations=new Map();
  let stopping=false;
 
  function absoluteDirectory(context){
@@ -69,7 +70,7 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
   const directory=absoluteDirectory(context),childPort=await portProbe(),token=randomBytes(32).toString('hex'),childOrigin=`http://127.0.0.1:${childPort}`;
   const env={...process.env,QUOTACELL_SUPERVISOR_TOKEN:token};
   const child=spawnWorker(process.execPath,['--experimental-strip-types',worker,directory,String(childPort)],{cwd:repo,env,stdio:['ignore','pipe','pipe']});
-  let output='';child.stdout?.on('data',chunk=>{output+=chunk.toString();});child.stderr?.on('data',chunk=>{output+=chunk.toString();});
+  let output='',timingBuffer='';child.stdout?.on('data',chunk=>{const text=chunk.toString();output+=text;timingBuffer+=text;const lines=timingBuffer.split(/\r?\n/);timingBuffer=lines.pop()||'';for(const line of lines)if(line.includes('"event":"pocket-preparation-'))process.stdout.write(`${line}\n`);});child.stderr?.on('data',chunk=>{output+=chunk.toString();});
   const value={child,port:childPort,origin:childOrigin,token,output};workers.set(context.id,value);
   const deadline=Date.now()+90000;let lastError;
   while(Date.now()<deadline){
@@ -185,8 +186,10 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
  async function recoverReservations(){
   for(const item of reservations().filter(row=>row.phase==='prepared')){
    if(item.operation==='genesis')db.prepare('UPDATE contexts SET pocket=NULL WHERE id=? AND kind=\'draft\'').run(item.context_id);
+   db.prepare("UPDATE preparation_bindings SET state='expired',expires=? WHERE request_id=? AND state='prepared'").run(Date.now(),item.request_id);
    db.prepare('DELETE FROM reservations WHERE request_id=?').run(item.request_id);
   }
+  db.prepare("UPDATE preparation_bindings SET state='expired',expires=? WHERE state IN ('preparing','cancelling')").run(Date.now());
   for(const context of contexts()){
    const value=await startWorker(context);
    const pending=reservations().filter(item=>item.context_id===context.id&&item.phase==='submitting');
@@ -213,6 +216,8 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
    const context=getContext(item.context_id),value=context?workers.get(context.id):null;
    if(value)try{await workerRequest(value,'POST','/api/internal/cancel',{id:item.request_id});}catch{}
    if(item.operation==='genesis')db.prepare('UPDATE contexts SET pocket=NULL WHERE id=? AND kind=\'draft\' AND NOT EXISTS (SELECT 1 FROM reservations WHERE context_id=? AND phase IN (\'submitting\',\'journaled\'))').run(item.context_id,item.context_id);
+   const cached=preparedResponses.get(item.request_id);if(cached)terminalPreparations.set(item.request_id,{state:'expired',fingerprint:cached.fingerprint,contextId:cached.contextId,expires:Date.now()+30*60_000});
+   db.prepare("UPDATE preparation_bindings SET state='expired',expires=? WHERE request_id=? AND state='prepared'").run(Date.now(),item.request_id);
    releaseReservation(item.request_id);
   }
  }
@@ -232,13 +237,23 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
   acquireReservation({id,context,pocket,inputs:parsed.inputs,operation:isGenesis?'genesis':body.operation||'pay'});
   if(isGenesis){try{db.prepare('UPDATE contexts SET pocket=? WHERE id=?').run(pocket,context.id);}catch(error){releaseReservation(id);throw error;}}
  }
+ function canonicalValue(value){if(Array.isArray(value))return value.map(canonicalValue);if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonicalValue(value[key])]));return value;}
+ function requestFingerprint(pathname,body){return createHash('sha256').update(JSON.stringify(canonicalValue({pathname,body}))).digest('hex');}
+ function bindPreparation(context,pathname,body){
+  assert(uuidPattern.test(body.id||''),'Invalid signing request identity');
+  const fingerprint=requestFingerprint(pathname,body),pocket=String(body.pocket||'').toLowerCase(),existing=getPreparationBinding(body.id);
+  if(existing){assert.equal(existing.context_id,context.id,'Signing request belongs to another Pocket context');assert.equal(existing.pocket,pocket,'Signing request belongs to another Pocket');assert.equal(existing.fingerprint,fingerprint,'Signing request ID was reused with different payment parameters');assert(!['submitted','uncertain','committed'].includes(existing.state),'This signing request already has a signed transaction outcome; reconcile it before preparing again');db.prepare("UPDATE preparation_bindings SET state='preparing',expires=? WHERE request_id=?").run(Date.now()+30*60_000,body.id);}
+  else db.prepare('INSERT INTO preparation_bindings (request_id,context_id,pocket,fingerprint,state,expires,tx_hash,created) VALUES (?,?,?,?,?,?,?,?)').run(body.id,context.id,pocket,fingerprint,'preparing',Date.now()+30*60_000,null,new Date().toISOString());
+  return fingerprint;
+ }
  async function prepare(context,pathname,body,isGenesis){
-  const fingerprint=JSON.stringify({pathname,body}),cached=preparedResponses.get(body.id);
+  const fingerprint=isGenesis?JSON.stringify({pathname,body}):bindPreparation(context,pathname,body),cached=preparedResponses.get(body.id);
+  const requestStarted=performance.now(),stage=(name,start)=>console.log(JSON.stringify({event:'pocket-preparation-supervisor-stage',id:body.id,stage:name,ms:Math.round((performance.now()-start)*100)/100}));
   if(cached){
    assert.equal(cached.contextId,context.id,'Signing request belongs to another Pocket context');
    assert.equal(cached.fingerprint,fingerprint,'Signing request ID was reused with different Pocket rules');
    const reservation=getReservation(body.id);
-   if(reservation?.phase==='prepared'&&reservation.expires>Date.now()&&cached.expires>Date.now())return cached.result;
+    if(reservation?.phase==='prepared'&&reservation.expires>Date.now()&&cached.expires>Date.now()){if(!isGenesis)db.prepare("UPDATE preparation_bindings SET state='prepared',expires=? WHERE request_id=?").run(reservation.expires,body.id);stage('cached-response',requestStarted);return cached.result;}
    assert(!reservation||reservation.phase==='prepared','Signing request is no longer available');
    preparedResponses.delete(body.id);
    if(reservation?.phase==='prepared'){
@@ -251,20 +266,47 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
   if(active){
    assert.equal(active.contextId,context.id,'Signing request belongs to another Pocket context');
    assert.equal(active.fingerprint,fingerprint,'Signing request ID was reused with different Pocket rules');
-   return active.promise;
+    stage('attached-to-inflight-request',requestStarted);return active.promise;
   }
-  const pending={contextId:context.id,fingerprint,promise:null};
+  const pending={contextId:context.id,fingerprint,promise:null,cancelRequested:false};
   pending.promise=(async()=>{
+   const workerStarted=performance.now();
    const result=await workerJson(context,'POST',pathname,body);
-   if(result.status!==200)return result;
+   stage('worker-preparation',workerStarted);
+   if(result.status!==200){if(!isGenesis)db.prepare("UPDATE preparation_bindings SET state='failed' WHERE request_id=?").run(body.id);return result;}
+   if(pending.cancelRequested){try{await workerJson(context,'POST','/api/internal/cancel',{id:body.id});}catch{}terminalPreparations.set(body.id,{state:'cancelled',fingerprint,contextId:context.id,expires:Date.now()+30*60_000});if(!isGenesis)db.prepare("UPDATE preparation_bindings SET state='cancelled' WHERE request_id=?").run(body.id);return {status:409,contentType:'application/json',data:{error:'Preparation was canceled before wallet signing.'},text:JSON.stringify({error:'Preparation was canceled before wallet signing.'})};}
+   const reservationStarted=performance.now();
    try{await reservePrepared(context,body,result.data,isGenesis);}
    catch(error){try{await workerJson(context,'POST','/api/internal/cancel',{id:body.id});}catch{}throw error;}
+   stage('supervisor-reservation',reservationStarted);
+   if(!isGenesis)db.prepare("UPDATE preparation_bindings SET state='prepared',expires=? WHERE request_id=?").run(Date.now()+29*60_000,body.id);
    preparedResponses.set(body.id,{contextId:context.id,fingerprint,result,expires:Date.now()+29*60_000});
+   terminalPreparations.delete(body.id);
    return result;
   })();
   preparingRequests.set(body.id,pending);
-  try{return await pending.promise;}
+  try{const result=await pending.promise;stage('worker-plus-reservation',requestStarted);return result;}
+  catch(error){if(!isGenesis)db.prepare("UPDATE preparation_bindings SET state='failed' WHERE request_id=? AND state='preparing'").run(body.id);throw error;}
   finally{if(preparingRequests.get(body.id)===pending)preparingRequests.delete(body.id);}
+ }
+ function preparationFingerprint(body){const endpoint=body.endpoint,pathname=endpoint==='owner'?'/api/external/owner':'/api/external/prepare';assert(endpoint==='owner'||endpoint==='payment','Preparation endpoint is required');const {endpoint:ignored,...parameters}=body;void ignored;return {context:getPocket(body.pocket),fingerprint:requestFingerprint(pathname,parameters)};}
+ function preparationStatus(body){
+  assert(uuidPattern.test(body.id||''),'Invalid preparation identity');const {context,fingerprint}=preparationFingerprint(body);assert(context,'Pocket context is not installed');
+  const binding=getPreparationBinding(body.id);if(binding){assert.equal(binding.context_id,context.id,'Preparation belongs to another Pocket context');assert.equal(binding.pocket,String(body.pocket).toLowerCase(),'Preparation belongs to another Pocket');assert.equal(binding.fingerprint,fingerprint,'Preparation ID was reused with different payment parameters');}
+  const active=preparingRequests.get(body.id);if(active){assert.equal(active.contextId,context.id,'Preparation belongs to another Pocket context');assert.equal(active.fingerprint,fingerprint,'Preparation ID was reused with different payment parameters');return {state:active.cancelRequested?'cancelling':'preparing'};}
+  const cached=preparedResponses.get(body.id);if(cached){assert.equal(cached.contextId,context.id,'Preparation belongs to another Pocket context');assert.equal(cached.fingerprint,fingerprint,'Preparation ID was reused with different payment parameters');const reservation=getReservation(body.id);if(reservation?.phase==='prepared'&&reservation.expires>Date.now()&&cached.expires>Date.now())return {state:'prepared',result:cached.result.data};}
+  const reservation=getReservation(body.id);
+  if(reservation){assert.equal(reservation.context_id,context.id,'Preparation belongs to another Pocket context');if(reservation.phase==='submitting')return {state:'uncertain',txHash:reservation.tx_hash||undefined};if(reservation.phase==='journaled')return {state:'submitted',txHash:reservation.tx_hash||undefined};if(reservation.phase==='prepared')return {state:'expired'};}
+  const terminal=terminalPreparations.get(body.id);if(terminal&&terminal.expires>Date.now()){assert.equal(terminal.contextId,context.id,'Preparation belongs to another Pocket context');assert.equal(terminal.fingerprint,fingerprint,'Preparation ID was reused with different payment parameters');return {state:terminal.state};}
+  return {state:binding?.state||'not-found',txHash:binding?.tx_hash||undefined};
+ }
+ async function cancelPreparation(body){
+  assert(uuidPattern.test(body.id||''),'Invalid preparation identity');const {context,fingerprint}=preparationFingerprint(body);assert(context,'Pocket context is not installed');const binding=getPreparationBinding(body.id);if(binding){assert.equal(binding.context_id,context.id);assert.equal(binding.fingerprint,fingerprint,'Preparation ID was reused with different payment parameters');}
+  const active=preparingRequests.get(body.id);if(active){assert.equal(active.contextId,context.id);assert.equal(active.fingerprint,fingerprint,'Preparation ID was reused with different payment parameters');active.cancelRequested=true;db.prepare("UPDATE preparation_bindings SET state='cancelling' WHERE request_id=?").run(body.id);return {state:'cancelling'};}
+  const reservation=getReservation(body.id),cached=preparedResponses.get(body.id);
+  if(reservation&&['submitting','journaled'].includes(reservation.phase))return {state:reservation.phase==='journaled'?'submitted':'uncertain',txHash:reservation.tx_hash||undefined};
+  if(cached){assert.equal(cached.contextId,context.id);assert.equal(cached.fingerprint,fingerprint,'Preparation ID was reused with different payment parameters');if(reservation?.phase==='prepared'){try{await workerJson(context,'POST','/api/internal/cancel',{id:body.id});}finally{releaseReservation(body.id);}terminalPreparations.set(body.id,{state:'cancelled',fingerprint,contextId:context.id,expires:Date.now()+30*60_000});db.prepare("UPDATE preparation_bindings SET state='cancelled',expires=? WHERE request_id=?").run(Date.now()+30*60_000,body.id);return {state:'cancelled'};}}
+  return preparationStatus(body);
  }
  function validOuterOrigin(value){if(!value)return true;try{const parsed=new URL(value);return parsed.protocol==='http:'&&parsed.hostname==='127.0.0.1';}catch{return false;}}
  async function proxyResult(res,result){res.writeHead(result.status,{'content-type':result.contentType,'cache-control':'no-store','x-content-type-options':'nosniff'});res.end(result.text);}
@@ -309,21 +351,21 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
     try{result=await workerJson(context,'POST','/api/external/submit',body);}
     catch(error){
      let intent;try{intent=await inspectIntent(context,body.id);}catch{}
-     if(intent){db.prepare("UPDATE reservations SET phase='journaled',tx_hash=? WHERE request_id=?").run(intent.txHash,body.id);pendingRequests.delete(body.id);sendJson(res,200,intentOutcome(intent));return;}
+     if(intent){db.prepare("UPDATE reservations SET phase='journaled',tx_hash=? WHERE request_id=?").run(intent.txHash,body.id);db.prepare('UPDATE preparation_bindings SET state=?,tx_hash=? WHERE request_id=?').run(intent.state==='committed'?'committed':'submitted',intent.txHash,body.id);pendingRequests.delete(body.id);sendJson(res,200,intentOutcome(intent));return;}
      sendJson(res,200,{txHash:signedHash(body.transaction),state:'uncertain',phase:'submit',error:error?.message||String(error)});return;
     }
     if(result.status!==200){
      const intent=await inspectIntent(context,body.id);
-     if(intent)db.prepare("UPDATE reservations SET phase='journaled',tx_hash=? WHERE request_id=?").run(intent.txHash,body.id);
-     else {releaseReservation(body.id);sendNotSubmitted(res,result.data?.error||'The transaction was rejected before submission. No transaction was sent.',signedHash(body.transaction));return;}
+     if(intent){db.prepare("UPDATE reservations SET phase='journaled',tx_hash=? WHERE request_id=?").run(intent.txHash,body.id);db.prepare('UPDATE preparation_bindings SET state=?,tx_hash=? WHERE request_id=?').run(intent.state==='committed'?'committed':'submitted',intent.txHash,body.id);}
+     else {releaseReservation(body.id);db.prepare("UPDATE preparation_bindings SET state='failed',tx_hash=? WHERE request_id=?").run(signedHash(body.transaction)||null,body.id);sendNotSubmitted(res,result.data?.error||'The transaction was rejected before submission. No transaction was sent.',signedHash(body.transaction));return;}
      pendingRequests.delete(body.id);sendJson(res,200,intentOutcome(intent));return;
     }
     pendingRequests.delete(body.id);
-    if(result.data.state==='committed')releaseReservation(body.id);
+    if(result.data.state==='committed'){db.prepare("UPDATE preparation_bindings SET state='committed',tx_hash=? WHERE request_id=?").run(result.data.txHash||null,body.id);releaseReservation(body.id);}
     else {
      const intent=await inspectIntent(context,body.id);
-     if(intent)db.prepare("UPDATE reservations SET phase='journaled',tx_hash=? WHERE request_id=?").run(intent.txHash,body.id);
-     else db.prepare("UPDATE reservations SET phase='submitting',tx_hash=? WHERE request_id=?").run(result.data.txHash||null,body.id);
+     if(intent){db.prepare("UPDATE reservations SET phase='journaled',tx_hash=? WHERE request_id=?").run(intent.txHash,body.id);db.prepare('UPDATE preparation_bindings SET state=?,tx_hash=? WHERE request_id=?').run(intent.state==='committed'?'committed':'submitted',intent.txHash,body.id);}
+     else {db.prepare("UPDATE reservations SET phase='submitting',tx_hash=? WHERE request_id=?").run(result.data.txHash||null,body.id);db.prepare("UPDATE preparation_bindings SET state='uncertain',tx_hash=? WHERE request_id=?").run(result.data.txHash||null,body.id);}
     }
     if(reserved.operation==='genesis'&&result.data.state==='committed'){
      const health=await workerJson(context,'GET','/api/internal/health');
@@ -335,6 +377,12 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
    if(req.method==='POST'&&url.pathname==='/api/external/retry'){
     const body=await readJson(req),context=await contextForPocket(body.pocket,body.publicKey);const result=await workerJson(context,'POST','/api/external/retry',body);await proxyResult(res,result);return;
    }
+    if(req.method==='POST'&&url.pathname==='/api/external/preparation-status'){
+     const body=await readJson(req);sendJson(res,200,preparationStatus(body));return;
+    }
+    if(req.method==='POST'&&url.pathname==='/api/external/preparation-cancel'){
+     const body=await readJson(req);sendJson(res,200,await cancelPreparation(body));return;
+    }
    if(req.method==='POST'&&url.pathname==='/api/reconcile'){
     const body=await readJson(req);
     const selected=body.pocket?getPocket(body.pocket):null;
@@ -350,7 +398,7 @@ export async function startPocketSupervisor({run,port=4173,worker=workerScript,s
    if(req.method==='POST'&&['/api/external/prepare','/api/external/owner'].includes(url.pathname)){
     const body=await readJson(req);assert(pocketPattern.test(body.pocket||''),'Pocket identity is required for this transaction');
     const context=getPocket(body.pocket);assert(context,'Pocket context is not installed; reopen the Pocket from verified discovery');
-    const result=await prepare(context,url.pathname,body,false);await proxyResult(res,result);return;
+     const result=await prepare(context,url.pathname,body,false),responseStarted=performance.now();await proxyResult(res,result);console.log(JSON.stringify({event:'pocket-preparation-supervisor-stage',id:body.id,stage:'response',ms:Math.round((performance.now()-responseStarted)*100)/100}));return;
    }
    if(req.method==='POST'&&['/api/pay','/api/owner'].includes(url.pathname))throw new Error('Development signing routes are unavailable through the multi-Pocket supervisor');
    sendJson(res,404,{error:'Not found'});

@@ -162,6 +162,7 @@ try{
  const prepareDeposit=async(pocket,id)=>api(origin,'/api/external/owner',{id,pocket,operation:'deposit',role:'owner',amount:'100',publicKey:owner});
  const transactionInputs=value=>c.Transaction.fromBytes(value.transaction).inputs.map(item=>({txHash:item.previousOutput.txHash,index:Number(item.previousOutput.index)}));
  const probeRequest=randomUUID(),probeB=await prepareDeposit(pocketB,probeRequest);assert.equal(probeB.status,200,JSON.stringify(probeB.value));
+ const equivalentStatus=await api(origin,'/api/external/preparation-status',{endpoint:'owner',publicKey:owner,amount:'100',role:'owner',operation:'deposit',pocket:pocketB,id:probeRequest});assert.equal(equivalentStatus.status,200,JSON.stringify(equivalentStatus.value));assert.equal(equivalentStatus.value.state,'prepared','The same bound request survives equivalent JSON property ordering');
  const selectedBInput=transactionInputs(probeB.value)[0];assert(selectedBInput,'Pocket B probe must contain its owner input');
  const rootDescriptorPath=path.join(run,'pocket.json'),originalRootDescriptor=JSON.parse(await fs.readFile(rootDescriptorPath,'utf8'));
  const rootContextPath=path.join(run,'context.json'),originalRootContext=JSON.parse(await fs.readFile(rootContextPath,'utf8'));

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {discoverIndexedWithRetry,withIndexedTipRetry} from './pocket_indexed_discovery.mjs';
+import {discoverIndexedBatch,discoverIndexedWithRetry,withIndexedTipRetry} from './pocket_indexed_discovery.mjs';
 import {PUDGE_GENESIS} from './pocket_network.mjs';
 
 const nodeTip={number:'0x12',hash:'0x'+'12'.repeat(32)};
@@ -54,9 +54,25 @@ assert.equal(movingCellQueries,2);assert.equal(movedDuringScan.cells.length,1,'A
 let consensusCalls=0;
 await assert.rejects(discoverIndexedWithRetry({rpc:async method=>{
  if(method==='get_consensus'){consensusCalls++;return {id:'ckb'};}
+ if(method==='get_block_hash')return PUDGE_GENESIS;
  throw new Error(`Unexpected RPC method ${method}`);
 }}),/Wrong network/);
 assert.equal(consensusCalls,1,'Non-tip validation failures must not retry');
+
+let sharedTipCalls=0,sharedIndexerCalls=0,sharedCellCalls=0;
+const sharedRpc=async(method,params=[])=>{
+ if(method==='get_consensus')return {id:'ckb_testnet'};
+ if(method==='get_block_hash')return params[0]==='0x0'?PUDGE_GENESIS:params[0]===indexedTip.block_number?indexedTip.block_hash:nodeTip.hash;
+ if(method==='get_tip_header'){sharedTipCalls++;return nodeTip;}
+ if(method==='get_indexer_tip'){sharedIndexerCalls++;return indexedTip;}
+ if(method==='get_cells'){sharedCellCalls++;return {objects:[],last_cursor:'0x'};}
+ throw new Error(`Unexpected batch RPC method ${method}`);
+};
+const sharedQueries=[{lock:{codeHash:'0x'+'66'.repeat(32),hashType:'type',args:'0x'}},{lock:{codeHash:'0x'+'77'.repeat(32),hashType:'type',args:'0x'}}];
+await discoverIndexedBatch({rpc:sharedRpc,queries:sharedQueries});
+assert.equal(sharedTipCalls,1,'Concurrent scans share one node-tip read');
+assert.equal(sharedIndexerCalls,1,'Concurrent scans share one indexer-tip read');
+assert.equal(sharedCellCalls,2,'Each independent lock search still runs against the shared verified snapshot');
 
 let batchCalls=0;
 const batch=await withIndexedTipRetry(async()=>{

@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CkbWalletSession, WalletProviderUnavailableError } from './wallet';
+import { isTemporaryWalletError, wallet, WalletProviderUnavailableError } from './wallet';
 import type { WalletIdentity } from './domain';
 import { createRegistrationProfile, parseRegistrationInvitation, registrationShareUrl, type RegistrationInvitation } from './registration';
-
-const wallet = new CkbWalletSession();
 
 export function RegistrationPage() {
   const { t, i18n } = useTranslation();
@@ -22,7 +20,17 @@ export function RegistrationPage() {
     const code = new URLSearchParams(window.location.search).get('invite');
     if (!code) { setInvitationLoaded(true); return; }
     void parseRegistrationInvitation(code).then(setInvitation).catch(() => setInvitationInvalid(true)).finally(() => setInvitationLoaded(true));
-    return () => wallet.disconnect();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const restore = () => { void wallet.restore().then((identity) => { if (active && identity) setIdentity(identity); }); };
+    const unsubscribe = wallet.subscribe(() => {
+      if (wallet.hasSigner) restore();
+      else if (active) { setIdentity(null); setResponse(''); }
+    });
+    restore();
+    return () => { active = false; unsubscribe(); };
   }, []);
 
   useEffect(() => {
@@ -43,7 +51,8 @@ export function RegistrationPage() {
         const current = await wallet.identity();
         if (active && (current.publicKey !== identity.publicKey || current.address !== identity.address)) setIdentity(current);
       } catch (cause) {
-        if (active) { setIdentity(null); setResponse(''); setError(walletError(cause, t)); }
+        if (active && isTemporaryWalletError(cause)) setError(t('walletCheckTemporary'));
+        else if (active) { setIdentity(null); setResponse(''); setError(walletError(cause, t)); }
       } finally { checking = false; }
     };
     const stop = wallet.onAccountOrNetworkChange(() => window.setTimeout(() => void sync(), 0));
@@ -57,7 +66,7 @@ export function RegistrationPage() {
   const connect = async () => {
     setBusy(true); setError(''); setCopied(null);
     try { setIdentity(await wallet.connect()); }
-    catch (cause) { wallet.disconnect(); setIdentity(null); setError(walletError(cause, t)); }
+    catch (cause) { setError(walletError(cause, t)); if (!isTemporaryWalletError(cause)) setIdentity(null); }
     finally { setBusy(false); }
   };
   const copy = async (value: string) => {

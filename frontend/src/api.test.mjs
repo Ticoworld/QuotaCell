@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {ApiError,getActorPockets,getPocketState,prepareGenesis,prepareOwnerAction,resolvePudgeTransaction,submitTransaction} from './api.ts';
+import {ApiError,getActorPockets,getPocketState,prepareGenesis,prepareOwnerAction,preparePayment,resolvePudgeTransaction,submitTransaction} from './api.ts';
 
 globalThis.window={location:{search:''}};
 
@@ -27,22 +27,51 @@ test('a preparation timeout is distinguished from an offline backend and can be 
  }finally{globalThis.fetch=originalFetch;}
 });
 
-test('owner preparation retries the exact same request after a timeout',async()=>{
+test('owner preparation resumes by status after a timeout without posting a duplicate request',async()=>{
  const originalFetch=globalThis.fetch;
  const originalTimeout=globalThis.window.setTimeout;
- const posted=[];
+ const posted=[],statusRequests=[];
+ const prepared={id:'request-id',transaction:'0x00',publicKey:'0x02'+'11'.repeat(32),genesis:'0x'+'22'.repeat(32),fee:'123'};
  globalThis.window.setTimeout=(callback)=>setTimeout(callback,0);
- globalThis.fetch=async(_url,options)=>{
+ globalThis.fetch=async(url,options)=>{
+  if(url==='/api/external/preparation-status'){
+   statusRequests.push(JSON.parse(options.body));
+   return new Response(JSON.stringify(statusRequests.length===1?{state:'not-found'}:{state:'prepared',result:prepared}),{status:200});
+  }
+  assert.equal(url,'/api/external/owner');
   posted.push(JSON.parse(options.body));
-  if(posted.length===1)throw new DOMException('deadline exceeded','TimeoutError');
-  return new Response(JSON.stringify({id:'request-id',transaction:'0x00',publicKey:'0x02'+'11'.repeat(32),genesis:'0x'+'22'.repeat(32),fee:'123'}),{status:200});
+  throw new DOMException('deadline exceeded','TimeoutError');
  };
  try{
   const result=await prepareOwnerAction({id:'request-id',publicKey:'0x02'+'11'.repeat(32),operation:'deposit',amount:'100000000000'});
   assert.equal(result.fee,'123');
-  assert.equal(posted.length,2);
-  assert.deepEqual(posted[1],posted[0]);
+  assert.equal(posted.length,1,'the operation is submitted once even when the browser deadline expires');
+  assert.equal(statusRequests.length,2,'the stable request ID is recovered from the supervisor');
+  assert.equal(statusRequests[1].endpoint,'owner');
+  assert.equal(statusRequests[1].id,'request-id');
   assert.equal(posted[0].id,'request-id');
+ }finally{globalThis.fetch=originalFetch;globalThis.window.setTimeout=originalTimeout;}
+});
+
+test('an in-flight payment preparation resumes from its existing reservation',async()=>{
+ const originalFetch=globalThis.fetch;
+ const originalTimeout=globalThis.window.setTimeout;
+ let statusCalls=0,prepareCalls=0;
+ const result={id:'payment-id',transaction:'0x01',publicKey:'0x02'+'11'.repeat(32),genesis:'0x'+'22'.repeat(32),fee:'456'};
+ globalThis.window.setTimeout=(callback)=>setTimeout(callback,0);
+ globalThis.fetch=async(url)=>{
+  if(url==='/api/external/preparation-status'){
+   statusCalls++;
+   return new Response(JSON.stringify(statusCalls===1?{state:'preparing'}:{state:'prepared',result}),{status:200});
+  }
+  if(url==='/api/external/prepare')prepareCalls++;
+  throw new Error(`unexpected request ${url}`);
+ };
+ try{
+  const prepared=await preparePayment({id:'payment-id',publicKey:result.publicKey,role:'alice',amount:'100',recipient:'0x'+'33'.repeat(20)});
+  assert.equal(prepared.transaction,'0x01');
+  assert.equal(statusCalls,2);
+  assert.equal(prepareCalls,0,'resume never starts a duplicate reservation');
  }finally{globalThis.fetch=originalFetch;globalThis.window.setTimeout=originalTimeout;}
 });
 

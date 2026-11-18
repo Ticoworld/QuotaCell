@@ -71,8 +71,69 @@ export async function getActorPockets(publicKey: string) {
   return result;
 }
 export const prepareGenesis = (body: unknown) => request<PreparedTransaction>('/api/external/genesis', body, 120_000);
-export const preparePayment = (body: unknown) => request<PreparedTransaction>('/api/external/prepare', body, 20_000, 1);
-export const prepareOwnerAction = (body: unknown) => request<PreparedTransaction>('/api/external/owner', body, 20_000, 1);
+type PreparationStatus = { state: string; result?: PreparedTransaction; txHash?: string };
+
+const preparationDeadlineMs = 35_000;
+const preparationPollMs = 1_250;
+
+function preparationStatusBody(body: unknown, endpoint: 'payment' | 'owner') {
+  if (!body || typeof body !== 'object' || !('id' in body) || typeof (body as { id?: unknown }).id !== 'string') {
+    throw new ApiError('The preparation request has no recovery ID.', false);
+  }
+  return { ...(body as Record<string, unknown>), endpoint };
+}
+
+async function readPreparationStatus(body: Record<string, unknown>): Promise<PreparationStatus> {
+  return request<PreparationStatus>('/api/external/preparation-status', body, 5_000);
+}
+
+async function waitForPreparation(body: Record<string, unknown>, started: number): Promise<PreparedTransaction> {
+  while (Date.now() - started < preparationDeadlineMs) {
+    await new Promise((resolve) => window.setTimeout(resolve, preparationPollMs));
+    const status = await readPreparationStatus(body);
+    if (status.state === 'prepared' && status.result) return status.result;
+    if (status.state === 'submitted' || status.state === 'uncertain' || status.state === 'committed') {
+      throw new ApiError('An earlier outcome is uncertain. Check transaction status before preparing another payment.', false);
+    }
+    if (['not-found', 'expired', 'cancelled', 'failed'].includes(status.state)) {
+      throw new ApiError('Preparation is taking longer than expected. Your request is saved; retry will check this same request. No wallet action has happened.', true, undefined, true);
+    }
+  }
+  throw new ApiError('Preparation is taking longer than expected. Your request is saved; retry will check this same request. No wallet action has happened.', true, undefined, true);
+}
+
+async function prepareResumable(endpoint: 'payment' | 'owner', body: unknown) {
+  const requestBody = preparationStatusBody(body, endpoint);
+  const status = await readPreparationStatus(requestBody);
+  if (status.state === 'prepared' && status.result) return status.result;
+  if (['submitted', 'uncertain', 'committed'].includes(status.state)) {
+    throw new ApiError('An earlier outcome is uncertain. Check transaction status before preparing another payment.', false);
+  }
+  if (status.state === 'preparing' || status.state === 'cancelling') return waitForPreparation(requestBody, Date.now());
+  try {
+    return await request<PreparedTransaction>(endpoint === 'payment' ? '/api/external/prepare' : '/api/external/owner', body, 20_000);
+  } catch (cause) {
+    if (!(cause instanceof ApiError) || !cause.retryable) throw cause;
+    return waitForPreparation(requestBody, Date.now());
+  }
+}
+
+export const preparePayment = (body: unknown) => prepareResumable('payment', body);
+export const prepareOwnerAction = (body: unknown) => prepareResumable('owner', body);
+export async function cancelPreparation(body: unknown, endpoint: 'payment' | 'owner') {
+  const requestBody = preparationStatusBody(body, endpoint);
+  let status = await request<PreparationStatus>('/api/external/preparation-cancel', requestBody, 10_000);
+  const started = Date.now();
+  while (status.state === 'preparing' || status.state === 'cancelling') {
+    if (Date.now() - started >= 15_000) throw new ApiError('Preparation cancellation is still being checked. Retry cancellation for this same request.', true, undefined, true);
+    await new Promise((resolve) => window.setTimeout(resolve, preparationPollMs));
+    status = await readPreparationStatus(requestBody);
+  }
+  if (['submitted', 'uncertain', 'committed'].includes(status.state)) throw new ApiError('An earlier outcome is uncertain. Check transaction status before preparing another payment.', false);
+  return status;
+}
+
+export const getPreparationStatus = (body: unknown, endpoint: 'payment' | 'owner') => readPreparationStatus(preparationStatusBody(body, endpoint));
 export const submitTransaction = (id: string, transaction: string) => request<TransactionResult>('/api/external/submit', { id, transaction }, 15_000);
 export const retryJournaledTransaction = (approvedHash: string, publicKey: string) => request<TransactionResult>('/api/external/retry', { approvedHash, publicKey });
 export const reconcile = () => request<{ outcomes: { txHash: string; state?: string; status?: string; reason?: string; operation?: string; pocket?: string }[] }>('/api/reconcile', {});
