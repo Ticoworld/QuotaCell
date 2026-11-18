@@ -298,7 +298,7 @@ function App() {
       if (!canceled) setRecipientAddresses(addresses);
     }).catch(() => { if (!canceled) setRecipientAddresses({}); });
     return () => { canceled = true; };
-  }, [state?.genesis, state?.pocket]);
+  }, [state?.genesis, state?.pocket, state?.delegates]);
 
   useEffect(() => {
     if (!pendingPeople || !state?.pocket || !state.genesis || state.empty) return;
