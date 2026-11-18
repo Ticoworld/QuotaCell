@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
 import { formatCkb, parseCkb, shortHash } from './amount';
+import { minimumProtectedFundingShannons, REQUIRED_PROTECTED_CHANGE_RESERVE_SHANNONS } from './funding';
 import type { DelegateState, HistoryItem, PocketState, PreparedTransaction, WalletIdentity } from './domain';
 
 export type Operation = 'genesis' | 'pay' | 'deposit' | 'revoke' | 'close' | 'sweep';
@@ -35,6 +36,7 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
   const [transactionDetails, setTransactionDetails] = useState<{ hash: string; inputs: string[]; outputs: string[] } | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [walletPickerActive, setWalletPickerActive] = useState(false);
+  const preparationRequest = useRef<{ fingerprint: string; id: string } | null>(null);
   const networkMode = state?.networkMode || '';
   const readOnly = networkMode === 'pudge-readonly';
   const prepareOnly = networkMode === 'pudge-prepare-only';
@@ -51,6 +53,7 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
 
   useEffect(() => {
     setPaymentAmount(''); setDepositAmount(''); setValidation(''); setDetailsOpen(false); setTransactionDetails(null);
+    preparationRequest.current = null;
   }, [intent?.operation, intent?.role]);
 
   useEffect(() => {
@@ -75,13 +78,17 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
     let amount = '';
     try {
       if (intent.operation === 'pay') { parseCkb(paymentAmount, t('minAmount')); amount = paymentAmount; }
-      if (intent.operation === 'deposit') { const value = parseCkb(depositAmount, t('minAmount')); if (value < 7_300_000_000n) throw new Error(t('depositMinimum')); amount = depositAmount; }
+      if (intent.operation === 'deposit') { const value = parseCkb(depositAmount, t('minAmount')); if (value < REQUIRED_PROTECTED_CHANGE_RESERVE_SHANNONS) throw new Error(t('depositMinimum')); amount = depositAmount; }
     } catch (cause) { setValidation(cause instanceof Error ? cause.message : t('minAmount')); return; }
-    const id = crypto.randomUUID();
-    const body: Record<string, unknown> = { id, publicKey: identity.publicKey };
-    if (intent.operation === 'pay' && selected) Object.assign(body, { role: selected.role, amount, recipient: selected.recipient });
+    const request: Record<string, unknown> = { publicKey: identity.publicKey };
+    if (intent.operation === 'pay' && selected) Object.assign(request, { role: selected.role, amount, recipient: selected.recipient });
     else if (intent.operation === 'genesis') return;
-    else Object.assign(body, { operation: intent.operation, ...(intent.role ? { role: intent.role } : {}), ...(amount ? { amount } : {}) });
+    else Object.assign(request, { operation: intent.operation, ...(intent.role ? { role: intent.role } : {}), ...(amount ? { amount } : {}) });
+    const fingerprint = JSON.stringify(request);
+    if (!preparationRequest.current || preparationRequest.current.fingerprint !== fingerprint) {
+      preparationRequest.current = { fingerprint, id: crypto.randomUUID() };
+    }
+    const body = { ...request, id: preparationRequest.current.id };
     await onPrepare(body);
   };
   const reconnectExpectedSigner = async () => {
@@ -124,7 +131,16 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
             <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('sharedRemaining')}</span><strong className="text-right font-semibold tabular-nums text-slate-800">{formatCkb(BigInt(state?.sharedLimit || 0) > BigInt(state?.sharedUsed || 0) ? BigInt(state?.sharedLimit || 0) - BigInt(state?.sharedUsed || 0) : 0n)} CKB</strong></div>
             <div className="review-row flex justify-between gap-3 py-2 text-xs text-slate-600"><span>{t('target')}</span><code className="max-w-[68%] break-all text-right text-slate-800" dir="ltr">{selectedRecipient}</code></div>
           </>}
-          {intent.operation === 'deposit' && <label className="field-block grid gap-1.5 text-xs font-semibold text-slate-700">{t('depositAmount')}<span className="input-unit flex min-w-0 items-center rounded-md border border-slate-300 bg-white focus-within:border-blue focus-within:ring-2 focus-within:ring-blue/20"><input className="h-11 min-w-0 flex-1 rounded-md border-0 bg-transparent px-3 text-base text-ink outline-none" autoFocus inputMode="decimal" value={depositAmount} onChange={(event) => setDepositAmount(event.target.value)} placeholder="0"/><i className="px-3 text-xs not-italic text-slate-500">CKB</i></span></label>}
+          {intent.operation === 'deposit' && <>
+            <label className="field-block grid gap-1.5 text-xs font-semibold text-slate-700">{t('depositAmount')}<span className="input-unit flex min-w-0 items-center rounded-md border border-slate-300 bg-white focus-within:border-blue focus-within:ring-2 focus-within:ring-blue/20"><input className="h-11 min-w-0 flex-1 rounded-md border-0 bg-transparent px-3 text-base text-ink outline-none" autoFocus inputMode="decimal" value={depositAmount} onChange={(event) => setDepositAmount(event.target.value)} placeholder="0"/><i className="px-3 text-xs not-italic text-slate-500">CKB</i></span></label>
+            {!state?.closed && <section className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs">
+              <div className="inline-facts flex justify-between gap-3"><span>{t('policyCapacity')}</span><strong className="text-right tabular-nums">{formatCkb(state?.policyCapacity || '60000000000')} CKB</strong></div>
+              <div className="inline-facts flex justify-between gap-3"><span>{t('sharedLifetimeAllowance')}</span><strong className="text-right tabular-nums">{formatCkb(state?.sharedLimit || '60000000000')} CKB</strong></div>
+              <div className="inline-facts flex justify-between gap-3"><span>{t('protectedChangeReserve')}</span><strong className="text-right tabular-nums">{formatCkb(REQUIRED_PROTECTED_CHANGE_RESERVE_SHANNONS)} CKB</strong></div>
+              <div className="inline-facts flex justify-between gap-3 border-t border-slate-200 pt-2"><span>{t('minimumForFullAllowance')}</span><strong className="text-right tabular-nums">{formatCkb(minimumProtectedFundingShannons(state?.sharedLimit || '60000000000'))} CKB</strong></div>
+              <p className="m-0 leading-5 text-slate-600">{t('protectedFundingCanExceedAllowance')}</p>
+            </section>}
+          </>}
           {intent.operation === 'deposit' && state?.closed && <div className="consequence-box rounded-lg border border-amber-200 bg-amber-50 p-3.5"><p className="m-0 text-xs leading-5 text-amber-950">{t('lateDepositConsequences')}</p></div>}
           {intent.operation === 'revoke' && selected && <div className="consequence-box rounded-lg border border-line bg-slate-50 p-3.5"><strong className="text-sm font-semibold text-slate-800">{intent.displayName || t(intent.role === 'alice' ? 'delegateOne' : 'delegateTwo')}</strong><p className="my-2 text-xs leading-5 text-slate-600">{t('revokeConsequences')}</p><div className="inline-facts flex justify-between gap-3 border-t border-slate-200 py-2 text-xs text-slate-600"><span>{t('remaining')}</span><strong className="font-semibold tabular-nums text-slate-800">{formatCkb(BigInt(selected.limit) > BigInt(selected.used) ? BigInt(selected.limit) - BigInt(selected.used) : 0n)} CKB</strong></div></div>}
           {intent.operation === 'close' && <div className="consequence-box rounded-lg border border-line bg-slate-50 p-3.5"><strong className="text-sm font-semibold text-slate-800">{t('closePocket')}</strong><p className="my-2 text-xs leading-5 text-slate-600">{t('closeConsequences')}</p><div className="inline-facts flex justify-between gap-3 border-t border-slate-200 py-2 text-xs text-slate-600"><span>{t('protectedBalance')}</span><strong className="font-semibold tabular-nums text-slate-800">{formatCkb(state?.fundShannons || '0')} CKB</strong></div><div className="inline-facts flex justify-between gap-3 border-t border-slate-200 py-2 text-xs text-slate-600"><span>{t('terminalCapacity')}</span><strong className="font-semibold tabular-nums text-slate-800">{formatCkb(state?.policyCapacity || '0')} CKB</strong></div></div>}
@@ -141,7 +157,7 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
           <p className="transaction-operation">{title}</p>
           <div className="transaction-facts">
           {intent.operation === 'pay' && <div className="transaction-amount">{paymentAmount} <span>CKB</span></div>}
-            {intent.operation === 'deposit' && <div className="transaction-amount">{depositAmount} <span>CKB</span></div>}
+            {intent.operation === 'deposit' && <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('selectedDeposit')}</span><strong className="font-semibold tabular-nums text-slate-800">{formatCkb(parseCkb(depositAmount))} CKB</strong></div>}
             {intent.operation === 'close' && <div className="transaction-amount">{formatCkb(state?.fundShannons || '0')} <span>CKB</span></div>}
             {intent.operation === 'sweep' && <div className="transaction-amount">{formatCkb(state?.fundShannons || '0')} <span>CKB</span></div>}
             <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('actualFee')}</span><strong className="font-semibold tabular-nums text-slate-800">{formatCkb(prepared.fee)} CKB</strong></div>

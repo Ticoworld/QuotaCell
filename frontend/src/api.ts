@@ -14,22 +14,28 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(url: string, body?: unknown, timeoutMs = 20_000): Promise<T> {
+async function request<T>(url: string, body?: unknown, timeoutMs = 20_000, timeoutRetries = 0): Promise<T> {
   const selectedPocket = new URLSearchParams(window.location.search).get('pocket');
   const scopedBody = selectedPocket && !url.endsWith('/api/external/genesis') && body && typeof body === 'object' && !Array.isArray(body)
     ? { ...body as Record<string, unknown>, pocket: selectedPocket }
     : body;
-  let response: Response;
-  try {
-    response = await fetch(url, body === undefined ? { cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) } : {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(scopedBody),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (cause) {
-    const timedOut = cause instanceof DOMException && cause.name === 'TimeoutError';
-    throw new ApiError(timedOut ? 'Pocket preparation is taking longer than expected; retry will resume the same request.' : 'Pocket backend is unreachable.', true, undefined, timedOut);
+  let response: Response | undefined;
+  for (let attempt = 0; !response; attempt++) {
+    try {
+      response = await fetch(url, body === undefined ? { cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) } : {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(scopedBody),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (cause) {
+      const timedOut = cause instanceof DOMException && cause.name === 'TimeoutError';
+      if (timedOut && attempt < timeoutRetries) {
+        await new Promise((resolve) => window.setTimeout(resolve, 250 * (attempt + 1)));
+        continue;
+      }
+      throw new ApiError(timedOut ? 'Pocket preparation is taking longer than expected; retry will resume the same request.' : 'Pocket backend is unreachable.', true, undefined, timedOut);
+    }
   }
   let text: string;
   try { text = await response.text(); }
@@ -52,7 +58,8 @@ export const getPocketState = (publicKey?: string) => {
   const params = new URLSearchParams(window.location.search);
   if (publicKey && !params.has('pocket')) return getActorPockets(publicKey);
   if (publicKey) params.set('actor', publicKey);
-  return request<PocketState>(`/api/state${params.has('pocket') || publicKey ? `?${new URLSearchParams({ ...(params.has('pocket') ? { pocket: params.get('pocket') || '' } : {}), ...(publicKey ? { actor: publicKey } : {}) })}` : ''}`);
+  const url = `/api/state${params.has('pocket') || publicKey ? `?${new URLSearchParams({ ...(params.has('pocket') ? { pocket: params.get('pocket') || '' } : {}), ...(publicKey ? { actor: publicKey } : {}) })}` : ''}`;
+  return request<PocketState>(url, undefined, params.has('pocket') ? (publicKey ? 60_000 : 8_000) : undefined);
 };
 export async function getActorPockets(publicKey: string) {
   const url = `/api/state?actor=${encodeURIComponent(publicKey)}`;
@@ -64,8 +71,8 @@ export async function getActorPockets(publicKey: string) {
   return result;
 }
 export const prepareGenesis = (body: unknown) => request<PreparedTransaction>('/api/external/genesis', body, 120_000);
-export const preparePayment = (body: unknown) => request<PreparedTransaction>('/api/external/prepare', body);
-export const prepareOwnerAction = (body: unknown) => request<PreparedTransaction>('/api/external/owner', body);
+export const preparePayment = (body: unknown) => request<PreparedTransaction>('/api/external/prepare', body, 20_000, 1);
+export const prepareOwnerAction = (body: unknown) => request<PreparedTransaction>('/api/external/owner', body, 20_000, 1);
 export const submitTransaction = (id: string, transaction: string) => request<TransactionResult>('/api/external/submit', { id, transaction }, 15_000);
 export const retryJournaledTransaction = (approvedHash: string, publicKey: string) => request<TransactionResult>('/api/external/retry', { approvedHash, publicKey });
 export const reconcile = () => request<{ outcomes: { txHash: string; state?: string; status?: string; reason?: string; operation?: string; pocket?: string }[] }>('/api/reconcile', {});

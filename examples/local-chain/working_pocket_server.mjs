@@ -19,7 +19,6 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
 import {acquireRuntimeLock} from './runtime_lock.mjs';
-import {assertGenesisAcceptanceOperation,assertGenesisAcceptanceRoute} from './pudge_acceptance_gate.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const developmentSigner=process.env.QUOTACELL_DEV_SIGNER==='1';
@@ -39,8 +38,6 @@ assert(Boolean(initial)===Boolean(actors),'Development context and actors must b
 const environment=deployment||initial;
 assert(environment,'A public deployment.json is required when no development Pocket exists');
 const networkMode=process.env.QUOTACELL_NETWORK||'isolated';
-const genesisAcceptanceOnly=process.env.QUOTACELL_PUDGE_GENESIS_ONLY==='1';
-if(genesisAcceptanceOnly){assert.equal(networkMode,'pudge','Genesis-only acceptance requires Pudge mode');assert.equal(process.env.QUOTACELL_PUDGE_BROADCAST,'1','Genesis-only acceptance requires explicit Pudge broadcast enablement');}
 if(networkMode==='pudge-prepare-only')assert.notEqual(process.env.QUOTACELL_PUDGE_BROADCAST,'1','Pudge broadcast must stay disabled in preparation-only mode');
 const rpcUrl=process.env.QUOTACELL_TEST_RPC_PROXY||runtime.url;
 assert(!process.env.QUOTACELL_TEST_RPC_PROXY||networkMode==='isolated','The test RPC proxy is restricted to isolated chains');
@@ -246,7 +243,7 @@ async function submitExternal(body){
  assert(!busy,'Another action is in progress');busy=true;
  try{
   if(networkMode==='pudge')assert.equal(process.env.QUOTACELL_PUDGE_BROADCAST,'1','Pudge broadcasting is disabled');
-  const request=requests.get(body.id);assert(request,'Unknown or expired signing request');if(genesisAcceptanceOnly)assertGenesisAcceptanceOperation(request.operation);requests.delete(body.id);assert(Date.now()<request.expires,'Signing request expired');
+  const request=requests.get(body.id);assert(request,'Unknown or expired signing request');requests.delete(body.id);assert(Date.now()<request.expires,'Signing request expired');
   assert.match(body.transaction||'',/^0x[0-9a-f]+$/i);assert(body.transaction.length<200000,'Signed transaction too large');
   const prepared=c.Transaction.fromBytes(request.bytes),signed=c.Transaction.fromBytes(body.transaction);
   verifyWalletTransaction({prepared,signed,message:request.message,publicKey:request.publicKey,position:request.position});
@@ -404,7 +401,6 @@ const server=http.createServer(async(req,res)=>{
   if(process.env.QUOTACELL_SUPERVISOR_TOKEN)assert.equal(req.headers['x-quotacell-supervisor-token'],process.env.QUOTACELL_SUPERVISOR_TOKEN,'Supervisor authorization required');
   if(req.url.startsWith('/api/internal/')&&!process.env.QUOTACELL_SUPERVISOR_TOKEN){res.writeHead(404);res.end();return;}
   if(req.headers.host!==`127.0.0.1:${port}`)throw new Error('Invalid host');
-  if(req.method==='POST'&&genesisAcceptanceOnly)assertGenesisAcceptanceRoute(new URL(req.url,origin).pathname);
   res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Content-Security-Policy',"default-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'self'");
   if(req.method==='GET'&&req.url==='/'){res.writeHead(200,{'content-type':'text/html; charset=utf-8'});res.end(html);return;}
   if(req.method==='GET'&&req.url==='/wallet.js'){res.writeHead(200,{'content-type':'text/javascript; charset=utf-8'});res.end(walletBundle);return;}

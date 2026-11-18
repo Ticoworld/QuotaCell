@@ -1,8 +1,11 @@
-import type { WalletIdentity } from './domain';
+import type { PocketState, WalletIdentity } from './domain';
 
 const STANDARD_LOCK = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
+const PUDGE_GENESIS = '0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606';
 const CONNECTOR_SUCCESS_GRACE_MS = 2_000;
+const CONNECTOR_RESTORE_TIMEOUT_MS = 3_000;
 const CKB_PROVIDER_METHODS = ['connect', 'isConnected', 'getAccount', 'getPublicKey', 'getNetwork', 'switchNetwork', 'signMessage', 'signTransaction', 'on', 'removeListener'];
+type ConnectorModule = typeof import('@ckb-ccc/connector');
 type Signer = {
   isConnected(): Promise<boolean>;
   getPublicKey(): Promise<string>;
@@ -11,6 +14,14 @@ type Signer = {
   signType?: string;
   provider?: { getNetwork?: () => Promise<string> };
   onReplaced?: (listener: () => void) => () => void;
+};
+type ConnectorElement = HTMLElement & {
+  client: unknown;
+  name: string;
+  hideKhie: boolean;
+  wallet?: { name?: string };
+  signer?: { signer?: Signer };
+  disconnect?: () => void;
 };
 
 export class WalletProviderUnavailableError extends Error {
@@ -30,30 +41,133 @@ export function hasUtxoGlobalCkbProvider(value: unknown) {
 }
 
 export class CkbWalletSession {
-  private element: (HTMLElement & { client: unknown; name: string; hideKhie: boolean; disconnect?: () => void }) | undefined;
+  private element: ConnectorElement | undefined;
   private signer: Signer | undefined;
   private walletName = '';
   private epoch = 0;
-  private loadConnector?: Promise<typeof import('@ckb-ccc/connector')>;
+  private connectorModule?: Promise<ConnectorModule>;
+  private restoreInFlight?: Promise<WalletIdentity | null>;
+  private cancelRestore?: () => void;
+  private readonly loadConnector: () => Promise<ConnectorModule>;
+  private readonly restoreTimeoutMs: number;
+
+  constructor(
+    loadConnector: () => Promise<ConnectorModule> = () => import('@ckb-ccc/connector'),
+    restoreTimeoutMs = CONNECTOR_RESTORE_TIMEOUT_MS,
+  ) {
+    this.loadConnector = loadConnector;
+    this.restoreTimeoutMs = restoreTimeoutMs;
+  }
+
+  private connector() {
+    return this.connectorModule ??= this.loadConnector();
+  }
+
+  private ensureElement(connector: ConnectorModule) {
+    if (this.element) return this.element;
+    const client = new connector.ClientPublicTestnet({ url: 'https://testnet.ckb.dev/', fallbacks: [] });
+    const element = document.createElement('ccc-connector') as ConnectorElement;
+    element.client = client;
+    element.name = 'QuotaCell';
+    element.hideKhie = true;
+    element.hidden = true;
+    this.element = element;
+    return element;
+  }
+
+  private adoptElementSigner() {
+    const signer = this.element?.signer?.signer;
+    if (!signer) return false;
+    this.signer = signer;
+    this.walletName = this.element?.wallet?.name || '';
+    return true;
+  }
+
+  private async restoredIdentity(validatePudge?: (identity: WalletIdentity) => Promise<boolean>) {
+    try {
+      const identity = await this.identity();
+      if (validatePudge && !await validatePudge(identity)) throw new Error('Pudge testnet could not be verified.');
+      return identity;
+    } catch {
+      this.signer = undefined;
+      this.walletName = '';
+      return null;
+    }
+  }
+
+  restore(validatePudge?: (identity: WalletIdentity) => Promise<boolean>): Promise<WalletIdentity | null> {
+    if (this.restoreInFlight) return this.restoreInFlight;
+    const task = this.restoreExistingSession(validatePudge);
+    const tracked = task.finally(() => {
+      if (this.restoreInFlight === tracked) this.restoreInFlight = undefined;
+      this.cancelRestore = undefined;
+    });
+    this.restoreInFlight = tracked;
+    return tracked;
+  }
+
+  private async restoreExistingSession(validatePudge?: (identity: WalletIdentity) => Promise<boolean>): Promise<WalletIdentity | null> {
+    const injected = (window as Window & { utxoGlobal?: unknown }).utxoGlobal;
+    if (!hasUtxoGlobalCkbProvider(injected)) return null;
+    let connector: ConnectorModule;
+    try { connector = await this.connector(); }
+    catch { return null; }
+    const element = this.ensureElement(connector);
+    element.hidden = true;
+    if (this.adoptElementSigner()) return this.restoredIdentity(validatePudge);
+
+    const epoch = ++this.epoch;
+    return new Promise((resolve) => {
+      let settled = false;
+      let validationStarted = false;
+      let timer = 0;
+      const finish = (identity: WalletIdentity | null) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        element.removeEventListener('connection', onConnection);
+        if (this.cancelRestore === cancel) this.cancelRestore = undefined;
+        resolve(identity);
+      };
+      const validate = (signer: Signer, walletName: string) => {
+        if (settled || validationStarted) return;
+        validationStarted = true;
+        window.clearTimeout(timer);
+        element.removeEventListener('connection', onConnection);
+        this.signer = signer;
+        this.walletName = walletName;
+        void this.restoredIdentity(validatePudge).then(finish);
+      };
+      const onConnection = (event: Event) => {
+        if (epoch !== this.epoch) return finish(null);
+        const detail = event as Event & { connectionOwner?: { value?: { signerInfo?: { signer?: Signer }; wallet?: { name?: string } } } };
+        const restoredSigner = detail.connectionOwner?.value?.signerInfo?.signer || element.signer?.signer;
+        if (!restoredSigner) return;
+        validate(restoredSigner, detail.connectionOwner?.value?.wallet?.name || element.wallet?.name || '');
+      };
+      const cancel = () => finish(null);
+      this.cancelRestore = cancel;
+      element.addEventListener('connection', onConnection);
+      timer = window.setTimeout(() => {
+        if (epoch === this.epoch && this.adoptElementSigner() && this.signer) validate(this.signer, this.walletName);
+        else finish(null);
+      }, this.restoreTimeoutMs);
+      if (!element.isConnected) document.body.append(element);
+    });
+  }
 
   async connect(): Promise<WalletIdentity> {
     const injected = (window as Window & { utxoGlobal?: unknown }).utxoGlobal;
     if (!hasUtxoGlobalCkbProvider(injected)) throw new WalletProviderUnavailableError();
-    const connector = await (this.loadConnector ??= import('@ckb-ccc/connector'));
+    const connector = await this.connector();
+    this.cancelRestore?.();
+    if (this.adoptElementSigner()) return this.identity();
     if (this.element && this.signer) return this.identity();
-    if (this.element) {
-      this.element.hidden = false;
-      return new Promise((resolve, reject) => this.element!.addEventListener('connection', (event) => this.accept(event, resolve, reject), { once: true }));
-    }
     const epoch = ++this.epoch;
+    const element = this.ensureElement(connector);
+    element.hidden = false;
     // Identity sharing uses CCC's public testnet client configuration and never
     // depends on QuotaCell's local application API.
-    const client = new connector.ClientPublicTestnet({ url: 'https://testnet.ckb.dev/', fallbacks: [] });
-    const element = document.createElement('ccc-connector') as CkbWalletSession['element'] & HTMLElement;
-    element.client = client;
-    element.name = 'QuotaCell';
-    element.hideKhie = true;
-    this.element = element;
     return new Promise((resolve, reject) => {
       element.addEventListener('connection', (event) => {
         if (epoch !== this.epoch) return reject(new Error('Wallet session changed. Connect again.'));
@@ -67,7 +181,7 @@ export class CkbWalletSession {
           if (epoch === this.epoch && !this.signer) reject(new Error('Wallet connection was canceled.'));
         }, CONNECTOR_SUCCESS_GRACE_MS);
       }, { once: true });
-      document.body.append(element);
+      if (!element.isConnected) document.body.append(element);
     });
   }
 
@@ -81,7 +195,7 @@ export class CkbWalletSession {
   }
 
   async identity(): Promise<WalletIdentity> {
-    const connector = await (this.loadConnector ??= import('@ckb-ccc/connector'));
+    const connector = await this.connector();
     const signer = this.signer;
     if (!signer || !await signer.isConnected()) throw new Error('Wallet disconnected. Connect again to continue.');
     if (this.walletName !== 'UTXO Global Wallet') throw new Error('This prototype has verified UTXO Global Wallet signing only.');
@@ -96,7 +210,7 @@ export class CkbWalletSession {
   }
 
   async sign(transactionHex: string, expectedPublicKey: string): Promise<string> {
-    const connector = await (this.loadConnector ??= import('@ckb-ccc/connector'));
+    const connector = await this.connector();
     const before = await this.identity();
     if (before.publicKey !== expectedPublicKey) throw new Error('Connected wallet does not match the required Pocket role.');
     const signer = this.signer!;
@@ -112,6 +226,7 @@ export class CkbWalletSession {
   }
 
   disconnect() {
+    this.cancelRestore?.();
     this.epoch += 1;
     this.element?.disconnect?.();
     this.element?.remove();
@@ -119,4 +234,10 @@ export class CkbWalletSession {
     this.signer = undefined;
     this.walletName = '';
   }
+}
+
+export function isVerifiedPudgeContext(state: PocketState, selectedPocket = '') {
+  return state.networkMode?.startsWith('pudge') === true
+    && state.genesis?.toLowerCase() === PUDGE_GENESIS
+    && (!selectedPocket || state.pocket?.toLowerCase() === selectedPocket.toLowerCase());
 }

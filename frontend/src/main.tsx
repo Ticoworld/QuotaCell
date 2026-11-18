@@ -11,7 +11,7 @@ import { ApiError, checkPudgeTransaction, getActorPockets, getPocketState, prepa
 import { CreationFlow, type People } from './CreationFlow';
 import { importMetadata, loadMetadata, saveMetadata, exportMetadata } from './metadata';
 import type { HistoryItem, PocketMetadata, PocketState, PreparedTransaction, TransactionResult, WalletIdentity } from './domain';
-import { CkbWalletSession, WalletProviderUnavailableError } from './wallet';
+import { CkbWalletSession, isVerifiedPudgeContext, WalletProviderUnavailableError } from './wallet';
 import { RegistrationPage } from './RegistrationPage';
 import { PocketDiscoveryPage } from './PocketDiscoveryPage';
 import { OperationDialog, type Intent, type Operation } from './OperationDialog';
@@ -52,6 +52,7 @@ function localizedError(message: string, t: (key: string) => string): string {
     [/only the UTXO Global|verified UTXO Global/i, 'unsupportedWalletError'],
     [/CKB secp256k1|signing scheme/i, 'signingSchemeError'],
     [/wrong wallet network|CKB testnet is required|select CKB testnet/i, 'wrongNetworkError'],
+    [/Pudge testnet could not be verified/i, 'pudgeContextUnverified'],
     [/compressed secp256k1 public key/i, 'publicKeyError'],
     [/incompatible wallet lock|does not match the supported CKB lock/i, 'walletLockError'],
     [/wallet changed|account changed/i, 'walletChangedError'],
@@ -138,8 +139,29 @@ function App() {
     if (showProgress) setRefreshing(true);
     const task = (async (): Promise<PocketState | null> => {
       try {
-        const next = await getPocketState(actor ?? undefined);
+        let next: PocketState;
+        const routePocket = new URLSearchParams(window.location.search).get('pocket')?.toLowerCase();
+        for (let attempt = 0; ; attempt++) {
+          try {
+            next = await getPocketState(actor ?? undefined);
+          } catch (cause) {
+            if (attempt >= 2 || !(cause instanceof ApiError) || !cause.retryable || cause.timedOut) throw cause;
+            await new Promise((resolve) => window.setTimeout(resolve, 700 * (attempt + 1)));
+            continue;
+          }
+          const selectionMatches = !actor || !routePocket || (!next.empty && !next.connectRequired && next.pocket?.toLowerCase() === routePocket);
+          if (!selectionMatches && attempt < 2) {
+            await new Promise((resolve) => window.setTimeout(resolve, 700 * (attempt + 1)));
+            continue;
+          }
+          break;
+        }
         if (next.creationRecovery && lastGoodState.current && !lastGoodState.current.creationRecovery) {
+          setStateStale(true);
+          return null;
+        }
+        const selectionMatches = !actor || !routePocket || (!next.empty && !next.connectRequired && next.pocket?.toLowerCase() === routePocket);
+        if (!selectionMatches && lastGoodState.current?.pocket?.toLowerCase() === routePocket && stateActorRef.current === actor?.toLowerCase()) {
           setStateStale(true);
           return null;
         }
@@ -171,7 +193,7 @@ function App() {
     return task;
   }, [identity?.publicKey]);
 
-  useEffect(() => { void refresh(); const timer = window.setInterval(() => void refresh(true), 15000); return () => window.clearInterval(timer); }, [refresh]);
+  useEffect(() => { void refresh(); const timer = window.setInterval(() => void refresh(true), 60000); return () => window.clearInterval(timer); }, [refresh]);
   const loadSelectedPocket = useCallback(async (pocket: string) => {
     setSelectedPocketLoading(true);
     setSelectedPocketError(false);
@@ -181,18 +203,20 @@ function App() {
       const routePocket = new URLSearchParams(window.location.search).get('pocket');
       if (routePocket?.toLowerCase() !== pocket.toLowerCase()) return;
       if (!result || result.connectRequired || result.pocket?.toLowerCase() !== pocket.toLowerCase()) {
-        setStateStale(false);
-        setSelectedPocketError(true);
+        const hasLastGood = stateActorRef.current === identity?.publicKey.toLowerCase() && lastGoodState.current?.pocket?.toLowerCase() === pocket.toLowerCase();
+        setStateStale(hasLastGood);
+        setSelectedPocketError(!hasLastGood);
       }
     } catch {
       if (new URLSearchParams(window.location.search).get('pocket')?.toLowerCase() === pocket.toLowerCase()) {
-        setStateStale(false);
-        setSelectedPocketError(true);
+        const hasLastGood = stateActorRef.current === identity?.publicKey.toLowerCase() && lastGoodState.current?.pocket?.toLowerCase() === pocket.toLowerCase();
+        setStateStale(hasLastGood);
+        setSelectedPocketError(!hasLastGood);
       }
     } finally {
       if (new URLSearchParams(window.location.search).get('pocket')?.toLowerCase() === pocket.toLowerCase()) setSelectedPocketLoading(false);
     }
-  }, [refresh]);
+  }, [identity?.publicKey, refresh]);
   useEffect(() => {
     if (!selectedPocketId || !identity) return;
     if (state?.pocket?.toLowerCase() === selectedPocketId.toLowerCase() && !state.connectRequired) {
@@ -202,7 +226,20 @@ function App() {
     }
     void loadSelectedPocket(selectedPocketId);
   }, [identity?.publicKey, loadSelectedPocket, selectedPocketId, state?.connectRequired, state?.pocket]);
-  useEffect(() => () => wallet.disconnect(), []);
+  useEffect(() => {
+    let active = true;
+    setWalletBusy(true);
+    void wallet.restore(async () => {
+      const context = await getPocketState();
+      return isVerifiedPudgeContext(context, selectedPocketId);
+    }).then((restored) => {
+      if (!active || !restored) return;
+      setIdentity(restored);
+      setIdentityError('');
+      setLoadError('');
+    }).finally(() => { if (active) setWalletBusy(false); });
+    return () => { active = false; };
+  }, [selectedPocketId]);
   useEffect(() => {
     if (!transactionNotice?.hash) return;
     try {
@@ -227,7 +264,6 @@ function App() {
         }
       } catch (cause) {
         if (!active) return;
-        wallet.disconnect();
         setIdentity(null);
         setIdentityError(localizedConnectionError(cause, t));
       } finally { checking = false; }
@@ -304,7 +340,7 @@ function App() {
     ['uncertain', 'pending', 'proposed', 'submitted'].includes(transactionNotice.state) ||
     (transactionNotice.state === 'committed' && !noticeRecorded)
   ));
-  const actionsBlocked = Boolean(stateStale || state?.unresolved || clientTransactionUnresolved);
+  const actionsBlocked = Boolean(state?.unresolved || clientTransactionUnresolved);
 
   const labelFor = (publicKey: string | undefined, fallback: string) => metadata[publicKey || '']?.name?.trim() || fallback;
   const descriptionFor = (publicKey: string | undefined) => metadata[publicKey || '']?.description?.trim() || '';
@@ -316,8 +352,13 @@ function App() {
 
   const connectWallet = async () => {
     setWalletBusy(true); setIdentityError('');
-    try { const connected = await wallet.connect(); setIdentity(connected); setLoadError(''); }
-    catch (cause) { setIdentityError(localizedConnectionError(cause, t)); wallet.disconnect(); setIdentity(null); }
+    try {
+      const connected = await wallet.connect();
+      const context = await getPocketState();
+      if (context.networkMode?.startsWith('pudge') && !isVerifiedPudgeContext(context, selectedPocketId)) throw new Error('Pudge testnet could not be verified.');
+      setIdentity(connected); setLoadError('');
+    }
+    catch (cause) { setIdentityError(localizedConnectionError(cause, t)); setIdentity(null); }
     finally { setWalletBusy(false); }
   };
   const connectParticipant = async () => {
@@ -340,18 +381,16 @@ function App() {
   const copyPocketId = async () => {
     if (!state?.pocket) return;
     const url = new URL(window.location.href);
-    url.search = new URLSearchParams({ view: '1', pocket: state.pocket }).toString();
+    url.search = new URLSearchParams({ pocket: state.pocket }).toString();
     try { await navigator.clipboard.writeText(url.toString()); toast.success(t('pocketLinkCopied')); }
     catch { toast.error(t('clipboardWriteFailed')); setIdentityError(url.toString()); }
   };
 
   const beginOperation = (operation: Operation, selectedRole?: 'alice' | 'ben', displayName?: string) => {
-    if (stateStale) return;
     setOperationError(''); setPrepared(null); setIntent({ operation, role: selectedRole, displayName });
   };
   const prepareOperation = async (body: Record<string, unknown>) => {
     if (!intent || !identity) throw new Error(t('connect'));
-    if (stateStale) throw new Error(t('stateRefreshPaused'));
     if (actionsBlocked) throw new Error(t('unresolvedBody'));
     setWorking(true); setOperationError('');
     try {

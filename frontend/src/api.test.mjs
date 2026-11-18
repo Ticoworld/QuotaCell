@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {ApiError,getActorPockets,getPocketState,prepareGenesis,resolvePudgeTransaction,submitTransaction} from './api.ts';
+import {ApiError,getActorPockets,getPocketState,prepareGenesis,prepareOwnerAction,resolvePudgeTransaction,submitTransaction} from './api.ts';
 
 globalThis.window={location:{search:''}};
 
@@ -25,6 +25,25 @@ test('a preparation timeout is distinguished from an offline backend and can be 
  try{
   await assert.rejects(()=>prepareGenesis({id:'request-id'}),(error)=>error instanceof ApiError&&error.retryable&&error.timedOut&&/resume the same request/.test(error.message));
  }finally{globalThis.fetch=originalFetch;}
+});
+
+test('owner preparation retries the exact same request after a timeout',async()=>{
+ const originalFetch=globalThis.fetch;
+ const originalTimeout=globalThis.window.setTimeout;
+ const posted=[];
+ globalThis.window.setTimeout=(callback)=>setTimeout(callback,0);
+ globalThis.fetch=async(_url,options)=>{
+  posted.push(JSON.parse(options.body));
+  if(posted.length===1)throw new DOMException('deadline exceeded','TimeoutError');
+  return new Response(JSON.stringify({id:'request-id',transaction:'0x00',publicKey:'0x02'+'11'.repeat(32),genesis:'0x'+'22'.repeat(32),fee:'123'}),{status:200});
+ };
+ try{
+  const result=await prepareOwnerAction({id:'request-id',publicKey:'0x02'+'11'.repeat(32),operation:'deposit',amount:'100000000000'});
+  assert.equal(result.fee,'123');
+  assert.equal(posted.length,2);
+  assert.deepEqual(posted[1],posted[0]);
+  assert.equal(posted[0].id,'request-id');
+ }finally{globalThis.fetch=originalFetch;globalThis.window.setTimeout=originalTimeout;}
 });
 
 test('an absent journal entry and a Pudge miss resolve a transaction as not submitted',async()=>{
