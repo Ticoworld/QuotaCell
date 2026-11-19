@@ -296,6 +296,7 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
   } });
   const page = await browser.newPage();
   try {
+    page.setDefaultTimeout(10000);
     const origin = 'http://localhost:18341';
     await page.addInitScript({ content: 'window.__testKey = ' + JSON.stringify('0x' + privateKeys[0]) + ';' + provider });
     await page.route(origin + '/**', async route => {
@@ -308,39 +309,175 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
       const result = request.method === 'get_fee_rate_statistics' ? { median: '0x3e8' } : await rpc(request.method, request.params);
       await route.fulfill({ json: { jsonrpc: '2.0', id: request.id, result } });
     });
-    await page.goto(origin + '/?pocket=' + scope);
-    await page.getByRole('heading', { name: 'Pocket closed' }).waitFor();
-    await page.locator('.history-row').filter({ hasText: 'Recover late funds' }).waitFor();
-    await page.getByRole('button', { name: 'Connect wallet', exact: true }).first().click();
-    const picker = page.locator('ccc-connector');
-    await picker.getByText('UTXO Global Wallet', { exact: true }).click();
-    await picker.getByText('CKB', { exact: true }).click();
-    await page.getByRole('button', { name: 'Add late funds' }).waitFor();
-    let uiBroadcasts = 0;
+    const address = lock => c.Address.fromScript(lock, new c.ClientPublicTestnet()).toString();
+    const identities = signers.map(signer => ({
+      publicKey: signer.publicKey,
+      address: address(c.Script.from({ codeHash: recipient[0].codeHash, hashType: 'type', args: c.hashCkb(signer.publicKey).slice(0, 42) })),
+      name: '', description: '',
+    }));
+    const draftId = crypto.randomUUID();
+    const unrelated = crypto.randomUUID();
+    const draftKey = 'quotacell.drafts.v1:' + genesis + ':' + owner.publicKey;
+    await page.addInitScript(({ draftKey, draftId, unrelated, identities, recipients }) => {
+      if (sessionStorage.getItem('fixture-initialized')) return;
+      sessionStorage.setItem('fixture-initialized', '1');
+      localStorage.setItem(draftKey, JSON.stringify([{ id: draftId, updatedAt: 2 }, { id: unrelated, updatedAt: 1 }]));
+      localStorage.setItem(draftKey + ':draft:' + draftId, JSON.stringify({
+        step: 2, people: { owner: identities[0], alice: identities[1], ben: identities[2] },
+        terms: { shared: '500', firstLimit: '250', secondLimit: '250', firstMax: '100', secondMax: '100', firstRecipient: recipients[0], secondRecipient: recipients[1] },
+      }));
+    }, { draftKey, draftId, unrelated, identities, recipients: recipient.map(address) });
+    const sent = [];
+    let loseResponse = false;
     await page.route(url + '/**', async route => {
+      if (route.request().method() !== 'POST') return route.fallback();
       const request = route.request().postDataJSON();
-      if (request.method === 'send_transaction') uiBroadcasts++;
-      await route.fallback();
+      if (request.method !== 'send_transaction') return route.fallback();
+      const hash = await rpc(request.method, request.params);
+      sent.push(hash);
+      for (let attempt = 0; attempt < 8; attempt++) await rpc('generate_block');
+      await waitForIndexer();
+      if (loseResponse) { loseResponse = false; return route.abort(); }
+      return route.fulfill({ json: { jsonrpc: '2.0', id: request.id, result: hash } });
     });
-    await page.getByRole('button', { name: 'Add late funds' }).click();
+
+    const button = (name, within = page) => within.getByRole('button', { name, exact: true });
     const dialog = page.getByRole('dialog');
-    await dialog.locator('input[inputmode=decimal]').fill('100');
-    await dialog.getByRole('button', { name: 'Prepare transaction' }).click();
+    const connect = async (index, role, key = privateKeys[index]) => {
+      if (await page.locator('.disconnect-button').count()) await page.locator('.disconnect-button').click();
+      await page.evaluate(key => window.switchTestWallet(key), key);
+      await button('Connect wallet').first().click();
+      const picker = page.locator('ccc-connector');
+      await picker.getByText('UTXO Global Wallet', { exact: true }).click();
+      await picker.getByText('CKB', { exact: true }).click();
+      await page.locator('.connected-account strong').getByText(role, { exact: true }).waitFor();
+    };
+    const review = async (action, values = [], opener = button(action)) => {
+      await opener.click();
+      const fields = dialog.locator('input[inputmode=decimal]');
+      for (const [index, value] of values.entries()) await fields.nth(index).fill(value);
+      await button(action === 'Pay' ? 'Review payment' : 'Prepare transaction', dialog).click();
+      await dialog.getByRole('heading', { name: 'Review transaction' }).waitFor();
+    };
+    const confirm = async (action, opts = {}) => {
+      const before = sent.length;
+      const reviewed = await dialog.innerText();
+      const signer = await page.evaluate(() => window.testWallet.address);
+      assert(reviewed.includes(signer), action + ' reviewed signer');
+      assert(/Pudge/i.test(reviewed), action + ' reviewed network');
+      const feeMatch = (await dialog.getByText('Network fee', { exact: true }).locator('..').locator('strong').innerText()).match(/([\d.]+)\s*CKB/i);
+      assert(feeMatch, action + ' reviewed fee');
+      const [whole, fraction = ''] = feeMatch[1].split('.');
+      const reviewedFee = BigInt(whole) * CKB + BigInt(fraction.padEnd(8, '0'));
+
+      await button(action, dialog).click();
+      await page.waitForFunction(() => !document.querySelector('[role="dialog"]'));
+      assert.equal(sent.length, before + 1, action);
+      const hash = sent.at(-1);
+      if (opts.reload) {
+        assert(await page.locator('.transaction-notice').count() <= 1);
+        assert.equal(await page.locator('[data-sonner-toast]').count(), 0);
+        await page.reload();
+      }
+      await page.locator('.history-row').filter({ has: page.locator('a[href$="' + hash + '"]') }).waitFor();
+      assert.equal(sent.length, before + 1, 'No duplicate broadcast');
+      const record = await rpc('get_transaction', [hash]);
+      assert.equal(record.tx_status.status, 'committed');
+      const header = await rpc('get_header', [record.tx_status.block_hash]);
+      assert.equal(await rpc('get_block_hash', [header.number]), header.hash);
+      const consumed = await Promise.all(record.transaction.inputs.map(async input => {
+        const previous = await rpc('get_transaction', [input.previous_output.tx_hash]);
+        return BigInt(previous.transaction.outputs[Number(BigInt(input.previous_output.index))].capacity);
+      }));
+      const produced = record.transaction.outputs.reduce((sum, output) => sum + BigInt(output.capacity), 0n);
+      assert.equal(consumed.reduce((sum, capacity) => sum + capacity, 0n) - produced, reviewedFee);
+      console.log('React + canonical CKB PASS', action, hash);
+      return record.transaction;
+    };
+    const policyBytes = tx => Buffer.from(tx.outputs_data[0].slice(2), 'hex');
+    const checkUsage = (tx, expected) => assert.deepEqual([24, 280, 434].map(offset => policyBytes(tx).readBigUInt64LE(offset) / CKB), expected);
+    const checkFund = (tx, amount, index = 0) => {
+      assert.equal(tx.outputs[index].lock.args, new URL(page.url()).searchParams.get('pocket'));
+      assert.equal(BigInt(tx.outputs[index].capacity), amount * CKB);
+    };
+
+    await page.goto(origin + '/');
+    await connect(0, 'Connected');
+    await page.getByRole('button', { name: /Resume/ }).first().click();
+    await page.getByRole('button', { name: /Create and review in wallet|Prepare for review/i }).click();
     await dialog.getByRole('heading', { name: 'Review transaction' }).waitFor();
-    await dialog.getByText('100 CKB', { exact: true }).first().waitFor();
-    await page.evaluate(() => { window.testWallet.mode = 'reject'; });
-    await dialog.getByRole('button', { name: 'Add late funds', exact: false }).click();
-    await dialog.getByText(/reject/i).first().waitFor();
-    assert.equal(uiBroadcasts, 0);
-    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-    await page.reload();
+    const created = await confirm('Create Pocket');
+    assert.equal(BigInt(created.outputs[0].capacity), 600n * CKB);
+    assert.deepEqual(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).map(d => d.id), draftKey), [unrelated]);
+    const createdUrl = page.url();
+    await connect(0, 'This wallet has no permission in this Pocket.', other[2].privateKey);
+    for (const action of ['Pay', 'Add funds', 'Update permissions', 'Close and recover', 'Revoke permission']) {
+      assert.equal(await button(action).count(), 0, action);
+    }
+    await connect(0, 'Pocket owner');
+    for (let index = 0; index < 2; index++) {
+      await review('Add funds', ['250']);
+      if (!index) {
+        await page.evaluate(() => { window.testWallet.mode = 'reject'; });
+        await button('Add funds', dialog).click();
+        await dialog.getByText(/reject/i).first().waitFor();
+        assert.equal(sent.length, 1);
+        await page.evaluate(() => { window.testWallet.mode = 'ok'; });
+      } else loseResponse = true;
+      checkFund(await confirm('Add funds', { reload: index === 1 }), 250n);
+      if (index === 1 && !await page.locator('.disconnect-button').count()) await connect(0, 'Pocket owner');
+    }
+    for (const index of [1, 2]) {
+      await connect(index, 'Delegate ' + index);
+      assert.equal(await button('Update permissions').count(), 0);
+      await review('Pay', ['61']);
+      const paymentReview = await dialog.innerText();
+      assert(paymentReview.includes('61 CKB'));
+      assert(paymentReview.includes(address(recipient[index - 1])));
+      const paid = await confirm('Sign and send payment');
+      assert.equal(BigInt(paid.outputs[2].capacity), 61n * CKB);
+      assert.equal(paid.outputs[2].lock.args, recipient[index - 1].args);
+      checkFund(paid, 500n - 61n * BigInt(index), 1);
+      checkUsage(paid, index === 1 ? [61n, 61n, 0n] : [122n, 61n, 61n]);
+    }
+    await connect(0, 'Pocket owner');
+    await review('Update permissions', ['50', '20', '20']);
+    const increased = await confirm('Update permissions');
+    assert.deepEqual([8, 264, 418].map(offset => policyBytes(increased).readBigUInt64LE(offset) / CKB), [550n, 270n, 270n]);
+    const revoke = async () => {
+      await review('Revoke permission', [], button('Revoke permission').first());
+      assert.equal(policyBytes(await confirm('Revoke permission'))[7] & 1, 0);
+    };
+    await revoke();
+    await connect(1, 'Delegate 1');
+    assert.equal(await button('Pay').count(), 0);
+    await connect(0, 'Pocket owner');
+    await button('Update permissions').click();
+    await dialog.getByRole('checkbox', { name: /Reactivate Delegate 1/ }).check();
+    await button('Prepare transaction', dialog).click();
+    await dialog.getByRole('heading', { name: 'Review transaction' }).waitFor();
+    const reactivated = await confirm('Update permissions');
+    assert.equal(policyBytes(reactivated)[7] & 1, 1);
+    checkUsage(reactivated, [122n, 61n, 61n]);
+    await revoke();
+    await review('Close and recover');
+    const closed = await confirm('Close and recover');
+    assert.equal(BigInt(closed.outputs[0].capacity), 134n * CKB);
+    assert.equal(BigInt(closed.outputs[1].capacity), 378n * CKB);
+    assert.equal(600n * CKB - BigInt(closed.outputs[0].capacity), 466n * CKB);
+    await review('Add late funds', ['100']);
+    checkFund(await confirm('Add late funds'), 100n);
+    await review('Recover late deposit');
+    const swept = await confirm('Recover late funds');
+    assert.equal(BigInt(swept.outputs[1].capacity), 100n * CKB);
+    await page.goto(createdUrl);
     await page.getByRole('heading', { name: 'Pocket closed' }).waitFor();
-    console.log('React PASS terminal history, CCC owner connection, owner-only late-funding control and reload');
+    await page.locator('.history-row').filter({ hasText: 'Recover late funds' }).first().waitFor();
+    await page.locator('.history-row').nth(7).waitFor();
+    assert.deepEqual(await page.locator('.history-row a').evaluateAll(links => links.map(link => link.href.split('/').at(-1))), [...sent].reverse().slice(0, 8));
+
   } finally {
     await page.close();
   }
   console.log(JSON.stringify({ result: 'PASS', operations: results, terminal: policyPoint }));
 }
-
-
-
