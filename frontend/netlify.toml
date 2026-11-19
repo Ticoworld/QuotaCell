@@ -1,0 +1,12 @@
+[build]
+  command = "npm ci && npm run build -- --base=/"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+  VITE_QUOTACELL_BROWSER = "1"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
