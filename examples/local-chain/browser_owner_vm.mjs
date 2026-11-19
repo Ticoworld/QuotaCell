@@ -68,6 +68,12 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
           qDataHash: '0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e',
         } }),
       }));
+      plugin.onLoad({ filter: /browserPudge[.]ts$/ }, async ({ path }) => ({
+        loader: 'ts', contents: (await fs.readFile(path, 'utf8')).replace(
+          /async function discoverFunds[\s\S]+?(?=async function snapshot)/,
+          source => source.replaceAll("'0x64'", "'0x2'").replaceAll('length <= 100', 'length <= 2').replaceAll('length < 100', 'length < 2'),
+        ),
+      }));
       plugin.onLoad({ filter: /publicDiscovery[.]ts$/ }, async ({ path }) => ({
         loader: 'ts', contents: (await fs.readFile(path, 'utf8'))
           .replace('https://testnet.ckb.dev/', url)
@@ -84,10 +90,27 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
   const originalFetch = fetch;
   let dropResponse = false;
   let broadcasts = 0;
+  let fundFailure;
+  let fundPage;
   globalThis.fetch = async (target, options) => {
     const request = options?.body && JSON.parse(options.body);
     if (String(target) === url && request?.method === 'get_fee_rate_statistics') {
       return Response.json({ result: { median: '0x3e8' } });
+    }
+    if (String(target) === url && request?.method === 'get_cells' && request.params[0].script.code_hash ===
+        '0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a' && fundFailure) {
+      if (request.params.length === 4 && fundFailure === 'interrupted') throw new Error('Interrupted fund pagination');
+      const response = await originalFetch(target, options);
+      const body = await response.json();
+      if (request.params.length === 3) fundPage = structuredClone(body.result);
+      else if (fundFailure === 'repeated') body.result = fundPage;
+      else if (fundFailure === 'malformed') body.result.objects = null;
+      else if (fundFailure === 'inconsistent') {
+        const ordinary = body.result.objects.find(item => !item.output.type && item.output_data === '0x');
+        if (ordinary) ordinary.output.capacity = '0x1';
+        else body.result.objects[0].output_data = 'invalid';
+      }
+      return Response.json(body);
     }
     if (String(target) === url && request?.method === 'send_transaction') {
       broadcasts++;
@@ -107,7 +130,41 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
     }
     throw new Error('Isolated indexer failed to reach the canonical tip');
   };
-  await commitOwner('genesis');
+  const genesisRequest = { ...terms, id: crypto.randomUUID(), draftId: crypto.randomUUID(), publicKey: owner.publicKey, operation: 'genesis' };
+  const creation = pipeline.actorCreationScope(owner.publicKey);
+  const genesisReview = await pipeline.prepareBrowserOwner(creation, genesisRequest);
+  await pipeline.validateBeforeSigning(creation, genesisReview);
+  const genesisSigned = await owner.signOnlyTransaction(c.Transaction.fromBytes(genesisReview.transaction));
+  await pipeline.persistBrowserSignature(creation, genesisReview.id, genesisSigned.toHex());
+  const genesisConsent = { hash: genesisSigned.hash(), publicKey: owner.publicKey, verifySigner: async () => alice.publicKey };
+  const switched = await pipeline.submitBrowserPayment(creation, genesisReview.id, genesisSigned.toHex(), genesisConsent);
+  assert.match(switched.error, /account changed/i);
+  assert.equal(broadcasts, 0);
+  genesisConsent.verifySigner = async () => owner.publicKey;
+  dropResponse = true;
+  const creationLost = await pipeline.submitBrowserPayment(creation, genesisReview.id, genesisSigned.toHex(), genesisConsent);
+  dropResponse = false;
+  assert.equal(creationLost.state, 'uncertain', JSON.stringify(creationLost));
+  const reloadedCreation = await import(moduleUrl + '#creation-reload');
+  assert.equal(reloadedCreation.readPendingCreation(alice.publicKey), undefined);
+  assert.equal(reloadedCreation.readPendingCreation(owner.publicKey).hash, genesisSigned.hash());
+  assert.deepEqual((await reloadedCreation.reconcileBrowser(creation, alice.publicKey)).outcomes, []);
+  const modernJournalKey = [...journal.keys()].find(key => key.endsWith(':' + creation));
+  const legacyJournalKey = modernJournalKey.slice(0, -owner.publicKey.length - 1);
+  journal.set(legacyJournalKey, journal.get(modernJournalKey));
+  journal.delete(modernJournalKey);
+  assert.deepEqual((await reloadedCreation.reconcileBrowser('creation', alice.publicKey)).outcomes, []);
+  for (let attempt = 0; attempt < 15; attempt++) await rpc('generate_block');
+  await waitForIndexer();
+  const creationRecovered = await reloadedCreation.reconcileBrowser('creation', owner.publicKey);
+  assert.equal(creationRecovered.outcomes[0].state, 'committed');
+  assert.equal(creationRecovered.outcomes[0].txHash, genesisSigned.hash());
+  assert.equal(reloadedCreation.readPendingCreation(owner.publicKey).ownerRequest.draftId, genesisRequest.draftId);
+  assert.equal(broadcasts, 1);
+  policyPoint = { txHash: genesisSigned.hash(), index: 0 };
+  ownerPoint = { txHash: genesisSigned.hash(), index: 1 };
+  results.push('genesis');
+  console.log('Pipeline PASS creation lost response, reload, account switch, legacy recovery and one broadcast');
   await commitOwner('deposit', { amount: 250n * CKB });
   await waitForIndexer();
   const pocket = (await live(policyPoint)).cell.output.type;
@@ -135,6 +192,13 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
   const withUnsupported = await pipeline.browserState(scope, owner.publicKey);
   assert.equal(withUnsupported.unsupportedFunds.length, 2);
   assert.equal(BigInt(withUnsupported.fundShannons), 250n * CKB);
+  for (const fault of ['interrupted', 'repeated', 'malformed', 'inconsistent']) {
+    fundFailure = fault;
+    await assert.rejects(pipeline.browserState(scope, owner.publicKey));
+  }
+  fundFailure = undefined;
+  assert.equal((await pipeline.browserState(scope, owner.publicKey)).unsupportedFunds.length, 2);
+  console.log('Pipeline PASS fund pagination, mixed cells, duplicate pages, interrupted and malformed data');
   const ownerRequest = { id: crypto.randomUUID(), publicKey: owner.publicKey, operation: 'deposit', amount: '250' };
   const prepared = await pipeline.prepareBrowserOwner(scope, ownerRequest);
   await pipeline.validateBeforeSigning(scope, prepared);
@@ -184,6 +248,12 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
   await commitPayment(1, await payment(1));
   assert.deepEqual(await counters(), [122n, 61n, 61n].map(value => value * CKB));
   await commitOwner('admin', { admin: { shared: 50n * CKB, alice: 20n * CKB, ben: 20n * CKB, mask: 0 } });
+  const wrongOwner = (await ownerDraft('revoke', { mask: 1 })).transaction;
+  const delegateInput = await live(actorPoints[0]);
+  wrongOwner.inputs[1] = c.CellInput.from({ previousOutput: actorPoints[0], since: 0 });
+  wrongOwner.outputs[1].capacity = BigInt(delegateInput.cell.output.capacity) - fee;
+  await assert.rejects(rpc('dry_run_transaction', [raw(await alice.signOnlyTransaction(wrongOwner))]), /Inputs\[0\]\.Type.*error code 15/);
+  console.log('VM PASS independently signed wrong-owner revoke rejected by QCN4 type script');
   const outdated = await payment(0);
   await commitOwner('revoke', { mask: 1 });
   await assert.rejects(rpc('dry_run_transaction', [raw(outdated)]));

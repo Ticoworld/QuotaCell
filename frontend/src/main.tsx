@@ -24,7 +24,7 @@ import { clearPaymentIntent, paymentRequestFromIntent, readSavedPaymentIntent, t
 
 type ActorRole = 'owner' | 'alice' | 'ben' | 'unrecognized';
 type SignedPending = { transaction: string; hash: string };
-type TransactionNotice = { state: string; hash?: string; detail?: string; phase?: string; technicalError?: string; operation?: string; draftIndexKey?: string; draftId?: string };
+type TransactionNotice = { actor?: string; state: string; hash?: string; detail?: string; phase?: string; technicalError?: string; operation?: string; draftIndexKey?: string; draftId?: string };
 type Participant = { publicKey: string; fallback: string; role: 'owner' | 'alice' | 'ben' };
 const PENDING_TRANSACTION_KEY = 'quotacell.pending-pudge-transaction';
 
@@ -103,7 +103,9 @@ function App() {
   const [prepared, setPrepared] = useState<PreparedTransaction | null>(null);
   const [working, setWorking] = useState(false);
   const [operationError, setOperationError] = useState('');
-  const [transactionNotice, setTransactionNotice] = useState<TransactionNotice | null>(() => restorePendingTransaction());
+  const [rawTransactionNotice, setTransactionNotice] = useState<TransactionNotice | null>(() => restorePendingTransaction());
+  const transactionNotice = browserMode && rawTransactionNotice?.operation === 'genesis' &&
+    (!identity || rawTransactionNotice.actor !== identity.publicKey.toLowerCase()) ? null : rawTransactionNotice;
   const [pendingSigned, setPendingSigned] = useState<SignedPending | null>(null);
   const [pendingPeople, setPendingPeople] = useState<People | null>(null);
   const [showCreation, setShowCreation] = useState(false);
@@ -596,7 +598,7 @@ function App() {
     }
     const draftReference = intent?.operation === 'genesis' && activeDraftId && draftIndexKey ? { draftIndexKey, draftId: activeDraftId } : {};
     if (pudge && hash) {
-      const notice: TransactionNotice = { state: 'pending', hash, detail: t('submitting'), operation: intent?.operation, ...draftReference };
+      const notice: TransactionNotice = { state: 'pending', hash, detail: t('submitting'), operation: intent?.operation, ...draftReference, actor: reviewed.publicKey.toLowerCase() };
       try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
       setTransactionNotice(notice);
       if (!browserMode) toast.loading(t('submitting'), { id: 'quotacell-transaction-submit' });
@@ -625,7 +627,7 @@ function App() {
         for (let attempt = 0; attempt < 2; attempt++) {
           if (attempt) await new Promise<void>((resolve) => window.setTimeout(resolve, 800 * attempt));
           try {
-            const checked = await resolvePudgeTransaction(resultHash);
+            const checked = await resolvePudgeTransaction(resultHash, reviewed.publicKey);
             if (checked.status !== 'uncertain' && checked.status !== 'unknown') {
               checkedOutcome = checked;
               break;
@@ -641,7 +643,7 @@ function App() {
         : result.state === 'committed' ? t('transactionConfirmed')
           : ['pending', 'proposed', 'submitted'].includes(result.state) ? t('transactionSubmitted')
             : result.state === 'rejected' ? t('transactionRejected') : t('submitUnknown');
-      const notice: TransactionNotice = { state: notSent ? 'not-sent' : preBroadcastFailure ? 'error' : result.state, hash: notSent ? undefined : resultHash, phase: result.phase, detail, technicalError: result.error || result.reason, operation: intent?.operation, ...draftReference };
+      const notice: TransactionNotice = { state: notSent ? 'not-sent' : preBroadcastFailure ? 'error' : result.state, hash: notSent ? undefined : resultHash, phase: result.phase, detail, technicalError: result.error || result.reason, operation: intent?.operation, ...draftReference, actor: reviewed.publicKey.toLowerCase() };
       if (notice.state === 'committed' && !removeConfirmedGenesisDraft(notice)) toast.warning(t('draftCleanupError'));
       setTransactionNotice(notice);
       if (notSent) { try { sessionStorage.removeItem(PENDING_TRANSACTION_KEY); } catch { /* Session storage is optional. */ } }
@@ -687,7 +689,7 @@ function App() {
         const detail = resolved.status === 'committed' ? t('transactionConfirmed')
           : ['pending', 'proposed'].includes(resolved.status) ? t('transactionSubmitted')
             : t('transactionRejected');
-        const notice: TransactionNotice = { state: resolved.status, hash, detail, technicalError: resolved.reason, operation: intent?.operation, ...draftReference };
+        const notice: TransactionNotice = { state: resolved.status, hash, detail, technicalError: resolved.reason, operation: intent?.operation, ...draftReference, actor: reviewed.publicKey.toLowerCase() };
         if (notice.state === 'committed' && !removeConfirmedGenesisDraft(notice)) toast.warning(t('draftCleanupError'));
         setTransactionNotice(notice);
         try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
@@ -698,7 +700,7 @@ function App() {
         await refresh(true);
         return;
       }
-      const notice: TransactionNotice = { state: 'uncertain', hash, phase: 'submit', detail: t('submitUnknown'), technicalError: message, operation: intent?.operation, ...draftReference };
+      const notice: TransactionNotice = { state: 'uncertain', hash, phase: 'submit', detail: t('submitUnknown'), technicalError: message, operation: intent?.operation, ...draftReference, actor: reviewed.publicKey.toLowerCase() };
       setTransactionNotice(notice);
       if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
       if (!browserMode) toast.warning(t('submitUnknown'), { id: 'quotacell-transaction-submit' });
@@ -719,14 +721,20 @@ function App() {
       }
     }
     const stored = identity && readBrowserIntent(state.pocket || creationScope, identity.publicKey.toLowerCase());
+    if (prepared?.journalScope && isCreationScope(prepared.journalScope) && prepared.publicKey !== identity?.publicKey.toLowerCase()) {
+      setPrepared(null);
+      setPendingSigned(null);
+      setIntent(null);
+      setShowCreation(false);
+    }
     if (stored && stored.signed) {
       setIntent({ operation: stored.operation || 'pay', role: stored.ownerRequest?.role || stored.payment.role });
       setPrepared(stored.prepared);
       setPendingSigned({ transaction: stored.signed, hash: stored.hash });
     }
-    const pending = state.history?.find(item => item.state === 'uncertain');
-    if (pending) setTransactionNotice(current => current?.hash === pending.tx_hash ? current : {
-      state: 'uncertain', hash: pending.tx_hash, detail: t('statusUncertain'), operation: pending.operation,
+    const pending = state.history?.find(item => item.state === 'uncertain' && (item.operation !== 'genesis' || item.actor.toLowerCase() === identity?.publicKey.toLowerCase()));
+    if (pending) setTransactionNotice(current => current?.hash === pending.tx_hash && current.actor === pending.actor.toLowerCase() ? current : {
+      actor: pending.actor.toLowerCase(), state: 'uncertain', hash: pending.tx_hash, detail: t('statusUncertain'), operation: pending.operation,
       ...(creation && creation.hash === pending.tx_hash && creation.ownerRequest?.draftId ? { draftId: creation.ownerRequest.draftId, draftIndexKey } : {}),
     });
   }, [identity?.publicKey, state?.pocket, state?.unresolved, draftIndexKey]);
@@ -773,7 +781,7 @@ function App() {
   const runReconcile = async () => {
     setReconcileBusy(true);
     try {
-      const result = await reconcile();
+      const result = await reconcile(identity?.publicKey);
       const unresolved = result.outcomes.find((outcome) => outcome.state === 'uncertain' || outcome.status === 'unknown');
       const localOutcome = transactionNotice?.hash ? result.outcomes.find((outcome) => outcome.txHash.toLowerCase() === transactionNotice.hash?.toLowerCase()) : undefined;
       const remainsUnresolved = Boolean(unresolved || (transactionNotice?.hash && !localOutcome) || localOutcome?.state === 'uncertain' || localOutcome?.status === 'unknown');
@@ -796,7 +804,7 @@ function App() {
     if (!transactionNotice?.hash) return;
     setNoticeCheckBusy(true);
     try {
-      const result = await resolvePudgeTransaction(transactionNotice.hash);
+      const result = await resolvePudgeTransaction(transactionNotice.hash, identity?.publicKey);
       const status = result.status || 'unknown';
       if (status === 'not-sent') {
         const notice: TransactionNotice = { state: 'not-sent', phase: 'signing-request', detail: t('transactionNotSent'), operation: transactionNotice.operation };
@@ -814,21 +822,26 @@ function App() {
               : status === 'uncertain' ? t('statusCouldNotConfirm')
                 : t('txStillUnknown');
       const preBroadcastFailure = transactionNotice.phase && ['network-check', 'pocket-check', 'input-fee-check', 'dry-run', 'pool-admission'].includes(transactionNotice.phase);
-      const notice: TransactionNotice = { state: status === 'unknown' && preBroadcastFailure ? 'error' : status, hash: transactionNotice.hash, phase: transactionNotice.phase, detail: status === 'unknown' && preBroadcastFailure ? t('transactionNotSent') : detail, technicalError: result.reason, operation: transactionNotice.operation, draftIndexKey: transactionNotice.draftIndexKey, draftId: transactionNotice.draftId };
+      const notice: TransactionNotice = { state: status === 'unknown' && preBroadcastFailure ? 'error' : status, hash: transactionNotice.hash, phase: transactionNotice.phase, detail: status === 'unknown' && preBroadcastFailure ? t('transactionNotSent') : detail, technicalError: result.reason, operation: transactionNotice.operation, draftIndexKey: transactionNotice.draftIndexKey, draftId: transactionNotice.draftId, actor: transactionNotice.actor };
       if (notice.state === 'committed' && !removeConfirmedGenesisDraft(notice)) toast.warning(t('draftCleanupError'));
       setTransactionNotice(notice);
       if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
-      if (status === 'committed') toast.success(t('transactionConfirmed'));
-      else if (status === 'pending' || status === 'proposed') toast.info(t('transactionSubmitted'));
-      else if (status === 'rejected') toast.error(t('transactionRejected'));
-      else toast.warning(t('submitUnknown'));
+      if (!browserMode && status === 'committed') toast.success(t('transactionConfirmed'));
+      else if (!browserMode && (status === 'pending' || status === 'proposed')) toast.info(t('transactionSubmitted'));
+      else if (!browserMode && status === 'rejected') toast.error(t('transactionRejected'));
+      else if (!browserMode) toast.warning(t('submitUnknown'));
+      if (status === 'committed' && notice.operation === 'genesis' && result.pocket) {
+        openSelectedPocket(result.pocket);
+        setShowCreation(false);
+        setActiveDraftId('');
+      }
       if (status === 'committed') await refresh(true);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      const notice: TransactionNotice = { state: 'uncertain', hash: transactionNotice.hash, phase: transactionNotice.phase, detail: t('statusCouldNotConfirm'), technicalError: message };
+      const notice: TransactionNotice = { ...transactionNotice, state: 'uncertain', hash: transactionNotice.hash, phase: transactionNotice.phase, detail: t('statusCouldNotConfirm'), technicalError: message };
       setTransactionNotice(notice);
       try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
-      toast.error(t('statusCouldNotConfirm'));
+      if (!browserMode) toast.error(t('statusCouldNotConfirm'));
     } finally { setNoticeCheckBusy(false); }
   };
 
@@ -907,7 +920,7 @@ function App() {
           const detail = result.status === 'committed' ? t('transactionConfirmed')
             : ['pending', 'proposed', 'submitted'].includes(result.status) ? t('transactionSubmitted')
               : t('transactionRejected');
-          const notice: TransactionNotice = { state: result.status, hash, detail, technicalError: result.reason, operation, draftIndexKey: current.draftIndexKey, draftId: current.draftId };
+          const notice: TransactionNotice = { state: result.status, hash, detail, technicalError: result.reason, operation, draftIndexKey: current.draftIndexKey, draftId: current.draftId, actor: current.actor };
           if (result.status === 'committed' && !removeConfirmedGenesisDraft(notice)) toast.warning(t('draftCleanupError'));
           setTransactionNotice((latest) => latest?.hash === hash ? notice : latest);
           try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }

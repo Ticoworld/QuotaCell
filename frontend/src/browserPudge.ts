@@ -117,32 +117,50 @@ async function plainCells(lock: c.Script, max: number) {
 
 async function discoverFunds(pocket: string) {
   const script = { code_hash: fundCode, hash_type: 'data1', args: pocket };
-  const ordinary: Point[] = [];
+  const indexed = await httpRpc<{ block_number: string; block_hash: string }>('get_indexer_tip');
+  const tip = await httpRpc<{ number: string }>('get_tip_header');
+  requireCondition(indexed && tip && BigInt(tip.number) >= BigInt(indexed.block_number) &&
+    BigInt(tip.number) - BigInt(indexed.block_number) <= 64n &&
+    await httpRpc('get_block_hash', [indexed.block_number]) === indexed.block_hash, 'Protected fund index is unavailable or stale');
+  const ordinary: { out_point: Point; output: unknown; output_data: string }[] = [];
+  const cursors = new Set<string>();
   const unsupportedFunds: NonNullable<PocketState['unsupportedFunds']> = [];
   let cursor: string | undefined;
   const seen = new Set<string>();
   for (let page = 0; page < 100; page++) {
-    const query = { script, script_type: 'lock', script_search_mode: 'exact', with_data: true };
+    const query = { script, script_type: 'lock', script_search_mode: 'exact', with_data: true, filter: { block_range: ['0x0', hex(BigInt(indexed.block_number) + 1n)] } };
     const result = await httpRpc<{ objects: { out_point: Point; output: { type: unknown; capacity: string }; output_data: string }[]; last_cursor: string }>(
       'get_cells', cursor ? [query, 'asc', '0x64', cursor] : [query, 'asc', '0x64'],
     );
-    requireCondition(Array.isArray(result?.objects), 'Invalid protected fund page');
+    requireCondition(Array.isArray(result?.objects) && result.objects.length <= 100 && typeof result.last_cursor === 'string', 'Invalid protected fund page');
     for (const item of result.objects) {
+      requireCondition(item?.out_point && /^0x[0-9a-f]{64}$/i.test(item.out_point.tx_hash) &&
+        /^0x[0-9a-f]+$/i.test(item.out_point.index) && /^0x[0-9a-f]+$/i.test(item.output?.capacity) &&
+        /^0x(?:[0-9a-f]{2})*$/i.test(item.output_data), 'Invalid protected fund cell');
       const identity = item.out_point.tx_hash + ':' + BigInt(item.out_point.index);
       requireCondition(!seen.has(identity), 'Duplicate protected fund cell');
       seen.add(identity);
       if (item.output.type || item.output_data !== '0x') {
         unsupportedFunds.push({ outPoint: item.out_point, capacity: BigInt(item.output.capacity).toString(), hasType: Boolean(item.output.type), dataBytes: (item.output_data.length - 2) / 2 });
-      } else ordinary.push(item.out_point);
+      } else ordinary.push(item);
     }
     if (result.objects.length < 100) {
-      const funds = await Promise.all(ordinary.map(live));
+      const funds = await Promise.all(ordinary.map(async item => {
+        const cell = await live(item.out_point);
+        requireCondition(JSON.stringify(rpcFormat.cellOutputFrom(rpcFormat.cellOutputTo(item.output as Parameters<typeof rpcFormat.cellOutputTo>[0]))) ===
+          JSON.stringify(rpcFormat.cellOutputFrom(rpcFormat.cellOutputTo(cell.cell.output as Parameters<typeof rpcFormat.cellOutputTo>[0]))), 'Indexed protected fund output changed');
+        return cell;
+      }));
+      const finalTip = await httpRpc<{ block_number: string; block_hash: string }>('get_indexer_tip');
+      requireCondition(finalTip?.block_hash === indexed.block_hash && await httpRpc('get_block_hash', [indexed.block_number]) === indexed.block_hash,
+        'Protected fund index changed. Refresh to retry');
       requireCondition(funds.every(cell => !cell.cell.output.type && cell.cell.data.content === '0x' &&
         cell.cell.output.lock.code_hash === fundCode && cell.cell.output.lock.hash_type === 'data1' &&
         cell.cell.output.lock.args === pocket), 'Protected fund identity changed');
       return { funds, unsupportedFunds };
     }
-    requireCondition(result.last_cursor && result.last_cursor !== cursor, 'Protected fund cursor did not advance');
+    requireCondition(result.last_cursor && !cursors.has(result.last_cursor), 'Protected fund cursor did not advance');
+    cursors.add(result.last_cursor);
     cursor = result.last_cursor;
   }
   throw new Error('Protected fund discovery exceeded its page limit');
@@ -426,12 +444,13 @@ async function hasCanonicalConflict(entry: Entry) {
   return false;
 }
 
-export function reconcileBrowser(pocket: string) {
+export function reconcileBrowser(pocket: string, actor?: string) {
   return locked(pocket, async () => {
     const journal = entries(pocket);
-    const uncertain = journal.filter(entry => entry.state === 'uncertain');
+    const relevant = isCreationScope(pocket) ? journal.filter(entry => actor && entry.payment.publicKey === actor.toLowerCase()) : journal;
+    const uncertain = relevant.filter(entry => entry.state === 'uncertain');
     if (uncertain.length) requireCondition(await httpRpc('get_block_hash', ['0x0']) === deployment.genesis, 'Wrong Pudge genesis');
-    const outcomes: { txHash: string; state: string; pocket: string; operation: string; status?: string; reason?: string }[] = journal.filter(entry => entry.state === 'committed' || entry.state === 'conflict').map(entry => ({ txHash: entry.hash, state: entry.state === 'committed' ? 'committed' : 'rejected', operation: entry.operation || 'pay', pocket: entry.targetPocket || pocket }));
+    const outcomes: { txHash: string; state: string; pocket: string; operation: string; status?: string; reason?: string }[] = relevant.filter(entry => entry.state === 'committed' || entry.state === 'conflict').map(entry => ({ txHash: entry.hash, state: entry.state === 'committed' ? 'committed' : 'rejected', operation: entry.operation || 'pay', pocket: entry.targetPocket || pocket }));
     for (const entry of uncertain) {
       const response = await httpRpc<any>('get_transaction', [entry.hash]);
       let status = response?.tx_status?.status;

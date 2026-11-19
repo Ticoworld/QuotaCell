@@ -142,7 +142,12 @@ export async function cancelPreparation(body: unknown, endpoint: 'payment' | 'ow
 export const getPreparationStatus = (body: unknown, endpoint: 'payment' | 'owner') => browserMode ? Promise.resolve({ state: 'not-found' } as PreparationStatus) : readPreparationStatus(preparationStatusBody(body, endpoint));
 export const submitTransaction = (id: string, transaction: string, consent?: BroadcastConsent, scope?: string) => browserMode ? submitBrowserPayment(scope || requireBrowserPocket(), id, transaction, consent) : request<TransactionResult>('/api/external/submit', { id, transaction }, 15_000);
 export const retryJournaledTransaction = (approvedHash: string, publicKey: string) => request<TransactionResult>('/api/external/retry', { approvedHash, publicKey });
-export const reconcile = () => browserMode ? reconcileBrowser(selectedBrowserPocket() || creationScope) : request<{ outcomes: { txHash: string; state?: string; status?: string; reason?: string; operation?: string; pocket?: string }[] }>('/api/reconcile', {});
+export const reconcile = (actor?: string) => browserMode ? (async () => {
+  const pocket = selectedBrowserPocket();
+  const scopes = [...(pocket ? [pocket] : []), ...(actor ? [actorCreationScope(actor), creationScope] : [])];
+  const results = await Promise.all(scopes.map(scope => reconcileBrowser(scope, actor)));
+  return { outcomes: results.flatMap(result => result.outcomes) };
+})() : request<{ outcomes: { txHash: string; state?: string; status?: string; reason?: string; operation?: string; pocket?: string }[] }>('/api/reconcile', {});
 
 async function ckbRpc<T>(method: string, params: unknown[]): Promise<T> {
   if (browserMode) return httpRpc<T>(method, params);
@@ -176,9 +181,7 @@ export type PudgeTransactionResolution = {
 };
 
 export async function resolvePudgeTransaction(hash: string, actor?: string): Promise<PudgeTransactionResolution> {
-  const journal = browserMode && actor && !selectedBrowserPocket()
-    ? { outcomes: (await Promise.all([reconcileBrowser(actorCreationScope(actor)), reconcileBrowser(creationScope)])).flatMap(result => result.outcomes) }
-    : await reconcile();
+  const journal = await reconcile(actor);
   const outcome = journal.outcomes.find((item) => item.txHash.toLowerCase() === hash.toLowerCase());
   if (outcome) {
     const state = outcome.state || outcome.status || 'uncertain';
