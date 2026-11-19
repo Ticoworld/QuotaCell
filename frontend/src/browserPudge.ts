@@ -1,5 +1,5 @@
-import { loadPocketHistory } from './pocketHistory';
 /// <reference types="vite/client" />
+import { loadPocketHistory } from './pocketHistory';
 import * as c from '@ckb-ccc/core';
 import { JsonRpcTransformers as rpcFormat } from '@ckb-ccc/core/advanced';
 import deployment from '../../evidence/wo15/pudge-deployment.json';
