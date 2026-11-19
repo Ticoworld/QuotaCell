@@ -36,7 +36,33 @@ function validPublicKey(value: Uint8Array) {
 }
 function argsFor(publicKey: string) { return c.hashCkb(c.bytesFrom(publicKey)).slice(0, 42); }
 
-export async function httpRpc<T>(method: string, params: unknown[] = []): Promise<T> {
+const policyScripts = new Map<string, Script>();
+const rpcReads = new Map<string, Promise<unknown>>();
+let rpcActive = 0;
+const rpcQueue: (() => void)[] = [];
+
+export function httpRpc<T>(method: string, params: unknown[] = []): Promise<T> {
+  const read = method.startsWith('get_');
+  const key = JSON.stringify([method, params]);
+  const current = read && rpcReads.get(key);
+  if (current) return current as Promise<T>;
+  const task = (async () => {
+    if (rpcActive >= 8) await new Promise<void>(resolve => rpcQueue.push(resolve));
+    else rpcActive++;
+    const start = performance.now();
+    try { return await requestRpc<T>(method, params); }
+    finally {
+      performance.measure('quotacell.rpc.' + method, { start, end: performance.now() });
+      const next = rpcQueue.shift();
+      if (next) next();
+      else rpcActive--;
+    }
+  })().finally(() => { if (read) rpcReads.delete(key); });
+  if (read) rpcReads.set(key, task);
+  return task;
+}
+
+async function requestRpc<T>(method: string, params: unknown[] = []): Promise<T> {
   const response = await fetch(RPC_URL, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method, params }),
@@ -115,7 +141,8 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
   if (indexerHeight > nodeHeight || nodeHeight - indexerHeight > MAX_INDEXER_LAG) throw new Error('Pudge indexer is too far behind the node.');
   const canonicalTips = await Promise.all([rpc<string>('get_block_hash', [indexed.block_number]), rpc<string>('get_block_hash', [tip.number])]);
   if (canonicalTips[0].toLowerCase() !== indexed.block_hash.toLowerCase() || canonicalTips[1].toLowerCase() !== tip.hash.toLowerCase()) throw new Error('Node or indexer tip is not canonical.');
-  const key = { script: { code_hash: POLICY_CODE, hash_type: 'data2', args: '0x' }, script_type: 'type', script_search_mode: 'prefix', with_data: true };
+  const knownScript = rpc === httpRpc && targetPocket ? policyScripts.get(targetPocket) : undefined;
+  const key = { script: knownScript || { code_hash: POLICY_CODE, hash_type: 'data2', args: '0x' }, script_type: 'type', script_search_mode: knownScript ? 'exact' : 'prefix', with_data: true };
   const candidates: Array<Discovery & { cell: any }> = [];
   const seen = new Set<string>();
   let cursor: string | undefined;
@@ -158,6 +185,12 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
   for (const candidate of candidates) {
     const live = await rpc<any>('get_live_cell', [candidate.outPoint, true]);
     if (live?.status !== 'live' || live.cell.data?.content !== candidate.cell.data.content || !equal(normalizeOutput(live.cell.output), normalizeOutput(candidate.cell.output))) throw new Error('Pocket changed during discovery.');
+  }
+  if (rpc === httpRpc) {
+    for (const candidate of candidates) {
+      if (policyScripts.size >= 128) policyScripts.delete(policyScripts.keys().next().value!);
+      policyScripts.set(candidate.pocket, candidate.policyScript);
+    }
   }
   return candidates.map(({ cell: _cell, ...candidate }) => candidate);
 }

@@ -35,20 +35,45 @@ async function canonical(point: Point) {
   const tx = await httpRpc<any>('get_transaction', [point.tx_hash]);
   const header = tx?.tx_status?.status === 'committed' && await httpRpc<any>('get_header', [tx.tx_status.block_hash]);
   requireCondition(header && header.hash === tx.tx_status.block_hash && await httpRpc('get_block_hash', [header.number]) === header.hash, 'Input transaction is not canonical.');
-  return tx.transaction;
+  return { transaction: tx.transaction, anchor: { height: String(header.number), hash: String(header.hash) } };
 }
 
 async function live(point: Point) {
-  const [result, tx] = await Promise.all([httpRpc<any>('get_live_cell', [point, true]), canonical(point)]);
+  const [result, { transaction: tx, anchor }] = await Promise.all([httpRpc<any>('get_live_cell', [point, true]), canonical(point)]);
   const index = Number(BigInt(point.index));
   requireCondition(result?.status === 'live', 'Input is stale');
   const output = rpcFormat.cellOutputTo(result.cell.output);
   requireCondition(JSON.stringify(rpcFormat.cellOutputFrom(output)) === JSON.stringify(rpcFormat.cellOutputFrom(rpcFormat.cellOutputTo(tx.outputs[index]))) &&
     result.cell.data.content === tx.outputs_data[index], 'Canonical input mismatch');
-  return { ...result, outPoint: { txHash: point.tx_hash, index } } as Parameters<typeof buildPayment>[0]['policy'];
+  return { ...result, anchor, outPoint: { txHash: point.tx_hash, index } } as Parameters<typeof buildPayment>[0]['policy'] & { anchor: Omit<Dependency, 'point'> };
 }
 
+type Dependency = { point: Point; height: string; hash: string };
+let verifiedDependencies: Promise<Dependency[]> | undefined;
+
 async function verifyDependencies() {
+  requireCondition(await httpRpc('get_block_hash', ['0x0']) === deployment.genesis, 'Wrong Pudge genesis');
+  const existing = verifiedDependencies;
+  if (!existing) {
+    verifiedDependencies = loadDependencies().catch(error => { verifiedDependencies = undefined; throw error; });
+    await verifiedDependencies;
+    return;
+  }
+  const dependencies = await existing;
+  try {
+    await Promise.all(dependencies.map(async ({ point, height, hash }) => {
+      const [cell, canonicalHash] = await Promise.all([
+        httpRpc<{ status: string }>('get_live_cell', [point, false]), httpRpc('get_block_hash', [height]),
+      ]);
+      requireCondition(cell?.status === 'live' && canonicalHash === hash, 'Contract dependency changed');
+    }));
+  } catch (error) {
+    verifiedDependencies = undefined;
+    throw error;
+  }
+}
+
+async function loadDependencies() {
   const points = deployment.allDeps.map(({ outPoint }) => ({ tx_hash: outPoint.txHash, index: hex(outPoint.index) }));
   const [group, a, f, q] = await Promise.all(points.map(live));
   for (const [cell, hash] of [[a, policyLock], [f, fundCode], [q, deployment.verification.qDataHash]] as const) {
@@ -57,12 +82,14 @@ async function verifyDependencies() {
   const members = c.bytesFrom(group.cell.data.content);
   const view = new DataView(members.buffer, members.byteOffset, members.byteLength);
   requireCondition(members.length === 76 && view.getUint32(0, true) === 2, 'Invalid K dependency group');
-  const [data, code] = await Promise.all([4, 40].map(offset => live({
+  const memberPoints = [4, 40].map(offset => ({
     tx_hash: c.hexFrom(members.subarray(offset, offset + 32)), index: hex(view.getUint32(offset + 32, true)),
-  })));
+  }));
+  const [data, code] = await Promise.all(memberPoints.map(live));
   requireCondition(c.hashCkb(data.cell.data.content) === '0x9799bee251b975b82c45a02154ce28cec89c5853ecc14d12b7b8cccfc19e0af4' &&
     c.hashCkb(code.cell.data.content) === '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649' &&
     code.cell.output.type && rpcFormat.scriptTo(code.cell.output.type as Parameters<typeof rpcFormat.scriptTo>[0]).hash() === standard, 'Wrong Pudge signer dependencies');
+  return [group, a, f, q, data, code].map((cell, index) => ({ ...cell.anchor, point: [...points, ...memberPoints][index] }));
 }
 
 async function plainCells(lock: c.Script, max: number) {
@@ -75,8 +102,10 @@ async function plainCells(lock: c.Script, max: number) {
 }
 
 async function snapshot(pocket: string) {
-  const policy = await discoverPublicPocket(pocket);
-  const funds = await plainCells(c.Script.from({ codeHash: fundCode, hashType: 'data1', args: pocket }), 64);
+  const [policy, funds] = await Promise.all([
+    discoverPublicPocket(pocket),
+    plainCells(c.Script.from({ codeHash: fundCode, hashType: 'data1', args: pocket }), 64),
+  ]);
   return { policy, funds: await Promise.all(funds.map(item => live(item.out_point))) };
 }
 
@@ -131,8 +160,14 @@ async function freshInputs(transaction: c.Transaction) {
   })));
 }
 
+const preparations = new Map<string, Promise<PreparedTransaction>>();
+
 export function prepareBrowserPayment(pocket: string, payment: Payment) {
-  return locked(pocket, async () => {
+  const key = JSON.stringify([pocket, payment.id, payment.publicKey, payment.role, payment.amount, payment.recipient]);
+  const equivalent = preparations.get(key);
+  if (equivalent) return equivalent;
+  const start = performance.now();
+  const task = locked(pocket, async () => {
     requireCondition(/^[0-9a-f-]{36}$/i.test(payment.id) && ['alice', 'ben'].includes(payment.role), 'Invalid payment request');
     const journal = entries(pocket);
     requireCondition(!journal.some(entry => ['signed', 'uncertain'].includes(entry.state)), 'An earlier outcome is uncertain');
@@ -145,33 +180,48 @@ export function prepareBrowserPayment(pocket: string, payment: Payment) {
       await freshInputs(c.Transaction.fromBytes(existing.prepared.transaction));
       return existing.prepared;
     }
-    const { policy, funds } = await snapshot(pocket);
+    const actorLock = c.Script.from({ codeHash: standard, hashType: 'type', args: c.hashCkb(payment.publicKey).slice(0, 42) });
+    const discoveryStart = performance.now();
+    const [{ policy, funds }, available, statistics] = await Promise.all([
+      snapshot(pocket), plainCells(actorLock, 64), httpRpc<{ median: string }>('get_fee_rate_statistics', ['0x65']), verifyDependencies(),
+    ]);
+    performance.measure('quotacell.prepare.discovery', { start: discoveryStart, end: performance.now() });
+    const inputStart = performance.now();
+    const policyCell = await live(policy.outPoint);
     const selected = policy.summary?.delegates.find(item => item.role === payment.role);
     requireCondition(selected?.enabled && selected.publicKey === payment.publicKey, 'Connected account is not the selected delegate');
     requireCondition(selected.recipient === payment.recipient, 'Recipient changed');
     const amount = parseCkb(payment.amount);
     requireCondition(amount <= BigInt(selected.perPayment), 'Payment exceeds per-payment limit');
-    const actorLock = c.Script.from({ codeHash: standard, hashType: 'type', args: c.hashCkb(payment.publicKey).slice(0, 42) });
-    const [policyCell, available, statistics] = await Promise.all([
-      live(policy.outPoint), plainCells(actorLock, 64), httpRpc<{ median: string }>('get_fee_rate_statistics', ['0x65']), verifyDependencies(),
-    ]);
     const feeRate = BigInt(statistics.median);
     requireCondition(feeRate > 0n, 'Fee statistics unavailable');
     const actorCells = await Promise.all(available.map(item => live(item.out_point)));
     const actor = actorCells.reduce<typeof actorCells[number] | undefined>((largest, cell) =>
       !largest || BigInt(cell.cell.output.capacity) > BigInt(largest.cell.output.capacity) ? cell : largest, undefined);
     requireCondition(actor, 'No delegate fee input');
+    performance.measure('quotacell.prepare.inputs', { start: inputStart, end: performance.now() });
     const inputs = { policy: policyCell, funds, actor, deps: deployment.allDeps as Parameters<typeof buildPayment>[0]['deps'], amount, delegate: payment.role === 'alice' ? 0 as const : 1 as const };
     const size = BigInt(buildPayment({ ...inputs, fee: 0n }).toBytes().length + 4);
     const fee = (size * feeRate + 999n) / 1000n;
     const tx = buildPayment({ ...inputs, fee });
+    const validatedInputs = [policyCell, actor, ...funds];
+    await client.cache.recordCells(validatedInputs.map(({ outPoint, cell }) => ({
+      outPoint,
+      cellOutput: rpcFormat.cellOutputTo(cell.output as Parameters<typeof rpcFormat.cellOutputTo>[0]),
+      outputData: cell.data.content,
+    })));
     const info = await tx.getSignHashInfo(actorLock, client);
     requireCondition(info?.position === 1, 'Invalid signer position');
     const prepared = { id: payment.id, transaction: tx.toHex(), publicKey: payment.publicKey, genesis: deployment.genesis, fee: fee.toString() };
     journal.push({ payment, prepared, message: info.message, hash: tx.hash(), state: 'prepared', created: new Date().toISOString() });
     save(pocket, journal);
     return prepared;
+  }).finally(() => {
+    preparations.delete(key);
+    performance.measure('quotacell.prepare', { start, end: performance.now() });
   });
+  preparations.set(key, task);
+  return task;
 }
 
 function verifiedSignature(entry: Entry, bytes: string) {
@@ -189,13 +239,25 @@ function verifiedSignature(entry: Entry, bytes: string) {
   return signed;
 }
 
-export function validateBeforeSigning(pocket: string, id: string) {
+async function validatePaymentInputs(pocket: string, tx: c.Transaction, entry: Entry) {
+  const [policy, inputs] = await Promise.all([discoverPublicPocket(pocket), freshInputs(tx), verifyDependencies()]);
+  const grant = policy.summary?.delegates.find(delegate => delegate.role === entry.payment.role);
+  requireCondition(tx.inputs[0].previousOutput.eq(c.OutPoint.from({ txHash: policy.outPoint.tx_hash, index: policy.outPoint.index })), 'Input is stale');
+  requireCondition(grant?.enabled && grant.publicKey === entry.payment.publicKey && grant.recipient === entry.payment.recipient, 'Pocket permissions changed');
+  const fee = inputs.reduce((sum, cell) => sum + BigInt(cell.cell.output.capacity), 0n) - tx.outputs.reduce((sum, output) => sum + output.capacity, 0n);
+  requireCondition(fee > 0n && fee <= 1000000n && fee === BigInt(entry.prepared.fee), 'Transaction fee is outside policy bounds');
+}
+
+export type BroadcastConsent = { hash: string; publicKey: string; verifySigner: () => Promise<string> };
+
+export function validateBeforeSigning(pocket: string, request: PreparedTransaction) {
   return locked(pocket, async () => {
     const journal = entries(pocket);
-    const entry = journal.find(item => item.payment.id === id);
+    const entry = journal.find(item => item.payment.id === request.id);
     requireCondition(entry?.state === 'prepared' && !journal.some(item => ['signed', 'uncertain'].includes(item.state)), 'Signing request expired');
-    await discoverPublicPocket(pocket);
-    await Promise.all([freshInputs(c.Transaction.fromBytes(entry.prepared.transaction)), verifyDependencies()]);
+    requireCondition(request.transaction === entry.prepared.transaction && request.publicKey === entry.payment.publicKey &&
+      request.genesis === entry.prepared.genesis && request.fee === entry.prepared.fee, 'Reviewed transaction changed');
+    await validatePaymentInputs(pocket, c.Transaction.fromBytes(request.transaction), entry);
   });
 }
 
@@ -220,22 +282,20 @@ export function cancelBrowserIntent(pocket: string, id: string) {
   });
 }
 
-export function submitBrowserPayment(pocket: string, id: string, bytes: string): Promise<TransactionResult> {
+export function submitBrowserPayment(pocket: string, id: string, bytes: string, consent?: BroadcastConsent): Promise<TransactionResult> {
   return locked(pocket, async () => {
     const journal = entries(pocket);
     const entry = journal.find(item => item.payment.id === id);
     requireCondition(entry?.signed === bytes, 'Unknown or expired signing request');
     if (entry.state !== 'signed') return { txHash: entry.hash, state: entry.state };
+    requireCondition(consent?.hash === entry.hash && consent.publicKey.toLowerCase() === entry.payment.publicKey, 'Broadcast approval required');
     const signed = verifiedSignature(entry, bytes);
     const raw = rpcFormat.transactionFrom(signed);
     try {
-      const policy = await discoverPublicPocket(pocket);
-      requireCondition(signed.inputs[0].previousOutput.eq(c.OutPoint.from({txHash: policy.outPoint.tx_hash, index: policy.outPoint.index})), 'Input is stale');
-      const [inputs] = await Promise.all([freshInputs(signed), verifyDependencies()]);
-      const fee = inputs.reduce((sum, cell) => sum + BigInt(cell.cell.output.capacity), 0n) - signed.outputs.reduce((sum, output) => sum + output.capacity, 0n);
-      requireCondition(fee > 0n && fee <= 1000000n && fee === BigInt(entry.prepared.fee), 'Transaction fee is outside policy bounds');
+      await validatePaymentInputs(pocket, signed, entry);
       await httpRpc('dry_run_transaction', [raw]);
       await httpRpc('test_tx_pool_accept', [raw]);
+      requireCondition((await consent.verifySigner()).toLowerCase() === entry.payment.publicKey, 'Connected account changed');
     } catch (cause) {
       if (String(cause).includes('Input is stale')) { entry.state = 'conflict'; save(pocket, journal); }
       return { txHash: entry.hash, state: 'error', notSent: true, phase: 'input-fee-check', error: String(cause) };
@@ -269,7 +329,7 @@ export function reconcileBrowser(pocket: string) {
         const policy = await discoverPublicPocket(pocket);
         const original = c.Transaction.fromBytes(entry.prepared.transaction).inputs[0].previousOutput;
         const liveOriginal = await httpRpc<any>('get_live_cell', [rpcFormat.outPointFrom(original), false]);
-        const successor = await canonical(policy.outPoint);
+        const { transaction: successor } = await canonical(policy.outPoint);
         const consumed = successor.inputs.some((input: { previous_output: Point }) => original.eq(c.OutPoint.from({txHash: input.previous_output.tx_hash, index: input.previous_output.index})));
         if (liveOriginal?.status === 'dead' && consumed && policy.outPoint.tx_hash !== entry.hash) {
           entry.state = 'conflict';

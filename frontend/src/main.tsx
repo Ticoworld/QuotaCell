@@ -586,13 +586,13 @@ function App() {
     void getActorPockets(identity.publicKey).then((result) => setPocketChoices(result.discovery || [])).catch(() => setPocketListError(t('pocketListError'))).finally(() => setPocketListLoading(false));
   }, [identity?.publicKey, showCreation, activeDraftOwner, t]);
 
-  const submitSigned = async (transaction: string, hash?: string) => {
+  const submitSigned = async (transaction: string, hash?: string, reviewed = prepared, pocket = browserMode ? requireBrowserPocket() : undefined) => {
     if (pudgePrepareOnly) { setOperationError(t('prepareOnlyNotice')); return; }
-    if (!prepared) return;
+    if (!reviewed) return;
     if (browserMode) {
       try {
         const current = await wallet.identity();
-        if (current.publicKey.toLowerCase() !== prepared.publicKey.toLowerCase()) throw new Error(t('signerMismatch'));
+        if (current.publicKey.toLowerCase() !== reviewed.publicKey.toLowerCase() || pocket !== requireBrowserPocket()) throw new Error(t('signerMismatch'));
       } catch (cause) { setOperationError(localizedConnectionError(cause, t)); return; }
     }
     const draftReference = intent?.operation === 'genesis' && activeDraftId && draftIndexKey ? { draftIndexKey, draftId: activeDraftId } : {};
@@ -600,18 +600,23 @@ function App() {
       const notice: TransactionNotice = { state: 'pending', hash, detail: t('submitting'), operation: intent?.operation, ...draftReference };
       try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
       setTransactionNotice(notice);
-      toast.loading(t('submitting'), { id: 'quotacell-transaction-submit' });
+      if (!browserMode) toast.loading(t('submitting'), { id: 'quotacell-transaction-submit' });
     }
     setWorking(true); setOperationError('');
     try {
       let result: TransactionResult;
       for (let attempt = 0; ; attempt++) {
         try {
-          result = await submitTransaction(prepared.id, transaction);
+          result = await submitTransaction(reviewed.id, transaction, hash ? {
+            hash, publicKey: reviewed.publicKey, verifySigner: async () => {
+              if (pocket !== requireBrowserPocket()) throw new Error(t('signerMismatch'));
+              return (await wallet.identity()).publicKey;
+            },
+          } : undefined);
           break;
         } catch (cause) {
           if (!(cause instanceof ApiError) || !cause.retryable || attempt >= 1) throw cause;
-          toast.loading(t('recoveringSubmission'), { id: 'quotacell-transaction-submit' });
+          if (!browserMode) toast.loading(t('recoveringSubmission'), { id: 'quotacell-transaction-submit' });
           await new Promise<void>((resolve) => window.setTimeout(resolve, 700 * (attempt + 1)));
         }
       }
@@ -643,12 +648,14 @@ function App() {
       if (notSent) { try { sessionStorage.removeItem(PENDING_TRANSACTION_KEY); } catch { /* Session storage is optional. */ } }
       else if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
       const toastOptions = { id: 'quotacell-transaction-submit' };
+      if (!browserMode) {
       if (notSent) toast.error(detail, toastOptions);
       else if (preBroadcastFailure) toast.error(t('transactionNotSent'), toastOptions);
       else if (result.state === 'committed') toast.success(t('transactionConfirmed'), toastOptions);
       else if (['pending', 'proposed', 'submitted'].includes(result.state)) toast.info(t('transactionSubmitted'), toastOptions);
       else if (result.state === 'rejected') toast.error(t('transactionRejected'), toastOptions);
       else toast.warning(t('submitUnknown'), toastOptions);
+      }
       setPrepared(null); setIntent(null); setPendingSigned(null);
       if (intent?.operation === 'genesis' && result.state === 'committed' && result.pocket) {
         window.history.replaceState(null, '', `${window.location.pathname}?${new URLSearchParams({ pocket: result.pocket })}`);
@@ -684,9 +691,9 @@ function App() {
         if (notice.state === 'committed' && !removeConfirmedGenesisDraft(notice)) toast.warning(t('draftCleanupError'));
         setTransactionNotice(notice);
         try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
-        if (resolved.status === 'committed') toast.success(detail, { id: 'quotacell-transaction-submit' });
-        else if (resolved.status === 'rejected') toast.error(detail, { id: 'quotacell-transaction-submit' });
-        else toast.info(detail, { id: 'quotacell-transaction-submit' });
+        if (!browserMode && resolved.status === 'committed') toast.success(detail, { id: 'quotacell-transaction-submit' });
+        else if (!browserMode && resolved.status === 'rejected') toast.error(detail, { id: 'quotacell-transaction-submit' });
+        else if (!browserMode) toast.info(detail, { id: 'quotacell-transaction-submit' });
         setPrepared(null); setIntent(null); setPendingSigned(null);
         await refresh(true);
         return;
@@ -694,7 +701,7 @@ function App() {
       const notice: TransactionNotice = { state: 'uncertain', hash, phase: 'submit', detail: t('submitUnknown'), technicalError: message, operation: intent?.operation, ...draftReference };
       setTransactionNotice(notice);
       if (notice.hash) try { sessionStorage.setItem(PENDING_TRANSACTION_KEY, JSON.stringify(notice)); } catch { /* Session storage is optional. */ }
-      toast.warning(t('submitUnknown'), { id: 'quotacell-transaction-submit' });
+      if (!browserMode) toast.warning(t('submitUnknown'), { id: 'quotacell-transaction-submit' });
       setOperationError(localizedError(message, t));
       setPrepared(null); setIntent(null); setPendingSigned(null);
       await refresh(true);
@@ -721,12 +728,21 @@ function App() {
     setWorking(true); setOperationError('');
     try {
       if (!identity || request.publicKey.toLowerCase() !== identity.publicKey.toLowerCase()) throw new Error(t('signerMismatch'));
-      if (browserMode) await validateBeforeSigning(requireBrowserPocket(), request.id);
-      const signed = await wallet.sign(request.transaction, request.publicKey);
+      const pocket = browserMode ? requireBrowserPocket() : undefined;
       const { Transaction } = await import('@ckb-ccc/connector');
+      const approvedHash = Transaction.fromBytes(request.transaction).hash();
+      if (pocket) await validateBeforeSigning(pocket, request);
+      const signed = await wallet.sign(request.transaction, request.publicKey);
       const hash = Transaction.fromBytes(signed).hash();
-      if (browserMode) await persistBrowserSignature(requireBrowserPocket(), request.id, signed);
+      if (pocket) {
+        if (approvedHash !== hash) throw new Error('Wallet altered transaction');
+        await persistBrowserSignature(pocket, request.id, signed);
+      }
       if (intent?.operation === 'pay') { clearPaymentIntent(); setResumePayment(null); }
+      if (pocket) {
+        await submitSigned(signed, approvedHash, request, pocket);
+        return;
+      }
       if (pudge) {
         setPendingSigned({ transaction: signed, hash });
         setWorking(false);
