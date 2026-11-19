@@ -444,13 +444,14 @@ async function hasCanonicalConflict(entry: Entry) {
   return false;
 }
 
-export function reconcileBrowser(pocket: string, actor?: string) {
+export function reconcileBrowser(pocket: string, actor?: string, hash?: string) {
   return locked(pocket, async () => {
     const journal = entries(pocket);
     const relevant = isCreationScope(pocket) ? journal.filter(entry => actor && entry.payment.publicKey === actor.toLowerCase()) : journal;
-    const uncertain = relevant.filter(entry => entry.state === 'uncertain');
+    const matching = hash ? relevant.filter(entry => entry.hash === hash.toLowerCase()) : relevant;
+    const uncertain = matching.filter(entry => entry.state === 'uncertain');
     if (uncertain.length) requireCondition(await httpRpc('get_block_hash', ['0x0']) === deployment.genesis, 'Wrong Pudge genesis');
-    const outcomes: { txHash: string; state: string; pocket: string; operation: string; status?: string; reason?: string }[] = relevant.filter(entry => entry.state === 'committed' || entry.state === 'conflict').map(entry => ({ txHash: entry.hash, state: entry.state === 'committed' ? 'committed' : 'rejected', operation: entry.operation || 'pay', pocket: entry.targetPocket || pocket }));
+    const outcomes: { txHash: string; state: string; pocket: string; operation: string; status?: string; reason?: string }[] = matching.filter(entry => entry.state === 'committed' || entry.state === 'conflict').map(entry => ({ txHash: entry.hash, state: entry.state === 'committed' ? 'committed' : 'rejected', operation: entry.operation || 'pay', pocket: entry.targetPocket || pocket }));
     for (const entry of uncertain) {
       const response = await httpRpc<any>('get_transaction', [entry.hash]);
       let status = response?.tx_status?.status;

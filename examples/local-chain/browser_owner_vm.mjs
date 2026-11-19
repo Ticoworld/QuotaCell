@@ -304,8 +304,12 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
       if (pathname === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: ui.outputFiles[0].text });
       return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div><script type="module" src="/app.js"></script>' });
     });
+    let delayHistory = false;
     await page.route(url + '/**', async route => {
       const request = route.request().postDataJSON();
+      if (delayHistory && request.method === 'get_transactions' && request.params[0]?.filter?.block_range) {
+        return route.fulfill({ json: { jsonrpc: '2.0', id: request.id, result: null } });
+      }
       const result = request.method === 'get_fee_rate_statistics' ? { median: '0x3e8' } : await rpc(request.method, request.params);
       await route.fulfill({ json: { jsonrpc: '2.0', id: request.id, result } });
     });
@@ -379,7 +383,15 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
         assert.equal(await page.locator('[data-sonner-toast]').count(), 0);
         await page.reload();
       }
-      await page.locator('.history-row').filter({ has: page.locator('a[href$="' + hash + '"]') }).waitFor();
+      const historyRow = page.locator('.history-row').filter({ has: page.locator('a[href$="' + hash + '"]') });
+      if (opts.historyLag) {
+        await page.waitForFunction(() => [...document.querySelectorAll('button')].some(
+          button => button.textContent.trim() === 'Add funds' && !button.disabled,
+        ));
+        assert.equal(await historyRow.count(), 0, 'Owner controls recover before history');
+        delayHistory = false;
+      }
+      await historyRow.waitFor({ timeout: 25000 });
       assert.equal(sent.length, before + 1, 'No duplicate broadcast');
       const record = await rpc('get_transaction', [hash]);
       assert.equal(record.tx_status.status, 'committed');
@@ -424,7 +436,8 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
         assert.equal(sent.length, 1);
         await page.evaluate(() => { window.testWallet.mode = 'ok'; });
       } else loseResponse = true;
-      checkFund(await confirm('Add funds', { reload: index === 1 }), 250n);
+      delayHistory = index === 0;
+      checkFund(await confirm('Add funds', { reload: index === 1, historyLag: index === 0 }), 250n);
       if (index === 1 && !await page.locator('.disconnect-button').count()) await connect(0, 'Pocket owner');
     }
     for (const index of [1, 2]) {

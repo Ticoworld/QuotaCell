@@ -142,10 +142,10 @@ export async function cancelPreparation(body: unknown, endpoint: 'payment' | 'ow
 export const getPreparationStatus = (body: unknown, endpoint: 'payment' | 'owner') => browserMode ? Promise.resolve({ state: 'not-found' } as PreparationStatus) : readPreparationStatus(preparationStatusBody(body, endpoint));
 export const submitTransaction = (id: string, transaction: string, consent?: BroadcastConsent, scope?: string) => browserMode ? submitBrowserPayment(scope || requireBrowserPocket(), id, transaction, consent) : request<TransactionResult>('/api/external/submit', { id, transaction }, 15_000);
 export const retryJournaledTransaction = (approvedHash: string, publicKey: string) => request<TransactionResult>('/api/external/retry', { approvedHash, publicKey });
-export const reconcile = (actor?: string) => browserMode ? (async () => {
+export const reconcile = (actor?: string, hash?: string) => browserMode ? (async () => {
   const pocket = selectedBrowserPocket();
   const scopes = [...(pocket ? [pocket] : []), ...(actor ? [actorCreationScope(actor), creationScope] : [])];
-  const results = await Promise.all(scopes.map(scope => reconcileBrowser(scope, actor)));
+  const results = await Promise.all(scopes.map(scope => reconcileBrowser(scope, actor, hash)));
   return { outcomes: results.flatMap(result => result.outcomes) };
 })() : request<{ outcomes: { txHash: string; state?: string; status?: string; reason?: string; operation?: string; pocket?: string }[] }>('/api/reconcile', {});
 
@@ -181,7 +181,7 @@ export type PudgeTransactionResolution = {
 };
 
 export async function resolvePudgeTransaction(hash: string, actor?: string): Promise<PudgeTransactionResolution> {
-  const journal = await reconcile(actor);
+  const journal = await reconcile(actor, hash);
   const outcome = journal.outcomes.find((item) => item.txHash.toLowerCase() === hash.toLowerCase());
   if (outcome) {
     const state = outcome.state || outcome.status || 'uncertain';

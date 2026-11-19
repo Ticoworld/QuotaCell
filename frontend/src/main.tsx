@@ -202,7 +202,22 @@ function App() {
     return task;
   }, [identity?.publicKey]);
 
-  useEffect(() => { void refresh(); const timer = window.setInterval(() => void refresh(true), 60000); return () => window.clearInterval(timer); }, [refresh]);
+  useEffect(() => {
+    let active = true;
+    let timer: number;
+    let failures = 0;
+    const update = async (quiet: boolean) => {
+      const result = await refresh(quiet);
+      if (!active) return;
+      failures = result ? 0 : failures + 1;
+      const delay = failures && browserMode
+        ? Math.min(2000 * 2 ** Math.min(failures - 1, 4), 30000) + Math.random() * 500
+        : 60000;
+      timer = window.setTimeout(() => void update(true), delay);
+    };
+    void update(false);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [refresh]);
   const loadSelectedPocket = useCallback(async (pocket: string) => {
     setSelectedPocketLoading(true);
     setSelectedPocketError(false);
@@ -397,11 +412,11 @@ function App() {
   }));
   const explorerEnabled = pudge;
   const noticeRecorded = Boolean(transactionNotice?.hash && history.some((item) => item.tx_hash.toLowerCase() === transactionNotice.hash?.toLowerCase()));
-  const clientTransactionUnresolved = Boolean(transactionNotice?.hash && (
+  const clientTransactionUnresolved = Boolean(!browserMode && transactionNotice?.hash && (
     ['uncertain', 'pending', 'proposed', 'submitted'].includes(transactionNotice.state) ||
     (transactionNotice.state === 'committed' && !noticeRecorded)
   ));
-  const actionsBlocked = Boolean(state?.unresolved || clientTransactionUnresolved);
+  const actionsBlocked = Boolean(stateStale || state?.unresolved || clientTransactionUnresolved);
 
   const labelFor = (publicKey: string | undefined, fallback: string) => metadata[publicKey || '']?.name?.trim() || fallback;
   const descriptionFor = (publicKey: string | undefined) => metadata[publicKey || '']?.description?.trim() || '';
