@@ -40,20 +40,22 @@ const policyScripts = new Map<string, Script>();
 const rpcReads = new Map<string, Promise<unknown>>();
 let rpcActive = 0;
 const rpcQueue: (() => void)[] = [];
+const historyQueue: (() => void)[] = [];
 
 export function httpRpc<T>(method: string, params: unknown[] = []): Promise<T> {
   const read = method.startsWith('get_');
   const key = JSON.stringify([method, params]);
   const current = read && rpcReads.get(key);
   if (current) return current as Promise<T>;
+  const queue = method === 'get_transactions' ? historyQueue : rpcQueue;
   const task = (async () => {
-    if (rpcActive >= 8) await new Promise<void>(resolve => rpcQueue.push(resolve));
+    if (rpcActive >= 6) await new Promise<void>(resolve => queue.push(resolve));
     else rpcActive++;
     const start = performance.now();
     try { return await requestRpc<T>(method, params); }
     finally {
       performance.measure('quotacell.rpc.' + method, { start, end: performance.now() });
-      const next = rpcQueue.shift();
+      const next = rpcQueue.shift() ?? historyQueue.shift();
       if (next) next();
       else rpcActive--;
     }
@@ -63,15 +65,36 @@ export function httpRpc<T>(method: string, params: unknown[] = []): Promise<T> {
 }
 
 async function requestRpc<T>(method: string, params: unknown[] = []): Promise<T> {
-  const response = await fetch(RPC_URL, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method, params }),
-    signal: AbortSignal.timeout(15000), cache: 'no-store',
-  });
-  if (!response.ok) throw new Error(`Public CKB read failed (${response.status}).`);
-  const body = await response.json();
-  if (body.error) throw new Error(body.error.message || 'Public CKB read failed.');
-  return body.result as T;
+  const start = performance.now();
+  const request = JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method, params });
+  let responseBytes = 0;
+  let outcome = 'transport';
+  try {
+    const response = await fetch(RPC_URL, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: request, signal: AbortSignal.timeout(15000), cache: 'no-store',
+    });
+    outcome = String(response.status);
+    if (!response.ok) throw new Error(`Public CKB read failed (${response.status}).`);
+    const payload = await response.text();
+    responseBytes = new TextEncoder().encode(payload).byteLength;
+    outcome = 'malformed';
+    const body = JSON.parse(payload);
+    if (body?.error) {
+      outcome = 'rpc';
+      throw new Error(body.error.message || 'Public CKB read failed.');
+    }
+    if (!body || !Object.hasOwn(body, 'result')) throw new Error('Invalid public CKB response.');
+    outcome = 'ok';
+    return body.result as T;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') outcome = 'timeout';
+    throw error;
+  } finally {
+    performance.measure('quotacell.transport.' + method, {
+      start, end: performance.now(), detail: { outcome, requestBytes: new TextEncoder().encode(request).byteLength, responseBytes },
+    });
+  }
 }
 
 function validateActiveState(cell: any, actor?: string) {

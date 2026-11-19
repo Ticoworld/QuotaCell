@@ -46,6 +46,7 @@ export type PocketState = {
   owner?: string;
   fundShannons?: string;
   fundOccupiedShannons?: string;
+  depositMayPrepare?: boolean;
   sharedLimit?: string;
   sharedUsed?: string;
   delegates?: DelegateState[];

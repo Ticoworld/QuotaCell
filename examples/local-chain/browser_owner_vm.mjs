@@ -98,6 +98,7 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
   let fundFailure;
   let fundPage;
   let delayedIndexerTip;
+  let omittedFund;
   globalThis.fetch = async (target, options) => {
     const request = options?.body && JSON.parse(options.body);
     if (String(target) === url && request?.method === 'get_indexer_tip' && delayedIndexerTip) {
@@ -107,10 +108,11 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
       return Response.json({ result: { median: '0x3e8' } });
     }
     if (String(target) === url && request?.method === 'get_cells' && request.params[0].script.code_hash ===
-        '0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a' && fundFailure) {
+        '0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a' && (fundFailure || omittedFund)) {
       if (request.params.length === 4 && fundFailure === 'interrupted') throw new Error('Interrupted fund pagination');
       const response = await originalFetch(target, options);
       const body = await response.json();
+      if (omittedFund) body.result.objects = body.result.objects.filter(item => item.out_point.tx_hash !== omittedFund);
       if (request.params.length === 3) fundPage = structuredClone(body.result);
       else if (fundFailure === 'repeated') body.result = fundPage;
       else if (fundFailure === 'malformed') body.result.objects = null;
@@ -242,7 +244,19 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
   assert.equal(recovered.outcomes.find(outcome => outcome.txHash === signedDeposit.hash()).state, 'committed');
   await assert.rejects(restarted.browserState(scope, owner.publicKey), /awaiting Pocket synchronization/);
   delayedIndexerTip = undefined;
+  omittedFund = signedDeposit.hash();
+  await assert.rejects(restarted.browserState(scope, owner.publicKey), /awaiting Pocket synchronization/);
+  omittedFund = undefined;
+  const journalKey = [...journal.keys()].find(key => key.endsWith(':' + scope));
+  const oldRecords = JSON.parse(journal.get(journalKey));
+  const oldDeposit = oldRecords.find(item => item.hash === signedDeposit.hash());
+  delete oldDeposit.committedHeight;
+  delete oldDeposit.committedBlock;
+  journal.set(journalKey, JSON.stringify(oldRecords));
   assert.equal((await restarted.browserState(scope, owner.publicKey)).unresolved, false);
+  const migrated = JSON.parse(journal.get(journalKey)).find(item => item.hash === signedDeposit.hash());
+  assert.equal(await rpc('get_block_hash', [migrated.committedHeight]), migrated.committedBlock);
+  console.log('Pipeline PASS omitted output fails closed and legacy commit receives canonical anchor');
   console.log('Pipeline PASS canonical deposit stays gated until the indexer catches up');
   assert.equal(broadcasts, 1);
   console.log('Pipeline PASS independent deposit, reload, exact consent, dropped response and same-hash recovery');
@@ -370,8 +384,19 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
       await opener.click();
       const fields = dialog.locator('input[inputmode=decimal]');
       for (const [index, value] of values.entries()) await fields.nth(index).fill(value);
+      const started = await page.evaluate(() => performance.now());
       await button(action === 'Pay' ? 'Review payment' : 'Prepare transaction', dialog).click();
       await dialog.getByRole('heading', { name: 'Review transaction' }).waitFor();
+      const metrics = await page.evaluate(start => {
+        const entries = performance.getEntriesByType('measure').filter(entry =>
+          entry.startTime >= start && entry.name.startsWith('quotacell.transport.'));
+        return {
+          ms: Math.round(performance.now() - start), calls: entries.length,
+          failures: entries.filter(entry => entry.detail.outcome !== 'ok').length,
+          bytes: entries.reduce((sum, entry) => sum + entry.detail.requestBytes + entry.detail.responseBytes, 0),
+        };
+      }, started);
+      console.log('Preparation sample', action, JSON.stringify(metrics));
     };
     const confirm = async (action, opts = {}) => {
       const before = sent.length;
