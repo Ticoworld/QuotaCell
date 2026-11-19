@@ -20,6 +20,10 @@ const hex = (value: bigint | number) => '0x' + value.toString(16);
 type Point = { tx_hash: string; index: string };
 type Payment = { id: string; publicKey: string; role: 'alice' | 'ben'; amount: string; recipient: string };
 export const creationScope = 'creation';
+export const actorCreationScope = (actor: string) => creationScope + ':' + actor.toLowerCase();
+export const isCreationScope = (scope?: string) => scope === creationScope || Boolean(scope?.startsWith(creationScope + ':'));
+const creationEntries = (actor: string) => [...entries(actorCreationScope(actor)), ...entries(creationScope)]
+  .filter(entry => entry.payment.publicKey === actor.toLowerCase());
 type OwnerRequest = { id: string; draftId?: string; publicKey: string; operation: OwnerOperation; amount?: string; role?: 'alice' | 'ben'; shared?: string; alice?: string; ben?: string; mask?: number } & Partial<Terms>;
 type Entry = {
   operation?: OwnerOperation;
@@ -27,6 +31,7 @@ type Entry = {
   ownerRequest?: OwnerRequest;
   policyPoint?: Point;
   position?: number;
+  policyClosed?: boolean;
   payment: Payment; prepared: PreparedTransaction; hash: string; message: string; created: string;
   state: 'prepared' | 'signed' | 'uncertain' | 'committed' | 'conflict';
   signed?: string;
@@ -155,7 +160,7 @@ export async function browserState(pocket?: string, actor?: string): Promise<Poc
   const base = { networkMode: 'pudge-browser', genesis: deployment.genesis, multiPocket: true };
   if (!pocket) {
     if (!actor) return { ...base, empty: true };
-    const pending = entries(creationScope).find(entry => entry.state === 'uncertain' && entry.payment.publicKey === actor.toLowerCase());
+    const pending = creationEntries(actor).find(entry => entry.state === 'uncertain' && entry.payment.publicKey === actor.toLowerCase());
     const discovered = await discoverPublicPockets(actor);
     return { ...base, empty: true, unresolved: Boolean(pending), history: pending ? [{
       id: pending.payment.id, tx_hash: pending.hash, state: 'uncertain', actor: pending.payment.publicKey,
@@ -197,11 +202,11 @@ export function browserHistory(state: PocketState) {
 }
 
 export function readPendingCreation(actor: string) {
-  return entries(creationScope).find(entry => ['uncertain', 'committed'].includes(entry.state) && entry.payment.publicKey === actor.toLowerCase());
+  return creationEntries(actor).find(entry => entry.state === 'uncertain') || creationEntries(actor).reverse().find(entry => entry.state === 'committed');
 }
 
 export function readBrowserIntent(pocket: string, actor: string) {
-  return entries(pocket).find(entry => entry.state === 'signed' && entry.payment.publicKey === actor);
+  return (pocket === creationScope ? creationEntries(actor) : entries(pocket)).find(entry => entry.state === 'signed' && entry.payment.publicKey === actor);
 }
 
 async function freshInputs(transaction: c.Transaction) {
@@ -297,8 +302,21 @@ async function validatePaymentInputs(pocket: string, tx: c.Transaction, entry: E
   ]);
   if (entry.operation) {
     if (entry.operation !== 'genesis') {
-      requireCondition(policy?.role === 'owner' && policy.outPoint.tx_hash === entry.policyPoint?.tx_hash &&
-        policy.outPoint.index === entry.policyPoint?.index, 'Input is stale or owner permissions changed');
+      requireCondition(policy?.role === 'owner', 'Owner permissions changed');
+      if (entry.operation === 'deposit') {
+        const original = entry.policyClosed === undefined && entry.policyPoint ? await canonical(entry.policyPoint) : undefined;
+        const wasClosed = entry.policyClosed ?? String(original?.transaction.outputs_data[Number(BigInt(entry.policyPoint!.index))]).startsWith('0x51435434');
+        requireCondition(policy.closed === wasClosed, 'Pocket closure state changed');
+        const expected = buildOwnerTransaction({
+          operation: 'deposit', publicKey: entry.payment.publicKey, owner: inputs[0],
+          policy: await live(policy.outPoint), amount: BigInt(entry.prepared.operationAmount || parseCkb(entry.payment.amount)),
+          deps: deployment.allDeps as Parameters<typeof buildOwnerTransaction>[0]['deps'], fee: BigInt(entry.prepared.fee),
+        });
+        requireCondition(expected.transaction.hash() === tx.hash(), 'Deposit outputs changed');
+      } else {
+        requireCondition(policy.outPoint.tx_hash === entry.policyPoint?.tx_hash &&
+          policy.outPoint.index === entry.policyPoint?.index, 'Input is stale or owner permissions changed');
+      }
     }
   } else {
     requireCondition(policy, 'Pocket is unavailable');
@@ -436,9 +454,10 @@ export function prepareBrowserOwner(scope: string, request: OwnerRequest) {
   return locked(scope, async () => {
     requireCondition(/^[0-9a-f-]{36}$/i.test(request.id) &&
       ['genesis', 'deposit', 'admin', 'revoke', 'close', 'sweep'].includes(request.operation) &&
-      (scope === creationScope) === (request.operation === 'genesis'), 'Invalid owner request');
+      (scope === actorCreationScope(request.publicKey)) === (request.operation === 'genesis'), 'Invalid owner request');
     const journal = entries(scope);
-    requireCondition(!journal.some(entry => ['signed', 'uncertain'].includes(entry.state)), 'An earlier outcome is uncertain');
+    const relevant = request.operation === 'genesis' ? creationEntries(request.publicKey) : journal;
+    requireCondition(!relevant.some(entry => ['signed', 'uncertain'].includes(entry.state)), 'An earlier outcome is uncertain');
     const existing = journal.find(entry => entry.payment.id === request.id);
     if (existing) {
       requireCondition(existing.state === 'prepared' && JSON.stringify(existing.ownerRequest) === JSON.stringify(request), 'Signing request ID was reused or parameters changed');
@@ -483,7 +502,7 @@ export function prepareBrowserOwner(scope: string, request: OwnerRequest) {
       adminTerms: admin && { shared: admin.shared.toString(), alice: admin.alice.toString(), ben: admin.ben.toString(), mask: admin.mask },
     };
     journal.push({
-      operation: request.operation, targetPocket: pocket, ownerRequest: request, position, policyPoint: context?.policy.outPoint,
+      operation: request.operation, targetPocket: pocket, ownerRequest: request, position, policyPoint: context?.policy.outPoint, policyClosed: context?.policy.closed,
       payment: { id: request.id, publicKey: request.publicKey, role: 'alice', amount: request.amount || '0', recipient: lock.args },
       prepared, hash: transaction.hash(), message: info.message, state: 'prepared', created: new Date().toISOString(),
     });

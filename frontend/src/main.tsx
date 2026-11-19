@@ -1,4 +1,4 @@
-import { browserMode, creationScope, demoPocket, browserHistory, readPendingCreation, requireBrowserPocket, readBrowserIntent, validateBeforeSigning, persistBrowserSignature, cancelBrowserIntent } from './browserPudge';
+import { browserMode, creationScope, isCreationScope, demoPocket, browserHistory, readPendingCreation, requireBrowserPocket, readBrowserIntent, validateBeforeSigning, persistBrowserSignature, cancelBrowserIntent } from './browserPudge';
 import { publicDiscoveryNetwork } from './publicDiscovery';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -591,7 +591,7 @@ function App() {
     if (browserMode) {
       try {
         const current = await wallet.identity();
-        if (current.publicKey.toLowerCase() !== reviewed.publicKey.toLowerCase() || pocket !== creationScope && pocket !== requireBrowserPocket()) throw new Error(t('signerMismatch'));
+        if (current.publicKey.toLowerCase() !== reviewed.publicKey.toLowerCase() || !isCreationScope(pocket) && pocket !== requireBrowserPocket()) throw new Error(t('signerMismatch'));
       } catch (cause) { setOperationError(localizedConnectionError(cause, t)); return; }
     }
     const draftReference = intent?.operation === 'genesis' && activeDraftId && draftIndexKey ? { draftIndexKey, draftId: activeDraftId } : {};
@@ -608,7 +608,7 @@ function App() {
         try {
           result = await submitTransaction(reviewed.id, transaction, hash ? {
             hash, publicKey: reviewed.publicKey, verifySigner: async () => {
-              if (pocket !== creationScope && pocket !== requireBrowserPocket()) throw new Error(t('signerMismatch'));
+              if (!isCreationScope(pocket) && pocket !== requireBrowserPocket()) throw new Error(t('signerMismatch'));
               return (await wallet.identity()).publicKey;
             },
           } : undefined, pocket);
@@ -669,7 +669,7 @@ function App() {
         for (let attempt = 0; attempt < 2; attempt++) {
           if (attempt) await new Promise<void>((resolve) => window.setTimeout(resolve, 800 * attempt));
           try {
-            const checked = await resolvePudgeTransaction(hash);
+            const checked = await resolvePudgeTransaction(hash, identity?.publicKey);
             if (checked.status !== 'uncertain' && checked.status !== 'unknown') { resolved = checked; break; }
           } catch { /* Leave the result unresolved if Pudge is temporarily unavailable. */ }
         }
@@ -891,7 +891,7 @@ function App() {
       inFlight = true;
       setNoticeCheckBusy(true);
       try {
-        const result = await resolvePudgeTransaction(hash);
+        const result = await resolvePudgeTransaction(hash, identity?.publicKey);
         if (!active) return;
         if (result.status === 'not-sent') {
           keepChecking = false;

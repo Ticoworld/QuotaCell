@@ -61,6 +61,10 @@ try{
  const client=new c.ClientPublicTestnet({url,fallbacks:[],scripts:{[c.KnownScript.AnyoneCanPay]:acp,[c.KnownScript.Secp256k1Blake160]:{codeHash:K,hashType:'type',cellDeps:[{cellDep:kdep}]}}});const bs=new c.SignerCkbPrivateKey(client,bootstrap.privateKey);const deployed=await bs.signOnlyTransaction(deploy);await commit(deployed);
  const deps=[kdep,...hashes.map((_,i)=>({outPoint:point(deployed.hash(),i),depType:'code'}))];for(const [i,h] of hashes.entries())assert.equal(c.hashCkb(Buffer.from((await live(deps[i+1].outPoint)).cell.data.content.slice(2),'hex')),h);
 
+ if (process.env.QUOTACELL_BROWSER_VM_ONLY === '1') {
+   const { qualifyBrowserBuilders } = await import('./browser_owner_vm.mjs');
+   await qualifyBrowserBuilders({ rpc, live, commit, raw, deps, client, deployed, privateKeys, other, CKB, url, genesis: genesis.header.hash });
+ } else {
  await fs.mkdir(path.join(run,'evidence'));
  await fs.writeFile(path.join(run,'runtime.json'),JSON.stringify({url}));
  await fs.writeFile(path.join(run,'evidence/node-profile.json'),JSON.stringify({genesisHeader:genesis.header}));
@@ -313,4 +317,5 @@ const current=JSON.parse(await fs.readFile(path.join(run,'pocket.json')));const 
    const evidence={result:'PASS',lifecycle:['creation','funding','alice payment','ben payment','shared-limit CKB-VM rejection','separate delegate revocations','application and CKB-VM negative tests','recovery','late deposit','sweep','node and server restart/reopen'],react:['empty onboarding','active role-aware view','closed recovery view','mobile overflow checks'],sharedAllowanceVm:sharedLimitVmResult,revokedPaymentVm:vmResults,genesis:state.genesis,pocket:reopened.pocket};await fs.writeFile(path.join(run,'evidence/wo14b-lifecycle.json'),JSON.stringify(evidence,null,2)+'\n');console.log(JSON.stringify(evidence));
 
  }finally{app.kill();}
+ }
  }finally{await browser.close();remoteFrontend?.kill();remoteApp?.kill();frontend?.kill();node.kill();}

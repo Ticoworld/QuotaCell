@@ -1,5 +1,5 @@
 import type { BroadcastConsent } from './browserPudge';
-import { browserMode, browserState, creationScope, prepareBrowserOwner, selectedBrowserPocket, requireBrowserPocket, prepareBrowserPayment, cancelBrowserIntent, submitBrowserPayment, reconcileBrowser } from './browserPudge';
+import { browserMode, browserState, creationScope, actorCreationScope, prepareBrowserOwner, selectedBrowserPocket, requireBrowserPocket, prepareBrowserPayment, cancelBrowserIntent, submitBrowserPayment, reconcileBrowser } from './browserPudge';
 import { httpRpc, publicDiscoveryNetwork } from './publicDiscovery';
 import type { PocketState, PreparedTransaction, TransactionResult } from './domain';
 
@@ -75,7 +75,7 @@ export async function getActorPockets(publicKey: string) {
   }
   return result;
 }
-export const prepareGenesis = (body: unknown) => browserMode ? prepareBrowserOwner(creationScope, { ...body as Parameters<typeof prepareBrowserOwner>[1], operation: 'genesis' }) : request<PreparedTransaction>('/api/external/genesis', body, 120_000);
+export const prepareGenesis = (body: unknown) => browserMode ? prepareBrowserOwner(actorCreationScope((body as { publicKey: string }).publicKey), { ...body as Parameters<typeof prepareBrowserOwner>[1], operation: 'genesis' }) : request<PreparedTransaction>('/api/external/genesis', body, 120_000);
 type PreparationStatus = { state: string; result?: PreparedTransaction; txHash?: string };
 
 const preparationDeadlineMs = 35_000;
@@ -175,8 +175,10 @@ export type PudgeTransactionResolution = {
   blockNumber?: string;
 };
 
-export async function resolvePudgeTransaction(hash: string): Promise<PudgeTransactionResolution> {
-  const journal = await reconcile();
+export async function resolvePudgeTransaction(hash: string, actor?: string): Promise<PudgeTransactionResolution> {
+  const journal = browserMode && actor && !selectedBrowserPocket()
+    ? { outcomes: (await Promise.all([reconcileBrowser(actorCreationScope(actor)), reconcileBrowser(creationScope)])).flatMap(result => result.outcomes) }
+    : await reconcile();
   const outcome = journal.outcomes.find((item) => item.txHash.toLowerCase() === hash.toLowerCase());
   if (outcome) {
     const state = outcome.state || outcome.status || 'uncertain';
