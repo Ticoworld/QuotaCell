@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createServer } from 'vite';
 
 test('reloaded signed intents require fresh exact-hash consent and uncertain intents cannot be resent', async () => {
-  const vite = await createServer({ configFile: false, server: { middlewareMode: true }, appType: 'custom' });
+  const vite = await createServer({ configFile: false, optimizeDeps: { noDiscovery: true, include: [] }, server: { middlewareMode: true, hmr: false }, appType: 'custom' });
   const pocket = 'fixture';
   const id = 'request';
   const hash = '0x1234';

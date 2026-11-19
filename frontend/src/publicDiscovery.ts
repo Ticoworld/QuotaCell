@@ -123,9 +123,9 @@ export async function discoverPublicPockets(publicKey: string, rpc: Rpc = httpRp
   return discover(publicKey, undefined, rpc);
 }
 
-export async function discoverPublicPocket(pocketId: string, rpc: Rpc = httpRpc): Promise<Discovery> {
+export async function discoverPublicPocket(pocketId: string, rpc: Rpc = httpRpc, actor?: string): Promise<Discovery> {
   if (!/^0x[0-9a-f]{64}$/i.test(pocketId)) throw new Error('Invalid Pocket ID.');
-  const found = await discover(undefined, pocketId.toLowerCase(), rpc);
+  const found = await discover(actor, pocketId.toLowerCase(), rpc);
   const exact = found.find((item) => item.pocket.toLowerCase() === pocketId.toLowerCase());
   if (!exact) throw new Error('Pocket was not found on Pudge.');
   if (found.length !== 1) throw new Error('Ambiguous live Pocket.');

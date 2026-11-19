@@ -1,4 +1,4 @@
-import { browserMode, demoPocket, browserHistory, requireBrowserPocket, readBrowserIntent, validateBeforeSigning, persistBrowserSignature, cancelBrowserIntent } from './browserPudge';
+import { browserMode, creationScope, demoPocket, browserHistory, readPendingCreation, requireBrowserPocket, readBrowserIntent, validateBeforeSigning, persistBrowserSignature, cancelBrowserIntent } from './browserPudge';
 import { publicDiscoveryNetwork } from './publicDiscovery';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -525,7 +525,6 @@ function App() {
     finally { setPocketListLoading(false); }
   };
   const startNewDraft = () => {
-    if (browserMode) return;
     if (!identity || !state?.genesis) { setIdentityError(t('connectToSeeActions')); return; }
     try {
       const indexKey = pocketDraftIndexKey(state.genesis, identity.publicKey);
@@ -586,13 +585,13 @@ function App() {
     void getActorPockets(identity.publicKey).then((result) => setPocketChoices(result.discovery || [])).catch(() => setPocketListError(t('pocketListError'))).finally(() => setPocketListLoading(false));
   }, [identity?.publicKey, showCreation, activeDraftOwner, t]);
 
-  const submitSigned = async (transaction: string, hash?: string, reviewed = prepared, pocket = browserMode ? requireBrowserPocket() : undefined) => {
+  const submitSigned = async (transaction: string, hash?: string, reviewed = prepared, pocket = browserMode ? reviewed?.journalScope || requireBrowserPocket() : undefined) => {
     if (pudgePrepareOnly) { setOperationError(t('prepareOnlyNotice')); return; }
     if (!reviewed) return;
     if (browserMode) {
       try {
         const current = await wallet.identity();
-        if (current.publicKey.toLowerCase() !== reviewed.publicKey.toLowerCase() || pocket !== requireBrowserPocket()) throw new Error(t('signerMismatch'));
+        if (current.publicKey.toLowerCase() !== reviewed.publicKey.toLowerCase() || pocket !== creationScope && pocket !== requireBrowserPocket()) throw new Error(t('signerMismatch'));
       } catch (cause) { setOperationError(localizedConnectionError(cause, t)); return; }
     }
     const draftReference = intent?.operation === 'genesis' && activeDraftId && draftIndexKey ? { draftIndexKey, draftId: activeDraftId } : {};
@@ -609,10 +608,10 @@ function App() {
         try {
           result = await submitTransaction(reviewed.id, transaction, hash ? {
             hash, publicKey: reviewed.publicKey, verifySigner: async () => {
-              if (pocket !== requireBrowserPocket()) throw new Error(t('signerMismatch'));
+              if (pocket !== creationScope && pocket !== requireBrowserPocket()) throw new Error(t('signerMismatch'));
               return (await wallet.identity()).publicKey;
             },
-          } : undefined);
+          } : undefined, pocket);
           break;
         } catch (cause) {
           if (!(cause instanceof ApiError) || !cause.retryable || attempt >= 1) throw cause;
@@ -659,6 +658,7 @@ function App() {
       setPrepared(null); setIntent(null); setPendingSigned(null);
       if (intent?.operation === 'genesis' && result.state === 'committed' && result.pocket) {
         window.history.replaceState(null, '', `${window.location.pathname}?${new URLSearchParams({ pocket: result.pocket })}`);
+        if (browserMode) setSelectedPocketId(result.pocket);
         setShowCreation(false); setActiveDraftId(''); setShowPocketList(false);
       }
       await refresh(true);
@@ -709,18 +709,27 @@ function App() {
   };
 
   useEffect(() => {
-    if (!browserMode || !state?.pocket) return;
-    const stored = identity && readBrowserIntent(state.pocket, identity.publicKey.toLowerCase());
+    if (!browserMode || !state) return;
+    const creation = !state.pocket && identity && readPendingCreation(identity.publicKey);
+    if (creation && creation.ownerRequest?.draftId && creation.state === 'committed' && creation.targetPocket &&
+        listPocketDrafts(draftIndexKey).some(draft => draft.id === creation.ownerRequest?.draftId)) {
+      if (removeConfirmedGenesisDraft({ state: 'committed', operation: 'genesis', draftIndexKey, draftId: creation.ownerRequest.draftId })) {
+        openSelectedPocket(creation.targetPocket);
+        return;
+      }
+    }
+    const stored = identity && readBrowserIntent(state.pocket || creationScope, identity.publicKey.toLowerCase());
     if (stored && stored.signed) {
-      setIntent({ operation: 'pay', role: stored.payment.role });
+      setIntent({ operation: stored.operation || 'pay', role: stored.ownerRequest?.role || stored.payment.role });
       setPrepared(stored.prepared);
       setPendingSigned({ transaction: stored.signed, hash: stored.hash });
     }
     const pending = state.history?.find(item => item.state === 'uncertain');
     if (pending) setTransactionNotice(current => current?.hash === pending.tx_hash ? current : {
-      state: 'uncertain', hash: pending.tx_hash, detail: t('statusUncertain'), operation: 'pay',
+      state: 'uncertain', hash: pending.tx_hash, detail: t('statusUncertain'), operation: pending.operation,
+      ...(creation && creation.hash === pending.tx_hash && creation.ownerRequest?.draftId ? { draftId: creation.ownerRequest.draftId, draftIndexKey } : {}),
     });
-  }, [identity?.publicKey, state?.pocket, state?.unresolved]);
+  }, [identity?.publicKey, state?.pocket, state?.unresolved, draftIndexKey]);
 
   const signPrepared = async (request: PreparedTransaction) => {
     if (stateStale) { setOperationError(t('stateRefreshPaused')); return; }
@@ -728,7 +737,7 @@ function App() {
     setWorking(true); setOperationError('');
     try {
       if (!identity || request.publicKey.toLowerCase() !== identity.publicKey.toLowerCase()) throw new Error(t('signerMismatch'));
-      const pocket = browserMode ? requireBrowserPocket() : undefined;
+      const pocket = browserMode ? request.journalScope || requireBrowserPocket() : undefined;
       const { Transaction } = await import('@ckb-ccc/connector');
       const approvedHash = Transaction.fromBytes(request.transaction).hash();
       if (pocket) await validateBeforeSigning(pocket, request);
@@ -756,7 +765,7 @@ function App() {
   };
 
   const discardPending = async () => {
-    if (browserMode && prepared) await cancelBrowserIntent(requireBrowserPocket(), prepared.id);
+    if (browserMode && prepared) await cancelBrowserIntent(prepared.journalScope || requireBrowserPocket(), prepared.id);
     setPendingSigned(null); setPrepared(null); setIntent(null); setOperationError('');
   };
   const closeDialog = () => { if (working || pendingSigned) return; setIntent(null); setPrepared(null); setOperationError(''); };
@@ -905,6 +914,7 @@ function App() {
           if (terminal) {
             if (result.status === 'committed' && operation === 'genesis' && result.pocket) {
               window.history.replaceState(null, '', `${window.location.pathname}?${new URLSearchParams({ pocket: result.pocket })}`);
+              if (browserMode) setSelectedPocketId(result.pocket);
               setShowCreation(false); setActiveDraftId(''); setShowPocketList(false);
             }
             await refresh(true);
@@ -939,7 +949,7 @@ function App() {
 
     {identityError && <div className="wallet-connection-alert inline-alert mx-auto mt-4 w-[min(calc(100%-2rem),64rem)] rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm leading-5 text-red-800" role="alert">{identityError}</div>}
     {stateStale && !selectedPocketLoading && !selectedPocketError && !showPocketList && <div className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)] rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900" role="status">{t('stateRefreshPaused')}</div>}
-    {showCreation && transactionNotice && <TransactionNoticePanel notice={transactionNotice} title={noticeTitle} pudge={pudge} explorerUrl={explorerUrl} t={t} className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)]" onCheckStatus={() => void checkNoticeStatus()} checkingStatus={noticeCheckBusy}/>}
+    {(showCreation || browserMode && !selectedPocketId) && transactionNotice && <TransactionNoticePanel notice={transactionNotice} title={noticeTitle} pudge={pudge} explorerUrl={explorerUrl} t={t} className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)]" onCheckStatus={() => void checkNoticeStatus()} checkingStatus={noticeCheckBusy}/>}
 
     {showCreation && identity && state?.genesis && activeDraftId && activeDraftKey ? <CreationFlow key={`${state.genesis}:${activeDraftOwner}:${activeDraftId}`} draftId={activeDraftId} draftIndexKey={draftIndexKey} draftKey={activeDraftKey} pudgeReadOnly={pudgeReadOnly} prepareOnly={pudgePrepareOnly} canPrepareCreation={state.multiPocket === true && !pudgeReadOnly && !actionsBlocked} creationBlocked={Boolean(state.unresolved || clientTransactionUnresolved)} connectedIdentity={identity} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => { setActiveDraftId(''); setActiveDraftOwner(''); setShowCreation(false); setShowPocketList(false); setPocketListError(''); }}/> : state?.creationRecovery ? <main className="loading-page mx-auto grid min-h-[55vh] w-[min(100%-2rem,64rem)] place-items-center text-slate-600"><section className="load-error w-full max-w-xl rounded-lg border border-red-200 bg-white p-5 shadow-sm" role="alert"><h1 className="text-lg font-semibold text-red-900">{t('creationRecoveryTitle')}</h1><p className="text-sm leading-6 text-slate-700">{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p className="break-all text-xs text-slate-600"><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
       : selectedPocketLoading ? <main className="mx-auto min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] py-7 sm:py-10" aria-busy="true"><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><h1 className="m-0 text-2xl font-bold text-navy">{t('openingPocket')}</h1><p className="mt-1 text-sm text-slate-600" role="status">{t('verifyingPocket')}</p></div><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('backToMyPockets')}</button></div><section className="grid grid-cols-1 gap-3 md:grid-cols-2" aria-hidden="true"><div className="animate-pulse rounded-lg border border-line bg-white p-5"><div className="mb-4 h-3 w-28 rounded-sm bg-slate-200"/><div className="mb-3 h-9 w-40 rounded-sm bg-slate-100"/><div className="h-3 w-3/4 rounded-sm bg-slate-100"/></div><div className="animate-pulse rounded-lg border border-line bg-white p-5"><div className="mb-4 h-3 w-32 rounded-sm bg-slate-200"/><div className="mb-3 h-9 w-36 rounded-sm bg-slate-100"/><div className="h-3 w-2/3 rounded-sm bg-slate-100"/></div></section><div className="mt-7 divide-y divide-slate-200 border-y border-slate-200" aria-hidden="true">{[0, 1, 2].map((item) => <div key={item} className="flex items-center justify-between gap-4 py-4"><div className="animate-pulse space-y-2"><div className="h-3 w-32 rounded-sm bg-slate-200"/><div className="h-3 w-56 max-w-[70vw] rounded-sm bg-slate-100"/></div><div className="h-10 w-28 animate-pulse rounded-md bg-slate-100"/></div>)}</div></main>
@@ -965,7 +975,7 @@ function App() {
           </form>
           <button className="secondary-button" onClick={() => openSelectedPocket(demoPocket)}>{t('viewLiveDemoPocket')}</button>
         </main>
-        {identity && <PocketPicker pockets={state?.discovery || []} drafts={[]} ownerCanCreate={false} locale={i18n.language} loading={identityDiscoveryLoading} error={loadError ? t('pocketListError') : ''} t={key => t(key)} onOpen={openSelectedPocket} onCreate={startNewDraft} onResume={resumeDraft} onDiscard={discardDraft}/>}
+        {identity && <PocketPicker pockets={state?.discovery || []} drafts={savedDrafts} ownerCanCreate={Boolean(identity)} locale={i18n.language} loading={identityDiscoveryLoading} error={loadError ? t('pocketListError') : ''} t={key => t(key)} onOpen={openSelectedPocket} onCreate={startNewDraft} onResume={resumeDraft} onDiscard={discardDraft}/>}
       </> : showPocketList || state?.discovery || (state?.empty && identity) || identityDiscoveryLoading ? <PocketPicker pockets={showPocketList ? pocketChoices : state?.discovery || []} drafts={savedDrafts} ownerCanCreate={!browserMode && Boolean(identity)} locale={i18n.language} loading={showPocketList ? pocketListLoading : identityDiscoveryLoading} error={pocketListError} t={(key) => t(key)} onOpen={(pocket) => void openSelectedPocket(pocket)} onCreate={startNewDraft} onResume={resumeDraft} onDiscard={discardDraft}/>
       : state?.empty ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><div className="empty-cell-mark mb-5 grid size-14 place-items-center rounded-xl border border-blue-100 bg-blue-wash text-blue"><CellMark/></div><h1 className="mb-2 max-w-2xl text-3xl font-bold leading-tight text-navy sm:text-4xl">{t('emptyTitle')}</h1><p className="mb-5 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">{t('emptyBody')}</p><button className="primary-button" type="button" disabled={!identity} onClick={startNewDraft}>{t('createPocket')} <span aria-hidden="true">→</span></button></main>
       : state && !state.empty ? <main id="home" className="app-page mx-auto w-[min(100%-2rem,64rem)] py-6 sm:py-8">
@@ -985,8 +995,8 @@ function App() {
         {!identity && <section className="connect-prompt mb-6 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div><h2 className="mb-1 text-base font-semibold text-navy">{t('connectToContinue')}</h2><p className="m-0 max-w-xl text-xs leading-5 text-slate-600">{t(browserMode ? 'browserDisclosure' : 'localDisclosure')}</p></div><button className="primary-button w-full sm:w-auto" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')} <span aria-hidden="true">→</span></button></section>}
         {identity && role === 'unrecognized' && <p className="role-message" role="status">{t('unknownRole')}</p>}
 
-        {!browserMode && identity && role === 'owner' && !closed && <section className="owner-actions mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div className="section-title"><div><h2 className="text-base font-semibold text-navy">{t('ownerControls')}</h2><p className="mt-1 text-xs text-slate-600">{t('ownerDescription')}</p></div></div><div className="owner-action-list flex w-full flex-wrap gap-2 sm:w-auto"><button className="secondary-button flex-1 sm:flex-none" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('deposit')}>{t('fund')}</button>{state.hasFund && <button className="secondary-button flex-1 sm:flex-none" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('close')}>{t('closePocket')}</button>}</div></section>}
-        {!browserMode && identity && role === 'owner' && closed && <section className="owner-actions late-funds mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center"><div><h2 className="text-sm font-semibold text-amber-950">{state.hasFund ? t('lateFunds') : t('lateDepositTitle')}</h2><p className="mt-1 text-sm text-amber-900">{state.hasFund ? `${formatCkb(funds)} CKB` : t('lateDepositBody')}</p></div>{state.hasFund ? <button className="primary-button" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('sweep')}>{t('sweep')} <span aria-hidden="true">→</span></button> : <button className="primary-button" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('deposit')}>{t('lateDepositTitle')} <span aria-hidden="true">→</span></button>}</section>}
+        {identity && role === 'owner' && !closed && <section className="owner-actions mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div className="section-title"><div><h2 className="text-base font-semibold text-navy">{t('ownerControls')}</h2><p className="mt-1 text-xs text-slate-600">{t('ownerDescription')}</p></div></div><div className="owner-action-list flex w-full flex-wrap gap-2 sm:w-auto"><button className="secondary-button flex-1 sm:flex-none" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('deposit')}>{t('fund')}</button>{browserMode && <button className="secondary-button" disabled={actionsBlocked} onClick={() => beginOperation('admin')}>{t('actionAdmin')}</button>}{state.hasFund && <button className="secondary-button flex-1 sm:flex-none" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('close')}>{t('closePocket')}</button>}</div></section>}
+        {identity && role === 'owner' && closed && <section className="owner-actions late-funds mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center"><div><h2 className="text-sm font-semibold text-amber-950">{state.hasFund ? t('lateFunds') : t('lateDepositTitle')}</h2><p className="mt-1 text-sm text-amber-900">{state.hasFund ? `${formatCkb(funds)} CKB` : t('lateDepositBody')}</p></div>{state.hasFund ? <button className="primary-button" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('sweep')}>{t('sweep')} <span aria-hidden="true">→</span></button> : <button className="primary-button" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('deposit')}>{t('lateDepositTitle')} <span aria-hidden="true">→</span></button>}</section>}
 
         {identity && (role === 'alice' || role === 'ben') && activeDelegate && !closed && <section className="delegate-focus mb-7 rounded-lg border border-t-[3px] border-t-blue border-line bg-white p-4 sm:p-5">
           <div className="delegate-focus-heading flex items-start justify-between gap-3"><div className="flex min-w-0 items-start gap-2.5"><span className={`permission-dot mt-2 size-2 shrink-0 rounded-full ${activeDelegate.enabled ? 'bg-emerald-600' : 'is-revoked bg-red-600'}`} aria-hidden="true"/><div className="min-w-0"><h2 className="m-0 text-lg font-semibold text-navy">{labelFor(activeDelegate.publicKey, role === 'alice' ? t('delegateOne') : t('delegateTwo'))}</h2>{descriptionFor(activeDelegate.publicKey) && <p className="mt-1 text-xs text-slate-600">{descriptionFor(activeDelegate.publicKey)}</p>}</div></div><span className={activeDelegate.enabled ? 'permission-status' : 'permission-status is-revoked'}>{activeDelegate.enabled ? t('active') : t('revoked')}</span></div>
@@ -997,7 +1007,6 @@ function App() {
         </section>}
 
         {identity && role === 'owner' && !closed && <section className="permissions-section mt-7"><div className="section-title flex items-end justify-between gap-4"><div><h2 className="text-base font-semibold text-navy">{t('delegatePermissions')}</h2><p className="mt-1 text-xs text-slate-600">{t('sharedRelationship')}</p></div><span className="two-person-count grid size-6 place-items-center rounded-full border border-slate-300 text-xs text-slate-600">2</span></div>
-          {browserMode && <p className="mb-3 text-sm text-slate-600">{t('browserOwnerLimits')}</p>}
           <div className="permission-list">{delegates.map((delegate, index) => {
             const fallback = index === 0 ? t('delegateOne') : t('delegateTwo');
             const name = labelFor(delegate.publicKey, fallback);
@@ -1005,7 +1014,7 @@ function App() {
             return <article key={delegate.role} className="permission-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t border-line px-3 py-3 first:border-0 sm:grid-cols-[minmax(0,1.5fr)_minmax(120px,.8fr)_auto] sm:gap-4 sm:px-4">
               <div className="permission-person"><div className="participant-mark" aria-hidden="true">{index + 1}</div><div><div className="permission-name"><h3>{name}</h3><span className={delegate.enabled ? 'permission-status' : 'permission-status is-revoked'}>{delegate.enabled ? t('active') : t('revoked')}</span><button type="button" className="text-button edit-name" onClick={() => setEditPerson({ publicKey: delegate.publicKey, role: delegate.role, fallback: name })}>{t('rename')}</button></div>{descriptionFor(delegate.publicKey) && <p>{descriptionFor(delegate.publicKey)}</p>}<span className="permission-subline">{t('remaining')} {formatCkb(remaining)} / {formatCkb(delegate.limit)} CKB · {t('used')} {formatCkb(delegate.used)} CKB · {t('maxPayment')} {formatCkb(delegate.perPayment)} CKB</span></div></div>
               <div className="permission-recipient"><span>{t('recipient')}</span><code dir="ltr" title={recipientAddress(delegate.recipient)}>{shortHash(recipientAddress(delegate.recipient), 18, 8)}</code></div>
-            <div className="permission-actions"><details className="participant-inspector"><summary>{t('details')}</summary><div><span>{t('publicKey')}</span><code dir="ltr">{delegate.publicKey}</code><span>{t('recipient')}</span><code dir="ltr">{recipientAddress(delegate.recipient)}</code><span>{t('used')}</span><code>{formatCkb(delegate.used)} CKB</code></div></details>{!browserMode && <button type="button" className="text-button revoke-button" disabled={!delegate.enabled || actionsBlocked || pudgeActionsDisabled || closed} onClick={() => beginOperation('revoke', delegate.role, name)}>{t('revoke')}</button>}</div>
+            <div className="permission-actions"><details className="participant-inspector"><summary>{t('details')}</summary><div><span>{t('publicKey')}</span><code dir="ltr">{delegate.publicKey}</code><span>{t('recipient')}</span><code dir="ltr">{recipientAddress(delegate.recipient)}</code><span>{t('used')}</span><code>{formatCkb(delegate.used)} CKB</code></div></details>{<button type="button" className="text-button revoke-button" disabled={!delegate.enabled || actionsBlocked || pudgeActionsDisabled || closed} onClick={() => beginOperation('revoke', delegate.role, name)}>{t('revoke')}</button>}</div>
             </article>;
           })}</div>
         </section>}
@@ -1014,7 +1023,7 @@ function App() {
 
         {closed && <section className="closed-summary"><div className="closed-icon" aria-hidden="true">✓</div><div><h2>{t('closedTitle')}</h2><p>{t('closedBody')}</p>{history.filter((item) => item.operation === 'close' && item.state === 'committed').slice(-1).map((item) => <p key={item.id}>{t('recoveredAmount')}: <strong>{formatCkb(item.amount)} CKB</strong></p>)}{state.hasFund && <p>{t('lateFunds')}</p>}</div></section>}
 
-        {unsupported.length > 0 && <section className="unsupported-section" role="status"><div className="unsupported-heading"><span aria-hidden="true">!</span><div><h2>{t('unsupportedTitle')}</h2><p>{t('unsupportedBody')}</p></div></div><div className="unsupported-list">{unsupported.map((item) => { const outPoint = item.outPoint; const hash = outPoint.txHash || outPoint.tx_hash || ''; return <div className="unsupported-row" key={`${hash}:${outPoint.index}`}><strong>{formatCkb(item.capacity)} CKB</strong><span>{item.hasType ? t('typedCell') : t('dataCell')} · {item.dataBytes} {t('bytes')}</span><code dir="ltr">{shortHash(hash, 14, 8)}:{outPoint.index}</code></div>; })}</div></section>}
+        {unsupported.length > 0 && <section className="unsupported-section" role="status"><div className="unsupported-heading"><span aria-hidden="true">!</span><div><h2>{t('unsupportedTitle')}</h2><p>{t('unsupportedBody')}</p></div></div><details><summary>{t('details')}</summary><div className="unsupported-list">{unsupported.map((item) => { const outPoint = item.outPoint; const hash = outPoint.txHash || outPoint.tx_hash || ''; return <div className="unsupported-row" key={`${hash}:${outPoint.index}`}><strong>{formatCkb(item.capacity)} CKB</strong><span>{item.hasType ? t('typedCell') : t('dataCell')} · {item.dataBytes} {t('bytes')}</span><code dir="ltr">{shortHash(hash, 14, 8)}:{outPoint.index}</code></div>; })}</div></details></section>}
 
         {identity && <section className="metadata-tools"><details><summary>{t('participantNames')}</summary><p>{t('metadataNote')}</p><div className="metadata-actions"><button type="button" className="text-button" onClick={downloadNames}>{t('exportNames')}</button><label className="file-import">{t('importNames')}<input type="file" accept="application/json,.json" onChange={(event) => void loadNames(event.target.files?.[0])}/></label></div></details></section>}
 
@@ -1072,7 +1081,7 @@ function TransactionNoticePanel({ notice, title, pudge, explorerUrl, t, classNam
 }
 
 function HistoryRow({ item, locale, label, stateLabel, explorer, t }: { item: HistoryItem; locale: string; label: string; stateLabel: string; explorer?: string; t: (key: string) => string }) {
-  const operationLabel = item.operation === 'genesis' ? t('actionGenesis') : item.operation === 'pay' ? t('actionPay') : item.operation === 'deposit' ? t('actionDeposit') : item.operation === 'revoke' ? t('actionRevoke') : item.operation === 'close' ? t('actionClose') : item.operation === 'sweep' ? t('actionSweep') : t('chainHistoryUnknown');
+  const operationLabel = item.operation === 'genesis' ? t('actionGenesis') : item.operation === 'pay' ? t('actionPay') : item.operation === 'deposit' ? t('actionDeposit') : item.operation === 'admin' ? t('actionAdmin') : item.operation === 'revoke' ? t('actionRevoke') : item.operation === 'close' ? t('actionClose') : item.operation === 'sweep' ? t('actionSweep') : t('chainHistoryUnknown');
   return <li className="history-row grid grid-cols-[28px_minmax(0,1fr)_auto_auto] items-center gap-2.5 border-t border-slate-100 px-3 py-3 first:border-0 sm:px-4"><span className="history-symbol grid size-7 place-items-center rounded-md bg-blue-50 text-sm text-blue-800" aria-hidden="true">{item.operation === 'pay' ? '↗' : item.operation === 'deposit' ? '+' : item.operation === 'revoke' ? '−' : '◈'}</span><div className="history-description grid min-w-0 gap-1"><strong className="text-xs font-semibold text-slate-800">{operationLabel}{item.operation === 'pay' || item.operation === 'deposit' || item.operation === 'close' || item.operation === 'sweep' ? ` · ${formatCkb(item.amount)} CKB` : ''}</strong><span className="text-[10px] text-slate-500">{label && `${label} · `}{new Intl.DateTimeFormat(locale === 'zh-Hans' ? 'zh-CN' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(item.created))}</span></div><span className={`history-state whitespace-nowrap px-1.5 py-0.5 text-[10px] ${item.state === 'uncertain' ? 'is-uncertain text-amber-800' : item.state === 'committed' ? 'is-confirmed text-emerald-800' : 'text-slate-600'}`}>{stateLabel}</span>{explorer ? <a className="history-link grid size-7 place-items-center rounded text-blue hover:bg-blue-wash" href={explorer} target="_blank" rel="noreferrer" aria-label={`${t('explorer')}: ${item.tx_hash}`}>↗</a> : <code className="history-hash whitespace-nowrap text-[10px] text-slate-500" title={item.tx_hash}>{shortHash(item.tx_hash, 10, 7)}</code>}</li>;
 }
 

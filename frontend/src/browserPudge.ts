@@ -3,6 +3,7 @@ import { loadPocketHistory } from './pocketHistory';
 import * as c from '@ckb-ccc/core';
 import { JsonRpcTransformers as rpcFormat } from '@ckb-ccc/core/advanced';
 import deployment from '../../evidence/wo15/pudge-deployment.json';
+import { buildOwnerTransaction, ownerLockFor, type OwnerOperation, type Terms } from './pocketOwner';
 import { buildPayment } from './pocketPayment';
 import { discoverPublicPocket, discoverPublicPockets, httpRpc, publicDiscoveryNetwork } from './publicDiscovery';
 import { parseCkb } from './amount';
@@ -18,7 +19,14 @@ const key = (pocket: string) => 'quotacell.browser.v1:' + deployment.genesis + '
 const hex = (value: bigint | number) => '0x' + value.toString(16);
 type Point = { tx_hash: string; index: string };
 type Payment = { id: string; publicKey: string; role: 'alice' | 'ben'; amount: string; recipient: string };
+export const creationScope = 'creation';
+type OwnerRequest = { id: string; draftId?: string; publicKey: string; operation: OwnerOperation; amount?: string; role?: 'alice' | 'ben'; shared?: string; alice?: string; ben?: string; mask?: number } & Partial<Terms>;
 type Entry = {
+  operation?: OwnerOperation;
+  targetPocket?: string;
+  ownerRequest?: OwnerRequest;
+  policyPoint?: Point;
+  position?: number;
   payment: Payment; prepared: PreparedTransaction; hash: string; message: string; created: string;
   state: 'prepared' | 'signed' | 'uncertain' | 'committed' | 'conflict';
   signed?: string;
@@ -35,6 +43,7 @@ async function canonical(point: Point) {
   const tx = await httpRpc<any>('get_transaction', [point.tx_hash]);
   const header = tx?.tx_status?.status === 'committed' && await httpRpc<any>('get_header', [tx.tx_status.block_hash]);
   requireCondition(header && header.hash === tx.tx_status.block_hash && await httpRpc('get_block_hash', [header.number]) === header.hash, 'Input transaction is not canonical.');
+  requireCondition(tx.transaction && rpcFormat.transactionTo(tx.transaction).hash() === point.tx_hash, 'Canonical transaction hash mismatch');
   return { transaction: tx.transaction, anchor: { height: String(header.number), hash: String(header.hash) } };
 }
 
@@ -101,33 +110,70 @@ async function plainCells(lock: c.Script, max: number) {
   return result.objects as { out_point: Point }[];
 }
 
+async function discoverFunds(pocket: string) {
+  const script = { code_hash: fundCode, hash_type: 'data1', args: pocket };
+  const ordinary: Point[] = [];
+  const unsupportedFunds: NonNullable<PocketState['unsupportedFunds']> = [];
+  let cursor: string | undefined;
+  const seen = new Set<string>();
+  for (let page = 0; page < 100; page++) {
+    const query = { script, script_type: 'lock', script_search_mode: 'exact', with_data: true };
+    const result = await httpRpc<{ objects: { out_point: Point; output: { type: unknown; capacity: string }; output_data: string }[]; last_cursor: string }>(
+      'get_cells', cursor ? [query, 'asc', '0x64', cursor] : [query, 'asc', '0x64'],
+    );
+    requireCondition(Array.isArray(result?.objects), 'Invalid protected fund page');
+    for (const item of result.objects) {
+      const identity = item.out_point.tx_hash + ':' + BigInt(item.out_point.index);
+      requireCondition(!seen.has(identity), 'Duplicate protected fund cell');
+      seen.add(identity);
+      if (item.output.type || item.output_data !== '0x') {
+        unsupportedFunds.push({ outPoint: item.out_point, capacity: BigInt(item.output.capacity).toString(), hasType: Boolean(item.output.type), dataBytes: (item.output_data.length - 2) / 2 });
+      } else ordinary.push(item.out_point);
+    }
+    if (result.objects.length < 100) {
+      const funds = await Promise.all(ordinary.map(live));
+      requireCondition(funds.every(cell => !cell.cell.output.type && cell.cell.data.content === '0x' &&
+        cell.cell.output.lock.code_hash === fundCode && cell.cell.output.lock.hash_type === 'data1' &&
+        cell.cell.output.lock.args === pocket), 'Protected fund identity changed');
+      return { funds, unsupportedFunds };
+    }
+    requireCondition(result.last_cursor && result.last_cursor !== cursor, 'Protected fund cursor did not advance');
+    cursor = result.last_cursor;
+  }
+  throw new Error('Protected fund discovery exceeded its page limit');
+}
+
 async function snapshot(pocket: string) {
   const [policy, funds] = await Promise.all([
     discoverPublicPocket(pocket),
-    plainCells(c.Script.from({ codeHash: fundCode, hashType: 'data1', args: pocket }), 64),
+    discoverFunds(pocket),
   ]);
-  return { policy, funds: await Promise.all(funds.map(item => live(item.out_point))) };
+  return { policy, ...funds };
 }
 
 export async function browserState(pocket?: string, actor?: string): Promise<PocketState> {
   const base = { networkMode: 'pudge-browser', genesis: deployment.genesis, multiPocket: true };
   if (!pocket) {
     if (!actor) return { ...base, empty: true };
+    const pending = entries(creationScope).find(entry => entry.state === 'uncertain' && entry.payment.publicKey === actor.toLowerCase());
     const discovered = await discoverPublicPockets(actor);
-    return { ...base, empty: true, discovery: discovered.flatMap(({ role, pocket, closed }) => role === 'public' ? [] : [{ role, pocket, closed }]) };
+    return { ...base, empty: true, unresolved: Boolean(pending), history: pending ? [{
+      id: pending.payment.id, tx_hash: pending.hash, state: 'uncertain', actor: pending.payment.publicKey,
+      amount: '0', recipient: '', created: pending.created, operation: 'genesis',
+    }] : [], discovery: discovered.flatMap(({ role, pocket, closed }) => role === 'public' ? [] : [{ role, pocket, closed }]) };
   }
-  const { policy, funds } = await snapshot(pocket);
+  const { policy, funds, unsupportedFunds } = await snapshot(pocket);
   const journal = entries(pocket);
   return {
-    ...base, ...policy.summary, historyPolicy: { script: policy.policyScript, txHash: policy.outPoint.tx_hash }, pocket, closed: policy.closed, indexedTip: policy.indexedTip,
-    policyCapacity: BigInt(policy.capacity).toString(), hasFund: Boolean(funds.length),
+    ...base, ...policy.summary, ...(policy.closed && actor && (await discoverPublicPocket(pocket, undefined, actor)).role === 'owner' ? { owner: actor } : {}), historyPolicy: { script: policy.policyScript, txHash: policy.outPoint.tx_hash }, pocket, closed: policy.closed, indexedTip: policy.indexedTip,
+    unsupportedFunds, policyCapacity: BigInt(policy.capacity).toString(), hasFund: Boolean(funds.length),
     fundShannons: funds.reduce((total, cell) => total + BigInt(cell.cell.output.capacity), 0n).toString(),
     fundOccupiedShannons: funds.length ? '7300000000' : '0',
     unresolved: journal.some(entry => entry.state === 'uncertain'),
     history: journal.filter(entry => ['uncertain', 'conflict'].includes(entry.state)).map(entry => ({
       id: entry.payment.id, tx_hash: entry.hash, state: entry.state === 'conflict' ? 'rejected' : entry.state,
-      actor: entry.payment.publicKey, recipient: entry.payment.recipient, amount: parseCkb(entry.payment.amount).toString(),
-      operation: 'pay', created: entry.created,
+      actor: entry.payment.publicKey, recipient: entry.payment.recipient, amount: entry.prepared.operationAmount || parseCkb(entry.payment.amount).toString(),
+      operation: entry.operation || 'pay', created: entry.created,
     })),
   };
 }
@@ -148,6 +194,10 @@ export function browserHistory(state: PocketState) {
     state.indexedTip,
     state.historyPolicy.txHash,
   );
+}
+
+export function readPendingCreation(actor: string) {
+  return entries(creationScope).find(entry => ['uncertain', 'committed'].includes(entry.state) && entry.payment.publicKey === actor.toLowerCase());
 }
 
 export function readBrowserIntent(pocket: string, actor: string) {
@@ -227,12 +277,13 @@ export function prepareBrowserPayment(pocket: string, payment: Payment) {
 function verifiedSignature(entry: Entry, bytes: string) {
   const prepared = c.Transaction.fromBytes(entry.prepared.transaction);
   const signed = c.Transaction.fromBytes(bytes);
-  const signature = signed.getWitnessArgs(1)?.lock;
+  const position = entry.position ?? 1;
+  const signature = signed.getWitnessArgs(position)?.lock;
   requireCondition(signature && /^0x[0-9a-f]{130}$/i.test(signature), 'Expected 65-byte secp256k1 signature');
-  const expected = prepared.getWitnessArgs(1);
+  const expected = prepared.getWitnessArgs(position);
   requireCondition(expected, 'Missing prepared witness');
   expected.lock = signature;
-  prepared.witnesses[1] = expected.toHex();
+  prepared.witnesses[position] = expected.toHex();
   requireCondition(prepared.toHex() === signed.toHex() && signed.hash() === entry.hash &&
     c.verifyMessageSecp256k1(entry.message, signature, entry.payment.publicKey) &&
     c.recoverMessageSecp256k1(entry.message, signature).toLowerCase() === entry.payment.publicKey, 'Wallet altered transaction or returned an invalid signature');
@@ -240,10 +291,21 @@ function verifiedSignature(entry: Entry, bytes: string) {
 }
 
 async function validatePaymentInputs(pocket: string, tx: c.Transaction, entry: Entry) {
-  const [policy, inputs] = await Promise.all([discoverPublicPocket(pocket), freshInputs(tx), verifyDependencies()]);
+  const [policy, inputs] = await Promise.all([
+    entry.operation === 'genesis' ? undefined : discoverPublicPocket(pocket, undefined, entry.payment.publicKey),
+    freshInputs(tx), verifyDependencies(),
+  ]);
+  if (entry.operation) {
+    if (entry.operation !== 'genesis') {
+      requireCondition(policy?.role === 'owner' && policy.outPoint.tx_hash === entry.policyPoint?.tx_hash &&
+        policy.outPoint.index === entry.policyPoint?.index, 'Input is stale or owner permissions changed');
+    }
+  } else {
+    requireCondition(policy, 'Pocket is unavailable');
   const grant = policy.summary?.delegates.find(delegate => delegate.role === entry.payment.role);
   requireCondition(tx.inputs[0].previousOutput.eq(c.OutPoint.from({ txHash: policy.outPoint.tx_hash, index: policy.outPoint.index })), 'Input is stale');
   requireCondition(grant?.enabled && grant.publicKey === entry.payment.publicKey && grant.recipient === entry.payment.recipient, 'Pocket permissions changed');
+  }
   const fee = inputs.reduce((sum, cell) => sum + BigInt(cell.cell.output.capacity), 0n) - tx.outputs.reduce((sum, output) => sum + output.capacity, 0n);
   requireCondition(fee > 0n && fee <= 1000000n && fee === BigInt(entry.prepared.fee), 'Transaction fee is outside policy bounds');
 }
@@ -312,33 +374,120 @@ export function submitBrowserPayment(pocket: string, id: string, bytes: string, 
   });
 }
 
+async function hasCanonicalConflict(entry: Entry) {
+  const original = c.Transaction.fromBytes(entry.prepared.transaction);
+  const points = original.inputs.map(input => rpcFormat.outPointFrom(input.previousOutput));
+  const liveness = await Promise.all(points.map(point => httpRpc<{ status: string }>('get_live_cell', [point, false])));
+  // An indexer result is only a candidate. Require the canonical transaction to consume the exact original input.
+  for (const [index, point] of points.entries()) {
+    if (liveness[index]?.status !== 'dead') continue;
+    const { transaction: source, anchor } = await canonical(point);
+    const output = source.outputs[Number(BigInt(point.index))];
+    const query = {
+      script: output.type || output.lock,
+      script_type: output.type ? 'type' : 'lock',
+      script_search_mode: 'exact',
+      filter: { block_range: [anchor.height, '0xffffffffffffffff'] },
+    };
+    let cursor: string | undefined;
+    for (let page = 0; page < 8; page++) {
+      const result = await httpRpc<{ objects: { io_type: string; tx_hash: string }[]; last_cursor: string }>(
+        'get_transactions', cursor ? [query, 'desc', '0x40', cursor] : [query, 'desc', '0x40'],
+      );
+      requireCondition(Array.isArray(result?.objects), 'Invalid conflict indexer response');
+      const candidates = new Set(result.objects.filter(hit => hit.io_type === 'input' && hit.tx_hash !== entry.hash).map(hit => hit.tx_hash));
+      for (const hash of candidates) {
+        const { transaction } = await canonical({ tx_hash: hash, index: '0x0' });
+        if (transaction.inputs.some((input: { previous_output: Point }) =>
+          input.previous_output.tx_hash === point.tx_hash && BigInt(input.previous_output.index) === BigInt(point.index))) return true;
+      }
+      if (result.objects.length < 64 || !result.last_cursor || result.last_cursor === cursor) break;
+      cursor = result.last_cursor;
+    }
+  }
+  return false;
+}
+
 export function reconcileBrowser(pocket: string) {
   return locked(pocket, async () => {
     const journal = entries(pocket);
     const uncertain = journal.filter(entry => entry.state === 'uncertain');
     if (uncertain.length) requireCondition(await httpRpc('get_block_hash', ['0x0']) === deployment.genesis, 'Wrong Pudge genesis');
-    const outcomes: { txHash: string; state: string; pocket: string; operation: string; status?: string; reason?: string }[] = journal.filter(entry => entry.state === 'committed' || entry.state === 'conflict').map(entry => ({ txHash: entry.hash, state: entry.state === 'committed' ? 'committed' : 'rejected', operation: 'pay', pocket }));
+    const outcomes: { txHash: string; state: string; pocket: string; operation: string; status?: string; reason?: string }[] = journal.filter(entry => entry.state === 'committed' || entry.state === 'conflict').map(entry => ({ txHash: entry.hash, state: entry.state === 'committed' ? 'committed' : 'rejected', operation: entry.operation || 'pay', pocket: entry.targetPocket || pocket }));
     for (const entry of uncertain) {
       const response = await httpRpc<any>('get_transaction', [entry.hash]);
       let status = response?.tx_status?.status;
+      if (!['committed', 'pending', 'proposed'].includes(status)) status = 'uncertain';
       if (status === 'committed') {
         await canonical({ tx_hash: entry.hash, index: '0x0' });
         entry.state = 'committed';
-      } else if (!['pending', 'proposed'].includes(status)) {
-        // A different canonical successor consuming this exact policy input makes the original impossible.
-        const policy = await discoverPublicPocket(pocket);
-        const original = c.Transaction.fromBytes(entry.prepared.transaction).inputs[0].previousOutput;
-        const liveOriginal = await httpRpc<any>('get_live_cell', [rpcFormat.outPointFrom(original), false]);
-        const { transaction: successor } = await canonical(policy.outPoint);
-        const consumed = successor.inputs.some((input: { previous_output: Point }) => original.eq(c.OutPoint.from({txHash: input.previous_output.tx_hash, index: input.previous_output.index})));
-        if (liveOriginal?.status === 'dead' && consumed && policy.outPoint.tx_hash !== entry.hash) {
-          entry.state = 'conflict';
-          status = 'rejected';
-        } else status = 'uncertain';
+      } else if (status === 'uncertain' && await hasCanonicalConflict(entry)) {
+        entry.state = 'conflict';
+        status = 'rejected';
       }
-      outcomes.push({ txHash: entry.hash, state: status, pocket, operation: 'pay' });
+      outcomes.push({ txHash: entry.hash, state: status || 'uncertain', pocket: entry.targetPocket || pocket, operation: entry.operation || 'pay' });
     }
     if (uncertain.length) save(pocket, journal);
     return { outcomes };
+  });
+}
+
+export function prepareBrowserOwner(scope: string, request: OwnerRequest) {
+  return locked(scope, async () => {
+    requireCondition(/^[0-9a-f-]{36}$/i.test(request.id) &&
+      ['genesis', 'deposit', 'admin', 'revoke', 'close', 'sweep'].includes(request.operation) &&
+      (scope === creationScope) === (request.operation === 'genesis'), 'Invalid owner request');
+    const journal = entries(scope);
+    requireCondition(!journal.some(entry => ['signed', 'uncertain'].includes(entry.state)), 'An earlier outcome is uncertain');
+    const existing = journal.find(entry => entry.payment.id === request.id);
+    if (existing) {
+      requireCondition(existing.state === 'prepared' && JSON.stringify(existing.ownerRequest) === JSON.stringify(request), 'Signing request ID was reused or parameters changed');
+      await validatePaymentInputs(scope, c.Transaction.fromBytes(existing.prepared.transaction), existing);
+      return existing.prepared;
+    }
+    const lock = ownerLockFor(request.publicKey);
+    const [context, available, statistics] = await Promise.all([
+      request.operation === 'genesis' ? undefined : snapshot(scope),
+      plainCells(lock, 64), httpRpc<{ median: string }>('get_fee_rate_statistics', ['0x65']), verifyDependencies(),
+    ]);
+    const ownerCells = await Promise.all(available.map(item => live(item.out_point)));
+    const owner = ownerCells.reduce<typeof ownerCells[number] | undefined>((best, cell) =>
+      !best || BigInt(cell.cell.output.capacity) > BigInt(best.cell.output.capacity) ? cell : best, undefined);
+    requireCondition(owner, 'No eligible owner cell');
+    const policy = context && await live(context.policy.outPoint);
+    const admin = request.operation === 'admin' ? {
+      shared: parseCkb(request.shared || '0'), alice: parseCkb(request.alice || '0'), ben: parseCkb(request.ben || '0'), mask: request.mask ?? 0,
+    } : undefined;
+    const options = {
+      operation: request.operation, publicKey: request.publicKey, owner, policy, funds: context?.funds,
+      terms: request as Terms, amount: request.amount ? parseCkb(request.amount) : undefined,
+      mask: request.role === 'alice' ? 1 : request.role === 'ben' ? 2 : undefined, admin,
+      deps: deployment.allDeps as Parameters<typeof buildOwnerTransaction>[0]['deps'],
+    };
+    const unsigned = buildOwnerTransaction({ ...options, fee: 0n });
+    const rate = BigInt(statistics.median);
+    requireCondition(rate > 0n, 'Fee statistics unavailable');
+    const fee = (BigInt(unsigned.transaction.toBytes().length + 4) * rate + 999n) / 1000n;
+    const { transaction, inputs, position, pocket, amount, change, release } = buildOwnerTransaction({ ...options, fee });
+    await client.cache.recordCells(inputs.map(({ outPoint, cell }) => ({
+      outPoint, cellOutput: rpcFormat.cellOutputTo(cell.output as Parameters<typeof rpcFormat.cellOutputTo>[0]), outputData: cell.data.content,
+    })));
+    const info = await transaction.getSignHashInfo(lock, client);
+    requireCondition(info?.position === position, 'Invalid owner signer position');
+    const prepared = {
+      id: request.id, transaction: transaction.toHex(), publicKey: request.publicKey, genesis: deployment.genesis,
+      fee: fee.toString(), journalScope: scope, ownerChangeCapacity: change.toString(),
+      ownerInputCapacity: owner.cell.output.capacity ? BigInt(owner.cell.output.capacity).toString() : undefined,
+      policyCapacity: request.operation === 'genesis' ? '60000000000' : policy && BigInt(policy.cell.output.capacity).toString(),
+      terminalCapacity: '13400000000', operationAmount: amount.toString(), releasedCapacity: release.toString(),
+      adminTerms: admin && { shared: admin.shared.toString(), alice: admin.alice.toString(), ben: admin.ben.toString(), mask: admin.mask },
+    };
+    journal.push({
+      operation: request.operation, targetPocket: pocket, ownerRequest: request, position, policyPoint: context?.policy.outPoint,
+      payment: { id: request.id, publicKey: request.publicKey, role: 'alice', amount: request.amount || '0', recipient: lock.args },
+      prepared, hash: transaction.hash(), message: info.message, state: 'prepared', created: new Date().toISOString(),
+    });
+    save(scope, journal);
+    return prepared;
   });
 }

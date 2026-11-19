@@ -56,6 +56,9 @@ function classify(tx: Raw, previousPolicy: string | undefined, policyIndex: numb
       return { operation: 'pay', actor: hexFrom(previous.subarray(offset, offset + 33)), amount: amount.toString(), recipient: recipient.args };
     }
   }
+  if (active(previousPolicy) && active(next) && /^0x5143413102ff0000[0-9a-f]{98}$/.test(action || '') && fundIn === 0n && fundOut === 0n) {
+    return { ...unclassified, operation: 'admin', actor: '0x' + previousPolicy.slice(252, 318) };
+  }
   const owner = active(previousPolicy) ? '0x' + previousPolicy.slice(252, 318) : '';
   if (owner && active(next) && /^0x5143413103ff0000[0-9a-f]{2}$/.test(action || '') && fundIn === 0n && fundOut === 0n) {
     return { ...unclassified, operation: 'revoke', actor: owner };

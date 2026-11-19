@@ -75,6 +75,10 @@ export type PreparedTransaction = {
   policyCapacity?: string;
   minimumOwnerInputCapacity?: string;
   terminalCapacity?: string;
+  journalScope?: string;
+  operationAmount?: string;
+  releasedCapacity?: string;
+  adminTerms?: { shared: string; alice: string; ben: string; mask: number };
 };
 
 export type TransactionResult = {
