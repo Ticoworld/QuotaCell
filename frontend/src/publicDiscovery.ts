@@ -14,7 +14,7 @@ type Rpc = <T>(method: string, params?: unknown[]) => Promise<T>;
 type Script = { code_hash: string; hash_type: string; args: string };
 type OutPoint = { tx_hash: string; index: string };
 type PublicPocketSummary = { owner: string; sharedLimit: string; sharedUsed: string; delegates: Array<{ role: 'alice' | 'ben'; publicKey: string; limit: string; used: string; perPayment: string; recipient: string; enabled: boolean }> };
-type Discovery = { pocket: string; role: 'owner' | 'alice' | 'ben' | 'public'; closed: boolean; capacity: string; summary: PublicPocketSummary | null; outPoint: OutPoint; indexedTip: { block_number: string; block_hash: string } };
+type Discovery = { pocket: string; role: 'owner' | 'alice' | 'ben' | 'public'; closed: boolean; capacity: string; summary: PublicPocketSummary | null; policyScript: Script; outPoint: OutPoint; indexedTip: { block_number: string; block_hash: string } };
 
 function equal(a: unknown, b: unknown) { return JSON.stringify(a) === JSON.stringify(b); }
 function normalizedScript(value: Script) { return { code_hash: value.code_hash.toLowerCase(), hash_type: value.hash_type, args: value.args.toLowerCase() }; }
@@ -146,7 +146,7 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
       if (!header || header.number !== item.block_number || (await rpc<string>('get_block_hash', [header.number])).toLowerCase() !== header.hash.toLowerCase()) throw new Error('Indexed policy transaction is not canonical.');
       const outputIndex = Number(BigInt(point.index));
       if (!equal(normalizeOutput(transaction.transaction.outputs[outputIndex]), normalizeOutput(live.cell.output)) || transaction.transaction.outputs_data[outputIndex] !== live.cell.data.content) throw new Error('Canonical policy transaction output mismatch.');
-      candidates.push({ pocket: pocketId, role: role.role || 'public', closed: role.closed, capacity: live.cell.output.capacity, summary: role.summary, outPoint: point, indexedTip: indexed, cell: live.cell });
+      candidates.push({ pocket: pocketId, role: role.role || 'public', closed: role.closed, capacity: live.cell.output.capacity, summary: role.summary, policyScript: policy, outPoint: point, indexedTip: indexed, cell: live.cell });
     }
     if (result.objects.length < PAGE_SIZE) { finished = true; break; }
     if (result.last_cursor === '0x' || result.last_cursor === cursor) throw new Error('Pudge indexer cursor did not advance.');

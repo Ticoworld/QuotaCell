@@ -1,3 +1,4 @@
+import { loadPocketHistory } from './pocketHistory';
 /// <reference types="vite/client" />
 import * as c from '@ckb-ccc/core';
 import { JsonRpcTransformers as rpcFormat } from '@ckb-ccc/core/advanced';
@@ -8,7 +9,7 @@ import { parseCkb } from './amount';
 import type { PocketState, PreparedTransaction, TransactionResult } from './domain';
 
 export const browserMode = import.meta.env?.VITE_QUOTACELL_BROWSER === '1';
-export const browserPocket = '0x7b3d89c22431e061814fbe61cc09e6c888b44a7076b782a75c3f1612d1597cc0';
+export const demoPocket = '0x7b3d89c22431e061814fbe61cc09e6c888b44a7076b782a75c3f1612d1597cc0';
 const client = new c.ClientPublicTestnet({ url: publicDiscoveryNetwork.rpc, fallbacks: [] });
 const standard = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 const fundCode = '0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a';
@@ -89,12 +90,12 @@ export async function browserState(pocket?: string, actor?: string): Promise<Poc
   const { policy, funds } = await snapshot(pocket);
   const journal = entries(pocket);
   return {
-    ...base, ...policy.summary, pocket, closed: policy.closed, indexedTip: policy.indexedTip,
+    ...base, ...policy.summary, historyPolicy: { script: policy.policyScript, txHash: policy.outPoint.tx_hash }, pocket, closed: policy.closed, indexedTip: policy.indexedTip,
     policyCapacity: BigInt(policy.capacity).toString(), hasFund: Boolean(funds.length),
     fundShannons: funds.reduce((total, cell) => total + BigInt(cell.cell.output.capacity), 0n).toString(),
     fundOccupiedShannons: funds.length ? '7300000000' : '0',
     unresolved: journal.some(entry => entry.state === 'uncertain'),
-    history: journal.filter(entry => ['uncertain', 'committed', 'conflict'].includes(entry.state)).map(entry => ({
+    history: journal.filter(entry => ['uncertain', 'conflict'].includes(entry.state)).map(entry => ({
       id: entry.payment.id, tx_hash: entry.hash, state: entry.state === 'conflict' ? 'rejected' : entry.state,
       actor: entry.payment.publicKey, recipient: entry.payment.recipient, amount: parseCkb(entry.payment.amount).toString(),
       operation: 'pay', created: entry.created,
@@ -102,7 +103,23 @@ export async function browserState(pocket?: string, actor?: string): Promise<Poc
   };
 }
 
-export const selectedBrowserPocket = () => new URLSearchParams(location.search).get('pocket') || browserPocket;
+export const selectedBrowserPocket = () => new URLSearchParams(location.search).get('pocket')?.toLowerCase() || undefined;
+
+export function requireBrowserPocket() {
+  const pocket = selectedBrowserPocket();
+  requireCondition(pocket && /^0x[0-9a-f]{64}$/.test(pocket), 'No Pocket selected');
+  return pocket;
+}
+
+export function browserHistory(state: PocketState) {
+  requireCondition(state.historyPolicy && state.indexedTip && state.pocket, 'Pocket history requires a verified policy');
+  return loadPocketHistory(
+    state.historyPolicy.script as Parameters<typeof loadPocketHistory>[0],
+    c.Script.from({ codeHash: fundCode, hashType: 'data1', args: state.pocket }),
+    state.indexedTip,
+    state.historyPolicy.txHash,
+  );
+}
 
 export function readBrowserIntent(pocket: string, actor: string) {
   return entries(pocket).find(entry => entry.state === 'signed' && entry.payment.publicKey === actor);

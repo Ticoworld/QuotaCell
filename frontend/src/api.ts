@@ -1,4 +1,4 @@
-import { browserMode, browserState, selectedBrowserPocket, prepareBrowserPayment, cancelBrowserIntent, submitBrowserPayment, reconcileBrowser } from './browserPudge';
+import { browserMode, browserState, selectedBrowserPocket, requireBrowserPocket, prepareBrowserPayment, cancelBrowserIntent, submitBrowserPayment, reconcileBrowser } from './browserPudge';
 import { httpRpc, publicDiscoveryNetwork } from './publicDiscovery';
 import type { PocketState, PreparedTransaction, TransactionResult } from './domain';
 
@@ -122,11 +122,11 @@ async function prepareResumable(endpoint: 'payment' | 'owner', body: unknown) {
   }
 }
 
-export const preparePayment = (body: unknown) => browserMode ? prepareBrowserPayment(selectedBrowserPocket(), body as Parameters<typeof prepareBrowserPayment>[1]) : prepareResumable('payment', body);
+export const preparePayment = (body: unknown) => browserMode ? prepareBrowserPayment(requireBrowserPocket(), body as Parameters<typeof prepareBrowserPayment>[1]) : prepareResumable('payment', body);
 export const prepareOwnerAction = (body: unknown) => prepareResumable('owner', body);
 export async function cancelPreparation(body: unknown, endpoint: 'payment' | 'owner') {
   const requestBody = preparationStatusBody(body, endpoint);
-  if (browserMode) return cancelBrowserIntent(selectedBrowserPocket(), String(requestBody.id));
+  if (browserMode) return cancelBrowserIntent(requireBrowserPocket(), String(requestBody.id));
   let status = await request<PreparationStatus>('/api/external/preparation-cancel', requestBody, 10_000);
   const started = Date.now();
   while (status.state === 'preparing' || status.state === 'cancelling') {
@@ -139,9 +139,9 @@ export async function cancelPreparation(body: unknown, endpoint: 'payment' | 'ow
 }
 
 export const getPreparationStatus = (body: unknown, endpoint: 'payment' | 'owner') => browserMode ? Promise.resolve({ state: 'not-found' } as PreparationStatus) : readPreparationStatus(preparationStatusBody(body, endpoint));
-export const submitTransaction = (id: string, transaction: string) => browserMode ? submitBrowserPayment(selectedBrowserPocket(), id, transaction) : request<TransactionResult>('/api/external/submit', { id, transaction }, 15_000);
+export const submitTransaction = (id: string, transaction: string) => browserMode ? submitBrowserPayment(requireBrowserPocket(), id, transaction) : request<TransactionResult>('/api/external/submit', { id, transaction }, 15_000);
 export const retryJournaledTransaction = (approvedHash: string, publicKey: string) => request<TransactionResult>('/api/external/retry', { approvedHash, publicKey });
-export const reconcile = () => browserMode ? reconcileBrowser(selectedBrowserPocket()) : request<{ outcomes: { txHash: string; state?: string; status?: string; reason?: string; operation?: string; pocket?: string }[] }>('/api/reconcile', {});
+export const reconcile = () => browserMode ? reconcileBrowser(requireBrowserPocket()) : request<{ outcomes: { txHash: string; state?: string; status?: string; reason?: string; operation?: string; pocket?: string }[] }>('/api/reconcile', {});
 
 async function ckbRpc<T>(method: string, params: unknown[]): Promise<T> {
   if (browserMode) return httpRpc<T>(method, params);

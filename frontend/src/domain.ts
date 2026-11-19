@@ -53,6 +53,7 @@ export type PocketState = {
   policyCapacity?: string;
   hasFund?: boolean;
   history?: HistoryItem[];
+  historyPolicy?: { script: { code_hash: string; hash_type: string; args: string }; txHash: string };
   indexedTip?: { block_number: string; block_hash: string } | null;
 };
 
