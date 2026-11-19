@@ -316,6 +316,23 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
     await picker.getByText('UTXO Global Wallet', { exact: true }).click();
     await picker.getByText('CKB', { exact: true }).click();
     await page.getByRole('button', { name: 'Add late funds' }).waitFor();
+    let uiBroadcasts = 0;
+    await page.route(url + '/**', async route => {
+      const request = route.request().postDataJSON();
+      if (request.method === 'send_transaction') uiBroadcasts++;
+      await route.fallback();
+    });
+    await page.getByRole('button', { name: 'Add late funds' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.locator('input[inputmode=decimal]').fill('100');
+    await dialog.getByRole('button', { name: 'Prepare transaction' }).click();
+    await dialog.getByRole('heading', { name: 'Review transaction' }).waitFor();
+    await dialog.getByText('100 CKB', { exact: true }).first().waitFor();
+    await page.evaluate(() => { window.testWallet.mode = 'reject'; });
+    await dialog.getByRole('button', { name: 'Add late funds', exact: false }).click();
+    await dialog.getByText(/reject/i).first().waitFor();
+    assert.equal(uiBroadcasts, 0);
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.reload();
     await page.getByRole('heading', { name: 'Pocket closed' }).waitFor();
     console.log('React PASS terminal history, CCC owner connection, owner-only late-funding control and reload');
@@ -324,5 +341,6 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
   }
   console.log(JSON.stringify({ result: 'PASS', operations: results, terminal: policyPoint }));
 }
+
 
 

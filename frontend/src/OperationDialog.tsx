@@ -227,7 +227,7 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
           <p className="transaction-operation">{title}</p>
           <div className="transaction-facts">
           {intent.operation === 'pay' && <div className="transaction-amount">{paymentAmount} <span>CKB</span></div>}
-            {intent.operation === 'deposit' && <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('selectedDeposit')}</span><strong className="font-semibold tabular-nums text-slate-800">{formatCkb(parseCkb(depositAmount))} CKB</strong></div>}
+            {intent.operation === 'deposit' && <div className="inline-facts flex justify-between gap-3 border-b border-slate-100 py-2 text-xs text-slate-600"><span>{t('selectedDeposit')}</span><strong className="font-semibold tabular-nums text-slate-800">{formatCkb(prepared.operationAmount ?? parseCkb(depositAmount))} CKB</strong></div>}
             {intent.operation === 'close' && <div className="transaction-amount">{formatCkb(state?.fundShannons || '0')} <span>CKB</span></div>}
             {intent.operation === 'sweep' && <div className="transaction-amount">{formatCkb(state?.fundShannons || '0')} <span>CKB</span></div>}
             {intent.operation === 'pay' && paymentLimits && <section className="grid gap-1 border-y border-slate-100 py-2 text-xs">
