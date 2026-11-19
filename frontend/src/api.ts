@@ -1,3 +1,5 @@
+import { browserMode, browserState, selectedBrowserPocket, prepareBrowserPayment, cancelBrowserIntent, submitBrowserPayment, reconcileBrowser } from './browserPudge';
+import { httpRpc, publicDiscoveryNetwork } from './publicDiscovery';
 import type { PocketState, PreparedTransaction, TransactionResult } from './domain';
 
 export class ApiError extends Error {
@@ -55,6 +57,7 @@ async function request<T>(url: string, body?: unknown, timeoutMs = 20_000, timeo
 }
 
 export const getPocketState = (publicKey?: string) => {
+  if (browserMode) return browserState(selectedBrowserPocket(), publicKey);
   const params = new URLSearchParams(window.location.search);
   if (publicKey && !params.has('pocket')) return getActorPockets(publicKey);
   if (publicKey) params.set('actor', publicKey);
@@ -62,6 +65,7 @@ export const getPocketState = (publicKey?: string) => {
   return request<PocketState>(url, undefined, params.has('pocket') ? (publicKey ? 60_000 : 8_000) : undefined);
 };
 export async function getActorPockets(publicKey: string) {
+  if (browserMode) return browserState(undefined, publicKey);
   const url = `/api/state?actor=${encodeURIComponent(publicKey)}`;
   let result = await request<PocketState>(url);
   for (let retry = 0; retry < 4 && result.empty; retry++) {
@@ -80,7 +84,7 @@ function preparationStatusBody(body: unknown, endpoint: 'payment' | 'owner') {
   if (!body || typeof body !== 'object' || !('id' in body) || typeof (body as { id?: unknown }).id !== 'string') {
     throw new ApiError('The preparation request has no recovery ID.', false);
   }
-  return { ...(body as Record<string, unknown>), endpoint };
+  return { ...(body as Record<string, unknown>), id: body.id, endpoint };
 }
 
 async function readPreparationStatus(body: Record<string, unknown>): Promise<PreparationStatus> {
@@ -118,10 +122,11 @@ async function prepareResumable(endpoint: 'payment' | 'owner', body: unknown) {
   }
 }
 
-export const preparePayment = (body: unknown) => prepareResumable('payment', body);
+export const preparePayment = (body: unknown) => browserMode ? prepareBrowserPayment(selectedBrowserPocket(), body as Parameters<typeof prepareBrowserPayment>[1]) : prepareResumable('payment', body);
 export const prepareOwnerAction = (body: unknown) => prepareResumable('owner', body);
 export async function cancelPreparation(body: unknown, endpoint: 'payment' | 'owner') {
   const requestBody = preparationStatusBody(body, endpoint);
+  if (browserMode) return cancelBrowserIntent(selectedBrowserPocket(), String(requestBody.id));
   let status = await request<PreparationStatus>('/api/external/preparation-cancel', requestBody, 10_000);
   const started = Date.now();
   while (status.state === 'preparing' || status.state === 'cancelling') {
@@ -133,12 +138,13 @@ export async function cancelPreparation(body: unknown, endpoint: 'payment' | 'ow
   return status;
 }
 
-export const getPreparationStatus = (body: unknown, endpoint: 'payment' | 'owner') => readPreparationStatus(preparationStatusBody(body, endpoint));
-export const submitTransaction = (id: string, transaction: string) => request<TransactionResult>('/api/external/submit', { id, transaction }, 15_000);
+export const getPreparationStatus = (body: unknown, endpoint: 'payment' | 'owner') => browserMode ? Promise.resolve({ state: 'not-found' } as PreparationStatus) : readPreparationStatus(preparationStatusBody(body, endpoint));
+export const submitTransaction = (id: string, transaction: string) => browserMode ? submitBrowserPayment(selectedBrowserPocket(), id, transaction) : request<TransactionResult>('/api/external/submit', { id, transaction }, 15_000);
 export const retryJournaledTransaction = (approvedHash: string, publicKey: string) => request<TransactionResult>('/api/external/retry', { approvedHash, publicKey });
-export const reconcile = () => request<{ outcomes: { txHash: string; state?: string; status?: string; reason?: string; operation?: string; pocket?: string }[] }>('/api/reconcile', {});
+export const reconcile = () => browserMode ? reconcileBrowser(selectedBrowserPocket()) : request<{ outcomes: { txHash: string; state?: string; status?: string; reason?: string; operation?: string; pocket?: string }[] }>('/api/reconcile', {});
 
 async function ckbRpc<T>(method: string, params: unknown[]): Promise<T> {
+  if (browserMode) return httpRpc<T>(method, params);
   const response = await request<{ result: T }>('/api/ckb', { id: 1, jsonrpc: '2.0', method, params }, 5_000);
   return response.result;
 }
@@ -181,13 +187,13 @@ export async function resolvePudgeTransaction(hash: string): Promise<PudgeTransa
   }
 
   const chain = await checkPudgeTransaction(hash);
-  return chain.status === 'unknown' ? { ...chain, status: 'not-sent', notSent: true } : chain;
+  return chain.status === 'unknown' ? { ...chain, status: browserMode ? 'uncertain' : 'not-sent', notSent: !browserMode } : chain;
 }
 
 export async function resolveRecipient(address: string): Promise<string> {
   if (/^0x[0-9a-f]{40}$/i.test(address)) return address.toLowerCase();
   const c = await import('@ckb-ccc/core');
-  const client = new c.ClientPublicTestnet({ url: `${window.location.origin}/api/ckb`, fallbacks: [] });
+  const client = new c.ClientPublicTestnet({ url: browserMode ? publicDiscoveryNetwork.rpc : `${window.location.origin}/api/ckb`, fallbacks: [] });
   const parsed = await c.Address.fromString(address, client);
   const script = parsed.script;
   if (parsed.prefix !== 'ckt' || script.codeHash !== '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8' || script.hashType !== 'type' || !/^0x[0-9a-f]{40}$/i.test(script.args)) {

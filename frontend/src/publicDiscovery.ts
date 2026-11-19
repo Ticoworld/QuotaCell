@@ -13,7 +13,7 @@ const PAGE_SIZE = 100;
 type Rpc = <T>(method: string, params?: unknown[]) => Promise<T>;
 type Script = { code_hash: string; hash_type: string; args: string };
 type OutPoint = { tx_hash: string; index: string };
-type PublicPocketSummary = { sharedLimit: string; sharedUsed: string; delegates: Array<{ role: 'alice' | 'ben'; publicKey: string; limit: string; used: string; perPayment: string; recipient: string; enabled: boolean }> };
+type PublicPocketSummary = { owner: string; sharedLimit: string; sharedUsed: string; delegates: Array<{ role: 'alice' | 'ben'; publicKey: string; limit: string; used: string; perPayment: string; recipient: string; enabled: boolean }> };
 type Discovery = { pocket: string; role: 'owner' | 'alice' | 'ben' | 'public'; closed: boolean; capacity: string; summary: PublicPocketSummary | null; outPoint: OutPoint; indexedTip: { block_number: string; block_hash: string } };
 
 function equal(a: unknown, b: unknown) { return JSON.stringify(a) === JSON.stringify(b); }
@@ -36,7 +36,7 @@ function validPublicKey(value: Uint8Array) {
 }
 function argsFor(publicKey: string) { return c.hashCkb(c.bytesFrom(publicKey)).slice(0, 42); }
 
-async function httpRpc<T>(method: string, params: unknown[] = []): Promise<T> {
+export async function httpRpc<T>(method: string, params: unknown[] = []): Promise<T> {
   const response = await fetch(RPC_URL, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method, params }),
@@ -72,7 +72,7 @@ function validateActiveState(cell: any, actor?: string) {
   if (delegates[0].used + delegates[1].used !== sharedUsed) throw new Error('QCN4 shared usage counters do not match.');
   const role: 'owner' | 'alice' | 'ben' | null = actor ? owner.toLowerCase() === actor.toLowerCase() ? 'owner' : delegates.find((item) => item.publicKey.toLowerCase() === actor.toLowerCase())?.role || null : null;
   return { role, summary: {
-    sharedLimit: sharedLimit.toString(), sharedUsed: sharedUsed.toString(),
+    owner, sharedLimit: sharedLimit.toString(), sharedUsed: sharedUsed.toString(),
     delegates: delegates.map((delegate, index) => ({ role: delegate.role, publicKey: delegate.publicKey, limit: delegate.limit.toString(), used: delegate.used.toString(), perPayment: delegate.perPayment.toString(), recipient: delegate.recipient.args, enabled: (state[7] & (1 << index)) !== 0 })),
   } };
 }
@@ -102,6 +102,7 @@ export async function discoverPublicPocket(pocketId: string, rpc: Rpc = httpRpc)
   const found = await discover(undefined, pocketId.toLowerCase(), rpc);
   const exact = found.find((item) => item.pocket.toLowerCase() === pocketId.toLowerCase());
   if (!exact) throw new Error('Pocket was not found on Pudge.');
+  if (found.length !== 1) throw new Error('Ambiguous live Pocket.');
   return exact;
 }
 
@@ -135,8 +136,9 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
       const live = await rpc<any>('get_live_cell', [point, true]);
       if (live?.status !== 'live' || !live.cell?.output || live.cell.data?.content !== item.output_data || !equal(normalizeOutput(live.cell.output), normalizeOutput(item.output))) throw new Error('Indexed policy does not match its live chain Cell.');
       const policy = live.cell.output.type as Script;
-      const role = candidateRole(live.cell, publicKey);
       const pocketId = parseScript(policy).hash().toLowerCase();
+      if (targetPocket && pocketId !== targetPocket) continue;
+      const role = candidateRole(live.cell, publicKey);
       if (targetPocket ? pocketId !== targetPocket : !role.role) continue;
       const transaction = await rpc<any>('get_transaction', [point.tx_hash]);
       if (transaction?.tx_status?.status !== 'committed' || !transaction.tx_status.block_hash) throw new Error('Indexed policy transaction is not committed.');

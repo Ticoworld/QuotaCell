@@ -1,3 +1,5 @@
+import { browserMode, selectedBrowserPocket, readBrowserIntent, validateBeforeSigning, persistBrowserSignature, cancelBrowserIntent } from './browserPudge';
+import { publicDiscoveryNetwork } from './publicDiscovery';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
@@ -320,7 +322,7 @@ function App() {
     const snapshot = state;
     if (!snapshot?.pocket || !snapshot.delegates?.length) { setRecipientAddresses({}); return; }
     void import('@ckb-ccc/core').then(({ Address, ClientPublicTestnet }) => {
-      const client = new ClientPublicTestnet({ url: `${window.location.origin}/api/ckb`, fallbacks: [] });
+      const client = new ClientPublicTestnet({ url: browserMode ? publicDiscoveryNetwork.rpc : `${window.location.origin}/api/ckb`, fallbacks: [] });
       const addresses = Object.fromEntries((snapshot.delegates || []).filter((item) => item.recipient).map((item) => [item.recipient, Address.fromScript({ codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8', hashType: 'type', args: item.recipient }, client).toString()]));
       if (!canceled) setRecipientAddresses(addresses);
     }).catch(() => { if (!canceled) setRecipientAddresses({}); });
@@ -355,7 +357,7 @@ function App() {
   const pudgeReadOnly = state?.networkMode === 'pudge-readonly';
   const pudgePrepareOnly = state?.networkMode === 'pudge-prepare-only';
   const pudgeActionsDisabled = pudgeReadOnly || pudgePrepareOnly;
-  const retryableIntent = Boolean(identity && pudge && !pudgeActionsDisabled && transactionNotice?.hash && history.some((item) => {
+  const retryableIntent = Boolean(!browserMode && identity && pudge && !pudgeActionsDisabled && transactionNotice?.hash && history.some((item) => {
     if (item.tx_hash.toLowerCase() !== transactionNotice.hash?.toLowerCase() || !['uncertain', 'submitted'].includes(item.state) || item.phase?.startsWith('retry-')) return false;
     return item.operation === 'deposit'
       ? role === 'owner' && item.actor.toLowerCase() === identity.publicKey.toLowerCase()
@@ -552,6 +554,12 @@ function App() {
   const submitSigned = async (transaction: string, hash?: string) => {
     if (pudgePrepareOnly) { setOperationError(t('prepareOnlyNotice')); return; }
     if (!prepared) return;
+    if (browserMode) {
+      try {
+        const current = await wallet.identity();
+        if (current.publicKey.toLowerCase() !== prepared.publicKey.toLowerCase()) throw new Error(t('signerMismatch'));
+      } catch (cause) { setOperationError(localizedConnectionError(cause, t)); return; }
+    }
     const draftReference = intent?.operation === 'genesis' && activeDraftId && draftIndexKey ? { draftIndexKey, draftId: activeDraftId } : {};
     if (pudge && hash) {
       const notice: TransactionNotice = { state: 'pending', hash, detail: t('submitting'), operation: intent?.operation, ...draftReference };
@@ -658,15 +666,31 @@ function App() {
     } finally { setWorking(false); }
   };
 
+  useEffect(() => {
+    if (!browserMode || !identity || !state?.pocket) return;
+    const stored = readBrowserIntent(state.pocket, identity.publicKey.toLowerCase());
+    if (stored?.signed) {
+      setIntent({ operation: 'pay', role: stored.payment.role });
+      setPrepared(stored.prepared);
+      setPendingSigned({ transaction: stored.signed, hash: stored.hash });
+    }
+    const pending = state.history?.find(item => item.state === 'uncertain');
+    if (pending) setTransactionNotice(current => current?.hash === pending.tx_hash ? current : {
+      state: 'uncertain', hash: pending.tx_hash, detail: t('statusUncertain'), operation: 'pay',
+    });
+  }, [identity?.publicKey, state?.pocket, state?.unresolved]);
+
   const signPrepared = async (request: PreparedTransaction) => {
     if (stateStale) { setOperationError(t('stateRefreshPaused')); return; }
     if (pudgePrepareOnly) { setOperationError(t('prepareOnlyNotice')); return; }
     setWorking(true); setOperationError('');
     try {
       if (!identity || request.publicKey.toLowerCase() !== identity.publicKey.toLowerCase()) throw new Error(t('signerMismatch'));
+      if (browserMode) await validateBeforeSigning(selectedBrowserPocket(), request.id);
       const signed = await wallet.sign(request.transaction, request.publicKey);
       const { Transaction } = await import('@ckb-ccc/connector');
       const hash = Transaction.fromBytes(signed).hash();
+      if (browserMode) await persistBrowserSignature(selectedBrowserPocket(), request.id, signed);
       if (intent?.operation === 'pay') { clearPaymentIntent(); setResumePayment(null); }
       if (pudge) {
         setPendingSigned({ transaction: signed, hash });
@@ -680,7 +704,8 @@ function App() {
     } finally { setWorking(false); }
   };
 
-  const discardPending = () => { setPendingSigned(null); setPrepared(null); setIntent(null); setOperationError(''); };
+  const discardPending = async () => {
+    if (browserMode && prepared) await cancelBrowserIntent(selectedBrowserPocket(), prepared.id); setPendingSigned(null); setPrepared(null); setIntent(null); setOperationError(''); };
   const closeDialog = () => { if (working || pendingSigned) return; setIntent(null); setPrepared(null); setOperationError(''); };
 
   const runReconcile = async () => {
@@ -886,8 +911,8 @@ function App() {
         {!identity && <section className="connect-prompt mb-6 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div><h2 className="mb-1 text-base font-semibold text-navy">{t('connectToContinue')}</h2><p className="m-0 max-w-xl text-xs leading-5 text-slate-600">{t('localDisclosure')}</p></div><button className="primary-button w-full sm:w-auto" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')} <span aria-hidden="true">→</span></button></section>}
         {identity && role === 'unrecognized' && <p className="role-message" role="status">{t('unknownRole')}</p>}
 
-        {identity && role === 'owner' && !closed && <section className="owner-actions mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div className="section-title"><div><h2 className="text-base font-semibold text-navy">{t('ownerControls')}</h2><p className="mt-1 text-xs text-slate-600">{t('ownerDescription')}</p></div></div><div className="owner-action-list flex w-full flex-wrap gap-2 sm:w-auto"><button className="secondary-button flex-1 sm:flex-none" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('deposit')}>{t('fund')}</button>{state.hasFund && <button className="secondary-button flex-1 sm:flex-none" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('close')}>{t('closePocket')}</button>}</div></section>}
-        {identity && role === 'owner' && closed && <section className="owner-actions late-funds mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center"><div><h2 className="text-sm font-semibold text-amber-950">{state.hasFund ? t('lateFunds') : t('lateDepositTitle')}</h2><p className="mt-1 text-sm text-amber-900">{state.hasFund ? `${formatCkb(funds)} CKB` : t('lateDepositBody')}</p></div>{state.hasFund ? <button className="primary-button" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('sweep')}>{t('sweep')} <span aria-hidden="true">→</span></button> : <button className="primary-button" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('deposit')}>{t('lateDepositTitle')} <span aria-hidden="true">→</span></button>}</section>}
+        {!browserMode && identity && role === 'owner' && !closed && <section className="owner-actions mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div className="section-title"><div><h2 className="text-base font-semibold text-navy">{t('ownerControls')}</h2><p className="mt-1 text-xs text-slate-600">{t('ownerDescription')}</p></div></div><div className="owner-action-list flex w-full flex-wrap gap-2 sm:w-auto"><button className="secondary-button flex-1 sm:flex-none" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('deposit')}>{t('fund')}</button>{state.hasFund && <button className="secondary-button flex-1 sm:flex-none" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('close')}>{t('closePocket')}</button>}</div></section>}
+        {!browserMode && identity && role === 'owner' && closed && <section className="owner-actions late-funds mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center"><div><h2 className="text-sm font-semibold text-amber-950">{state.hasFund ? t('lateFunds') : t('lateDepositTitle')}</h2><p className="mt-1 text-sm text-amber-900">{state.hasFund ? `${formatCkb(funds)} CKB` : t('lateDepositBody')}</p></div>{state.hasFund ? <button className="primary-button" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('sweep')}>{t('sweep')} <span aria-hidden="true">→</span></button> : <button className="primary-button" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('deposit')}>{t('lateDepositTitle')} <span aria-hidden="true">→</span></button>}</section>}
 
         {identity && (role === 'alice' || role === 'ben') && activeDelegate && !closed && <section className="delegate-focus mb-7 rounded-lg border border-t-[3px] border-t-blue border-line bg-white p-4 sm:p-5">
           <div className="delegate-focus-heading flex items-start justify-between gap-3"><div className="flex min-w-0 items-start gap-2.5"><span className={`permission-dot mt-2 size-2 shrink-0 rounded-full ${activeDelegate.enabled ? 'bg-emerald-600' : 'is-revoked bg-red-600'}`} aria-hidden="true"/><div className="min-w-0"><h2 className="m-0 text-lg font-semibold text-navy">{labelFor(activeDelegate.publicKey, role === 'alice' ? t('delegateOne') : t('delegateTwo'))}</h2>{descriptionFor(activeDelegate.publicKey) && <p className="mt-1 text-xs text-slate-600">{descriptionFor(activeDelegate.publicKey)}</p>}</div></div><span className={activeDelegate.enabled ? 'permission-status' : 'permission-status is-revoked'}>{activeDelegate.enabled ? t('active') : t('revoked')}</span></div>
@@ -897,7 +922,7 @@ function App() {
           {!activeDelegate.enabled && <p className="revoked-message" role="status">{t('permissionRevokedMessage')}</p>}
         </section>}
 
-        {identity && role === 'owner' && !closed && <section className="permissions-section mt-7"><div className="section-title flex items-end justify-between gap-4"><div><h2 className="text-base font-semibold text-navy">{t('delegatePermissions')}</h2><p className="mt-1 text-xs text-slate-600">{t('sharedRelationship')}</p></div><span className="two-person-count grid size-6 place-items-center rounded-full border border-slate-300 text-xs text-slate-600">2</span></div>
+        {!browserMode && identity && role === 'owner' && !closed && <section className="permissions-section mt-7"><div className="section-title flex items-end justify-between gap-4"><div><h2 className="text-base font-semibold text-navy">{t('delegatePermissions')}</h2><p className="mt-1 text-xs text-slate-600">{t('sharedRelationship')}</p></div><span className="two-person-count grid size-6 place-items-center rounded-full border border-slate-300 text-xs text-slate-600">2</span></div>
           <div className="permission-list">{delegates.map((delegate, index) => {
             const fallback = index === 0 ? t('delegateOne') : t('delegateTwo');
             const name = labelFor(delegate.publicKey, fallback);
@@ -905,7 +930,7 @@ function App() {
             return <article className="permission-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t border-line px-3 py-3 first:border-0 sm:grid-cols-[minmax(0,1.5fr)_minmax(120px,.8fr)_auto] sm:gap-4 sm:px-4">
               <div className="permission-person"><div className="participant-mark" aria-hidden="true">{index + 1}</div><div><div className="permission-name"><h3>{name}</h3><span className={delegate.enabled ? 'permission-status' : 'permission-status is-revoked'}>{delegate.enabled ? t('active') : t('revoked')}</span><button type="button" className="text-button edit-name" onClick={() => setEditPerson({ publicKey: delegate.publicKey, role: delegate.role, fallback: name })}>{t('rename')}</button></div>{descriptionFor(delegate.publicKey) && <p>{descriptionFor(delegate.publicKey)}</p>}<span className="permission-subline">{formatCkb(remaining)} / {formatCkb(delegate.limit)} CKB · {t('maxPayment').toLowerCase()} {formatCkb(delegate.perPayment)} CKB</span></div></div>
               <div className="permission-recipient"><span>{t('recipient')}</span><code dir="ltr" title={recipientAddress(delegate.recipient)}>{shortHash(recipientAddress(delegate.recipient), 18, 8)}</code></div>
-            <div className="permission-actions"><details className="participant-inspector"><summary>{t('details')}</summary><div><span>{t('publicKey')}</span><code dir="ltr">{delegate.publicKey}</code><span>{t('recipient')}</span><code dir="ltr">{recipientAddress(delegate.recipient)}</code><span>{t('used')}</span><code>{formatCkb(delegate.used)} CKB</code></div></details><button type="button" className="text-button revoke-button" disabled={!delegate.enabled || actionsBlocked || pudgeActionsDisabled || closed} onClick={() => beginOperation('revoke', delegate.role, name)}>{t('revoke')}</button></div>
+            <div className="permission-actions"><details className="participant-inspector"><summary>{t('details')}</summary><div><span>{t('publicKey')}</span><code dir="ltr">{delegate.publicKey}</code><span>{t('recipient')}</span><code dir="ltr">{recipientAddress(delegate.recipient)}</code><span>{t('used')}</span><code>{formatCkb(delegate.used)} CKB</code></div></details><button type="button" className="text-button revoke-button" disabled={browserMode || !delegate.enabled || actionsBlocked || pudgeActionsDisabled || closed} onClick={() => beginOperation('revoke', delegate.role, name)}>{t('revoke')}</button></div>
             </article>;
           })}</div>
         </section>}
