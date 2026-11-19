@@ -97,8 +97,12 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
   let broadcasts = 0;
   let fundFailure;
   let fundPage;
+  let delayedIndexerTip;
   globalThis.fetch = async (target, options) => {
     const request = options?.body && JSON.parse(options.body);
+    if (String(target) === url && request?.method === 'get_indexer_tip' && delayedIndexerTip) {
+      return Response.json({ result: delayedIndexerTip });
+    }
     if (String(target) === url && request?.method === 'get_fee_rate_statistics') {
       return Response.json({ result: { median: '0x3e8' } });
     }
@@ -230,10 +234,16 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
   assert.equal(broadcasts, 1);
   assert.equal((await restarted.submitBrowserPayment(scope, prepared.id, signedDeposit.toHex(), consent)).state, 'uncertain');
   assert.equal(broadcasts, 1);
+  const priorIndexerTip = await rpc('get_indexer_tip');
   for (let attempt = 0; attempt < 15; attempt++) await rpc('generate_block');
   await waitForIndexer();
+  delayedIndexerTip = priorIndexerTip;
   const recovered = await restarted.reconcileBrowser(scope);
   assert.equal(recovered.outcomes.find(outcome => outcome.txHash === signedDeposit.hash()).state, 'committed');
+  await assert.rejects(restarted.browserState(scope, owner.publicKey), /awaiting Pocket synchronization/);
+  delayedIndexerTip = undefined;
+  assert.equal((await restarted.browserState(scope, owner.publicKey)).unresolved, false);
+  console.log('Pipeline PASS canonical deposit stays gated until the indexer catches up');
   assert.equal(broadcasts, 1);
   console.log('Pipeline PASS independent deposit, reload, exact consent, dropped response and same-hash recovery');
   funds.push({ txHash: signedDeposit.hash(), index: 0 });

@@ -35,6 +35,7 @@ type Entry = {
   payment: Payment; prepared: PreparedTransaction; hash: string; message: string; created: string;
   state: 'prepared' | 'signed' | 'uncertain' | 'committed' | 'conflict';
   signed?: string;
+  committedHeight?: string;
 };
 const entries = (pocket: string): Entry[] => JSON.parse(localStorage.getItem(key(pocket)) || '[]');
 const save = (pocket: string, records: Entry[]) => localStorage.setItem(key(pocket), JSON.stringify(records));
@@ -157,7 +158,7 @@ async function discoverFunds(pocket: string) {
       requireCondition(funds.every(cell => !cell.cell.output.type && cell.cell.data.content === '0x' &&
         cell.cell.output.lock.code_hash === fundCode && cell.cell.output.lock.hash_type === 'data1' &&
         cell.cell.output.lock.args === pocket), 'Protected fund identity changed');
-      return { funds, unsupportedFunds };
+      return { funds, unsupportedFunds, fundTip: indexed };
     }
     requireCondition(result.last_cursor && !cursors.has(result.last_cursor), 'Protected fund cursor did not advance');
     cursors.add(result.last_cursor);
@@ -166,11 +167,21 @@ async function discoverFunds(pocket: string) {
   throw new Error('Protected fund discovery exceeded its page limit');
 }
 
+export class PocketIndexSyncError extends Error {
+  constructor() { super('Confirmed transaction is awaiting Pocket synchronization'); }
+}
+
 async function snapshot(pocket: string) {
   const [policy, funds] = await Promise.all([
     discoverPublicPocket(pocket),
     discoverFunds(pocket),
   ]);
+  const policyHeight = BigInt(policy.indexedTip.block_number);
+  const fundHeight = BigInt(funds.fundTip.block_number);
+  if (entries(pocket).some(entry => entry.state === 'committed' && entry.committedHeight &&
+    (BigInt(entry.committedHeight) > policyHeight || BigInt(entry.committedHeight) > fundHeight))) {
+    throw new PocketIndexSyncError();
+  }
   return { policy, ...funds };
 }
 
@@ -457,7 +468,8 @@ export function reconcileBrowser(pocket: string, actor?: string, hash?: string) 
       let status = response?.tx_status?.status;
       if (!['committed', 'pending', 'proposed'].includes(status)) status = 'uncertain';
       if (status === 'committed') {
-        await canonical({ tx_hash: entry.hash, index: '0x0' });
+        const { anchor } = await canonical({ tx_hash: entry.hash, index: '0x0' });
+        entry.committedHeight = anchor.height;
         entry.state = 'committed';
       } else if (status === 'uncertain' && await hasCanonicalConflict(entry)) {
         entry.state = 'conflict';

@@ -1,4 +1,4 @@
-import { browserMode, creationScope, isCreationScope, demoPocket, browserHistory, readPendingCreation, requireBrowserPocket, readBrowserIntent, validateBeforeSigning, persistBrowserSignature, cancelBrowserIntent } from './browserPudge';
+import { PocketIndexSyncError, browserMode, creationScope, isCreationScope, demoPocket, browserHistory, readPendingCreation, requireBrowserPocket, readBrowserIntent, validateBeforeSigning, persistBrowserSignature, cancelBrowserIntent } from './browserPudge';
 import { publicDiscoveryNetwork } from './publicDiscovery';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -91,6 +91,7 @@ function App() {
   const refreshInFlight = useRef<Promise<PocketState | null> | null>(null);
   const refreshInFlightActor = useRef<string | null>(null);
   const [stateStale, setStateStale] = useState(false);
+  const [waitingForIndex, setWaitingForIndex] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [stateActor, setStateActor] = useState<string | null>(null);
   const stateActorRef = useRef<string | null>(null);
@@ -179,9 +180,11 @@ function App() {
         stateActorRef.current = actor?.toLowerCase() ?? null;
         setStateActor(stateActorRef.current);
         setStateStale(false);
+        setWaitingForIndex(false);
         setLoadError('');
         return next;
       } catch (cause) {
+        setWaitingForIndex(cause instanceof PocketIndexSyncError);
         const message = cause instanceof Error ? cause.message : String(cause);
         if (actor && stateActorRef.current !== actor.toLowerCase()) {
           setState(null);
@@ -364,7 +367,7 @@ function App() {
   const activeDelegate = role === 'alice' || role === 'ben' ? delegates.find((delegate) => delegate.role === role) : undefined;
   const funds = BigInt(state?.fundShannons || 0);
   const occupied = BigInt(state?.fundOccupiedShannons || 0);
-  const available = funds > occupied ? funds - occupied : 0n;
+  const available = !stateStale && funds > occupied ? funds - occupied : 0n;
   const sharedLimit = BigInt(state?.sharedLimit || 0);
   const sharedUsed = BigInt(state?.sharedUsed || 0);
   const sharedRemaining = sharedLimit > sharedUsed ? sharedLimit - sharedUsed : 0n;
@@ -976,7 +979,7 @@ function App() {
     <Toaster position="top-right" theme="light" richColors closeButton visibleToasts={3} offset={72} toastOptions={{ className: 'quotacell-toast', duration: 5000 }}/>
 
     {identityError && <div className="wallet-connection-alert inline-alert mx-auto mt-4 w-[min(calc(100%-2rem),64rem)] rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm leading-5 text-red-800" role="alert">{identityError}</div>}
-    {stateStale && !selectedPocketLoading && !selectedPocketError && !showPocketList && <div className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)] rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900" role="status">{t('stateRefreshPaused')}</div>}
+    {stateStale && !selectedPocketLoading && !selectedPocketError && !showPocketList && <div className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)] rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900" role="status">{t(waitingForIndex ? 'confirmedIndexing' : 'stateRefreshPaused')}</div>}
     {(showCreation || browserMode && !selectedPocketId) && transactionNotice && <TransactionNoticePanel notice={transactionNotice} title={noticeTitle} pudge={pudge} explorerUrl={explorerUrl} t={t} className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)]" onCheckStatus={() => void checkNoticeStatus()} checkingStatus={noticeCheckBusy}/>}
 
     {showCreation && identity && state?.genesis && activeDraftId && activeDraftKey ? <CreationFlow key={`${state.genesis}:${activeDraftOwner}:${activeDraftId}`} draftId={activeDraftId} draftIndexKey={draftIndexKey} draftKey={activeDraftKey} pudgeReadOnly={pudgeReadOnly} prepareOnly={pudgePrepareOnly} canPrepareCreation={state.multiPocket === true && !pudgeReadOnly && !actionsBlocked} creationBlocked={Boolean(state.unresolved || clientTransactionUnresolved)} connectedIdentity={identity} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => { setActiveDraftId(''); setActiveDraftOwner(''); setShowCreation(false); setShowPocketList(false); setPocketListError(''); }}/> : state?.creationRecovery ? <main className="loading-page mx-auto grid min-h-[55vh] w-[min(100%-2rem,64rem)] place-items-center text-slate-600"><section className="load-error w-full max-w-xl rounded-lg border border-red-200 bg-white p-5 shadow-sm" role="alert"><h1 className="text-lg font-semibold text-red-900">{t('creationRecoveryTitle')}</h1><p className="text-sm leading-6 text-slate-700">{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p className="break-all text-xs text-slate-600"><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
