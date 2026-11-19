@@ -6,7 +6,7 @@ import * as c from '@ckb-ccc/core';
 import { buildOwnerTransaction } from '../../frontend/src/pocketOwner.ts';
 import { buildPayment } from '../../frontend/src/pocketPayment.ts';
 
-export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, client, deployed, privateKeys, other, CKB, url, genesis }) {
+export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, client, deployed, privateKeys, other, CKB, url, genesis, browser, provider }) {
   const signers = privateKeys.map(key => new c.SignerCkbPrivateKey(client, '0x' + key));
   const [owner, alice, ben] = signers;
   const recipient = other.slice(0, 2).map(signer => c.Script.from({
@@ -59,10 +59,14 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
     results.push('pay-' + delegate);
     console.log('VM PASS', 'pay-' + delegate, signed.hash());
   }
-  const compiled = await build({
-    entryPoints: [fileURLToPath(new URL('../../frontend/src/browserPudge.ts', import.meta.url))],
-    bundle: true, platform: 'browser', format: 'esm', write: false,
+  const compile = (entry, extra = {}) => build({
+    entryPoints: [fileURLToPath(new URL('../../frontend/src/' + entry, import.meta.url))],
+    ...extra, bundle: true, platform: 'browser', format: 'esm', write: false,
     plugins: [{ name: 'isolated-chain-only', setup(plugin) {
+      plugin.onLoad({ filter: /[.]css$/ }, () => ({ loader: 'empty', contents: '' }));
+      plugin.onLoad({ filter: /wallet[.]ts$/ }, async ({ path }) => ({
+        loader: 'ts', contents: (await fs.readFile(path, 'utf8')).replace('0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606', genesis),
+      }));
       plugin.onLoad({ filter: /pudge-deployment[.]json$/ }, () => ({
         loader: 'json', contents: JSON.stringify({ genesis, allDeps: deps, verification: {
           qDataHash: '0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e',
@@ -82,6 +86,7 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
       }));
     } }],
   });
+  const compiled = await compile('browserPudge.ts');
   const moduleUrl = 'data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].text).toString('base64');
   const pipeline = await import(moduleUrl);
   const journal = new Map();
@@ -284,6 +289,39 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
   const history = await pipeline.browserHistory(terminalState);
   assert.deepEqual(history.map(item => item.operation), results.map(operation => operation.startsWith('pay-') ? 'pay' : operation));
   console.log('Pipeline PASS terminal discovery and ordered canonical history');
+  const ui = await compile('main.tsx', { jsx: 'automatic', define: {
+    'import.meta.env.VITE_QUOTACELL_BROWSER': '"1"',
+    'import.meta.env.DEV': 'false',
+    'process.env.NODE_ENV': '"production"',
+  } });
+  const page = await browser.newPage();
+  try {
+    const origin = 'http://localhost:18341';
+    await page.addInitScript({ content: 'window.__testKey = ' + JSON.stringify('0x' + privateKeys[0]) + ';' + provider });
+    await page.route(origin + '/**', async route => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === '/app.js') return route.fulfill({ contentType: 'text/javascript', body: ui.outputFiles[0].text });
+      return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div><script type="module" src="/app.js"></script>' });
+    });
+    await page.route(url + '/**', async route => {
+      const request = route.request().postDataJSON();
+      const result = request.method === 'get_fee_rate_statistics' ? { median: '0x3e8' } : await rpc(request.method, request.params);
+      await route.fulfill({ json: { jsonrpc: '2.0', id: request.id, result } });
+    });
+    await page.goto(origin + '/?pocket=' + scope);
+    await page.getByRole('heading', { name: 'Pocket closed' }).waitFor();
+    await page.locator('.history-row').filter({ hasText: 'Recover late funds' }).waitFor();
+    await page.getByRole('button', { name: 'Connect wallet', exact: true }).first().click();
+    const picker = page.locator('ccc-connector');
+    await picker.getByText('UTXO Global Wallet', { exact: true }).click();
+    await picker.getByText('CKB', { exact: true }).click();
+    await page.getByRole('button', { name: 'Add late funds' }).waitFor();
+    await page.reload();
+    await page.getByRole('heading', { name: 'Pocket closed' }).waitFor();
+    console.log('React PASS terminal history, CCC owner connection, owner-only late-funding control and reload');
+  } finally {
+    await page.close();
+  }
   console.log(JSON.stringify({ result: 'PASS', operations: results, terminal: policyPoint }));
 }
 

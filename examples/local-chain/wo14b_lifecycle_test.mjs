@@ -63,7 +63,7 @@ try{
 
  if (process.env.QUOTACELL_BROWSER_VM_ONLY === '1') {
    const { qualifyBrowserBuilders } = await import('./browser_owner_vm.mjs');
-   await qualifyBrowserBuilders({ rpc, live, commit, raw, deps, client, deployed, privateKeys, other, CKB, url, genesis: genesis.header.hash });
+   await qualifyBrowserBuilders({ rpc, live, commit, raw, deps, client, deployed, privateKeys, other, CKB, url, genesis: genesis.header.hash, browser, provider });
  } else {
  await fs.mkdir(path.join(run,'evidence'));
  await fs.writeFile(path.join(run,'runtime.json'),JSON.stringify({url}));
