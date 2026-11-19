@@ -116,6 +116,7 @@ async function freshInputs(transaction: c.Transaction) {
 
 export function prepareBrowserPayment(pocket: string, payment: Payment) {
   return locked(pocket, async () => {
+    requireCondition(/^[0-9a-f-]{36}$/i.test(payment.id) && ['alice', 'ben'].includes(payment.role), 'Invalid payment request');
     const journal = entries(pocket);
     requireCondition(!journal.some(entry => ['signed', 'uncertain'].includes(entry.state)), 'An earlier outcome is uncertain');
     const existing = journal.find(entry => entry.payment.id === payment.id);
@@ -225,7 +226,7 @@ export function submitBrowserPayment(pocket: string, id: string, bytes: string):
     entry.state = 'uncertain';
     save(pocket, journal);
     try {
-      const hash = await httpRpc('send_transaction', [raw, 'passthrough']);
+      const hash = await httpRpc('send_transaction', [raw]);
       requireCondition(hash === entry.hash, 'RPC returned a different transaction hash');
       return { txHash: entry.hash, state: 'submitted' };
     } catch {
