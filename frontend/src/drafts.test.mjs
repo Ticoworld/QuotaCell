@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import {createPocketDraft, listPocketDrafts, pocketDraftIndexKey, removePocketDraft, touchPocketDraft} from './drafts.ts';
+
+const store=new Map();
+globalThis.localStorage={getItem:key=>store.get(key)??null,setItem:(key,value)=>store.set(key,value),removeItem:key=>store.delete(key)};
+const owner='0x0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
+const otherOwner='0x02c6047f9441ed7d6d3045406e95c07cd85a055c89c0d2e4d7a9f3e8b9f2f8d0b';
+const genesis='0x'+'11'.repeat(32),otherGenesis='0x'+'22'.repeat(32);
+const ownerIndex=pocketDraftIndexKey(genesis,owner);
+const first=createPocketDraft(ownerIndex),second=createPocketDraft(ownerIndex);
+assert.notEqual(first,second);
+assert.deepEqual(new Set(listPocketDrafts(ownerIndex).map(item=>item.id)),new Set([first,second]));
+assert.equal(listPocketDrafts(pocketDraftIndexKey(genesis,otherOwner)).length,0);
+assert.equal(listPocketDrafts(pocketDraftIndexKey(otherGenesis,owner)).length,0);
+touchPocketDraft(ownerIndex,first);
+assert.equal(listPocketDrafts(ownerIndex)[0].id,first);
+store.set(`${ownerIndex}:draft:${first}`,'{}');
+store.set(`${ownerIndex}:draft:${second}`,'{}');
+removePocketDraft(ownerIndex,first);
+assert.deepEqual(listPocketDrafts(ownerIndex).map(item=>item.id),[second]);
+assert.equal(store.has(`${ownerIndex}:draft:${first}`),false);
+assert.equal(store.has(`${ownerIndex}:draft:${second}`),true);
+assert.equal(listPocketDrafts(pocketDraftIndexKey(genesis,otherOwner)).length,0);
+store.set(ownerIndex,'{"privateKey":"should not be accepted"}');
+assert.deepEqual(listPocketDrafts(ownerIndex),[]);
+console.log('Saved Pocket drafts use independent IDs scoped to owner and genesis, and malformed index data is ignored');

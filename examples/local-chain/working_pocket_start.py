@@ -48,7 +48,7 @@ def lost_response_proxy(target_url,target_transaction):
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     return server,thread,f'http://127.0.0.1:{server.server_port}'
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--ckb',type=Path);ap.add_argument('--run-dir',type=Path);ap.add_argument('--scenario',choices=['app'],default='app');ap.add_argument('--port',type=int,default=4173);ap.add_argument('--resume',action='store_true')
+    ap=argparse.ArgumentParser();ap.add_argument('--ckb',type=Path);ap.add_argument('--run-dir',type=Path);ap.add_argument('--scenario',choices=['app','supervisor'],default='app');ap.add_argument('--port',type=int,default=4173);ap.add_argument('--resume',action='store_true')
     opts=ap.parse_args();assert os.name=='nt','Only this Windows reproduction path has been qualified'
     started=datetime.datetime.now(datetime.timezone.utc).isoformat()
     cache=Path(os.environ['TEMP'])/'quotacell-wo07-tools';cache.mkdir(exist_ok=True)
@@ -154,6 +154,28 @@ type.args = "0x59297894bff4b8f7e1427bf4943b467ba168565d25fe75de207c146debaec14b"
         if opts.scenario=='app':
             subprocess.run(['node','--experimental-strip-types',str(HERE/'working_pocket_server.mjs'),str(run),str(opts.port)],cwd=HERE,check=True,env={**os.environ,'QUOTACELL_DEV_SIGNER':'1'})
             return
+        if opts.scenario=='supervisor':
+            stop_file=run/'supervisor-test-stop'
+            fixture_ready=run/'supervisor-test-ready'
+            print('Disposable supervisor chain fixture ready',flush=True)
+            while not fixture_ready.exists() and not stop_file.exists(): time.sleep(.2)
+            if stop_file.exists(): return
+            restart_count=0
+            while not stop_file.exists():
+                supervisor=subprocess.Popen(['node','--experimental-strip-types',str(HERE/'working_pocket_supervisor.mjs'),str(run),str(opts.port)],cwd=HERE,env={**os.environ,'QUOTACELL_DEV_SIGNER':'1'})
+                write(run/'supervisor-process.json',{'pid':supervisor.pid})
+                print(f'Started disposable supervisor pid {supervisor.pid}',flush=True)
+                while supervisor.poll() is None and not stop_file.exists(): time.sleep(.2)
+                if stop_file.exists():
+                    if supervisor.poll() is None:
+                        supervisor.terminate()
+                        try: supervisor.wait(timeout=15)
+                        except subprocess.TimeoutExpired: supervisor.kill();supervisor.wait(timeout=5)
+                    break
+                restart_count+=1
+                if restart_count>4: raise RuntimeError('Supervisor exited repeatedly during integration test')
+                print(f'Supervisor exited; restarting disposable service ({restart_count})',flush=True)
+            return
         if opts.scenario=='wo13':
             command(['node',HERE/'pocket-proof.mjs','native',run])
             write(evidence/'verdict.json',{'verdict':'WO13_NODE_RUN_COMPLETE','startedUTC':started,'finishedUTC':datetime.datetime.now(datetime.timezone.utc).isoformat()})
@@ -251,7 +273,10 @@ type.args = "0x59297894bff4b8f7e1427bf4943b467ba168565d25fe75de207c146debaec14b"
         shutil.copyfile(run/'execution.log',evidence/'execution.log')
         shutil.copyfile(run/'node.stderr.log',evidence/'node.stderr.log')
         shutil.copyfile(run/'node.stdout.log',evidence/'node.stdout.log')
-        saved=HERE/'results'/run.name;saved.parent.mkdir(exist_ok=True)
+        results_root=Path(os.environ.get('QUOTACELL_TEST_RESULTS_DIR',str(HERE/'results'))).resolve()
+        results_root.mkdir(parents=True,exist_ok=True)
+        saved=results_root/run.name
+        if saved.exists(): raise FileExistsError(f'Refusing to overwrite existing test evidence: {saved}')
         if opts.scenario=='wo12':
             saved.mkdir()
             selected=['environment.json','node-profile.json','01-authorized-v2-payment.json',

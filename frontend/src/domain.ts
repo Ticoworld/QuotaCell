@@ -32,16 +32,21 @@ export type UnsupportedFund = {
 
 export type PocketState = {
   empty?: boolean;
+  connectRequired?: boolean;
+  discovery?: { pocket: string; role: 'owner' | 'alice' | 'ben'; closed: boolean; verifiedAt?: number }[];
   closed?: boolean;
+  historicalTermsUnavailable?: boolean;
   unresolved?: boolean;
   recoveryRequired?: boolean;
   creationRecovery?: { txHash: string; state: string; reason?: string; recoveryAvailable: boolean };
   networkMode: string;
   genesis: string;
+  multiPocket?: boolean;
   pocket?: string;
   owner?: string;
   fundShannons?: string;
   fundOccupiedShannons?: string;
+  depositMayPrepare?: boolean;
   sharedLimit?: string;
   sharedUsed?: string;
   delegates?: DelegateState[];
@@ -49,6 +54,7 @@ export type PocketState = {
   policyCapacity?: string;
   hasFund?: boolean;
   history?: HistoryItem[];
+  historyPolicy?: { script: { code_hash: string; hash_type: string; args: string }; txHash: string };
   indexedTip?: { block_number: string; block_hash: string } | null;
 };
 
@@ -65,12 +71,24 @@ export type PreparedTransaction = {
   publicKey: string;
   genesis: string;
   fee: string;
+  ownerInputCapacity?: string;
+  ownerChangeCapacity?: string;
+  policyCapacity?: string;
+  minimumOwnerInputCapacity?: string;
+  terminalCapacity?: string;
+  journalScope?: string;
+  targetPocket?: string;
+  operationAmount?: string;
+  releasedCapacity?: string;
+  adminTerms?: { shared: string; alice: string; ben: string; mask: number };
 };
 
 export type TransactionResult = {
   txHash: string;
   state: string;
+  notSent?: boolean;
   error?: string;
   reason?: string;
   phase?: string;
+  pocket?: string;
 };

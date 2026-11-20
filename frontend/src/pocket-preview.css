@@ -1,0 +1,242 @@
+.pocket-product-header {
+  display:grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap:24px;
+  align-items:end;
+  margin-bottom:42px;
+}
+.pocket-product-header h2 { font-size:clamp(2.5rem,5vw,4.75rem) }
+.pocket-product-header p { margin:0; color:#475777 }
+.pocket-product-layout {
+  display:grid;
+  grid-template-columns:minmax(0, 2fr) minmax(0, 3fr);
+  grid-template-rows:auto auto auto 1fr;
+  gap:10px 36px;
+}
+.pocket-product-row { display:contents }
+.pocket-choice {
+  grid-column:1;
+  position:relative;
+  isolation:isolate;
+  overflow:hidden;
+  background:#fff;
+  border:1px solid #c8d6f4;
+  border-radius:12px;
+  transition:background-color 240ms, color 240ms;
+}
+.pocket-choice h3 { margin:0; font-size:1.2rem }
+.pocket-choice button {
+  display:block;
+  width:100%;
+  min-height:75px;
+  padding:16px 90px 16px 24px;
+  text-align:left;
+  font-weight:700;
+  border:0;
+  background:none;
+}
+.landing .pocket-choice button:focus-visible { outline-offset:-5px }
+.pocket-choice-number {
+  position:absolute;
+  z-index:-1;
+  right:16px;
+  bottom:-.16em;
+  color:#d8e4fb;
+  font-size:clamp(3.6rem,6vw,5rem);
+  font-weight:800;
+  line-height:1;
+  letter-spacing:-.1em;
+  pointer-events:none;
+}
+.pocket-choice:hover { background:#edf3ff }
+.pocket-product-row[data-active="true"] .pocket-choice { background:#1237a4; color:white; border-color:#1237a4 }
+.pocket-product-row[data-active="true"] .pocket-choice-number { color:#ffffff29 }
+.pocket-choice-detail {
+  display:grid;
+  grid-template-rows:0fr;
+  visibility:hidden;
+  transition:grid-template-rows 240ms ease, visibility 240ms;
+}
+.pocket-choice-detail > div { overflow:hidden }
+.pocket-choice-detail p { font-size:.94rem; margin:0; padding:0 84px 22px 24px; color:#e4edff }
+.pocket-product-row[data-active="true"] .pocket-choice-detail { grid-template-rows:1fr; visibility:visible }
+.pocket-product-panel {
+  grid-column:2;
+  grid-row:1 / -1;
+  min-width:0;
+  background:#e7efff;
+  border:1px solid #d1ddf4;
+  border-radius:14px;
+  padding:clamp(16px,4vw,48px);
+  background-image:radial-gradient(#7699d54d 1px, transparent 1px);
+  background-size:18px 18px;
+}
+.pocket-preview { display:grid; align-content:center; min-height:320px; gap:15px }
+.pocket-preview-card {
+  border:1px solid #c5d4ef;
+  border-radius:10px;
+  background:white;
+  box-shadow:0 14px 28px #132c6614;
+  overflow:hidden;
+  animation:pocket-preview-enter 300ms ease-out both;
+}
+.pocket-preview-amount { padding:18px 22px; display:grid; gap:3px; font-size:.85rem; color:#465778 }
+.pocket-preview-amount strong { font-size:clamp(2.15rem,4vw,3.5rem); line-height:1.1; color:var(--ink); font-variant-numeric:tabular-nums }
+.pocket-preview-amount strong small { font-size:.9rem; font-weight:650; color:#465778 }
+.pocket-preview-wallet {
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  align-items:center;
+  gap:10px;
+  padding:12px 22px;
+  border-top:1px solid #e1e8f6;
+  font-size:.85rem;
+}
+.pocket-preview-wallet small { display:block; color:#465778 }
+.pocket-preview-wallet-icon {
+  display:grid;
+  place-items:center;
+  background:#e7efff;
+  width:30px;
+  aspect-ratio:1;
+  border-radius:6px;
+  font-weight:750;
+}
+.pocket-preview-limits { display:grid; grid-template-columns:1fr 1fr; margin:0; border-top:1px solid #e1e8f6 }
+.landing .pocket-preview-limits > div { display:block; border-bottom:0; padding:15px 20px; min-width:0 }
+.pocket-preview-limits > div + div { border-left:1px solid #e1e8f6 }
+.pocket-preview-limits dt { font-size:.78rem; color:#465778 }
+.pocket-preview-limits dd { margin:4px 0 8px; font-variant-numeric:tabular-nums; font-size:.9rem }
+.pocket-preview-limits b { color:#1743c5 }
+.landing .pocket-preview-limits .pocket-preview-meter { display:block; padding:0; border:0; height:4px; background:#dfe8fc; border-radius:4px; overflow:hidden }
+.pocket-preview-meter i { display:block; height:100%; width:100%; background:#315de3; transform-origin:left; transform:scaleX(.5); animation:pocket-preview-spend 520ms 180ms ease-out both }
+.pocket-preview-closed { display:grid; gap:4px; padding:16px 22px; background:var(--night); color:white }
+.pocket-preview-closed span { font-size:.82rem; color:#c9d9f8 }
+.pocket-preview-proof { justify-self:end; font-size:.8rem; font-weight:650 }
+.pocket-preview-sr { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap }
+@keyframes pocket-preview-enter { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:none } }
+@keyframes pocket-preview-spend { from { transform:scaleX(1) } to { transform:scaleX(.5) } }
+@media (max-width:760px) {
+  .pocket-product-header { grid-template-columns:1fr; margin-bottom:24px }
+  .pocket-product-layout { display:block }
+  .pocket-product-row { display:block; margin-bottom:10px }
+  .pocket-product-panel { margin-top:8px }
+  .pocket-preview { min-height:0 }
+}
+@media (prefers-reduced-motion:reduce) {
+  .pocket-preview-card,.pocket-preview-meter i { animation:none }
+  .pocket-choice,.pocket-choice-detail { transition:none }
+}
+
+.pocket-preview--access .pocket-preview-amount { background:var(--night); color:#d3e3ff }
+.pocket-preview--access .pocket-preview-amount strong,
+.pocket-preview--access .pocket-preview-amount strong small { color:white }
+.pocket-preview--payment .pocket-preview-amount { background:#f4f8ff }
+.pocket-preview--closeout .pocket-preview-card { max-width:410px; width:100%; justify-self:center }
+.pocket-preview--closeout .pocket-preview-amount { padding-block:28px }
+@media (min-width:761px) {
+  .pocket-product-layout {
+    grid-template-columns:minmax(0, .82fr) minmax(0, 1.18fr);
+    grid-template-rows:auto auto auto minmax(0, 1fr);
+  }
+  .pocket-product-panel {
+    align-self:start;
+    min-height:374px;
+    padding:30px clamp(24px,3.5vw,48px);
+  }
+}
+.pocket-choice-number { bottom:-.06em; right:18px }
+.pocket-product-row[data-active="true"] .pocket-choice-number { color:#ffffff42 }
+.pocket-preview-card { position:relative; z-index:1 }
+.pocket-preview--access .pocket-preview-card { margin-inline-end:clamp(0px,2vw,24px) }
+.pocket-preview--payment .pocket-preview-amount {
+  margin:12px;
+  padding:18px;
+  border:1px solid #d6e3ff;
+  border-radius:8px;
+  background:#edf3ff;
+}
+.pocket-preview--closeout .pocket-preview-card { box-shadow:12px 12px 0 #ceddf8, 0 20px 38px #132c6622 }
+
+.pocket-product-panel {
+  background:#e8efff;
+  padding:18px 0;
+  overflow:hidden;
+}
+.pocket-preview { min-height:350px; align-content:stretch; grid-template-rows:1fr auto }
+.pocket-preview-scene {
+  position:relative;
+  display:grid;
+  align-items:center;
+  isolation:isolate;
+  overflow:hidden;
+  padding:48px clamp(18px,7%,54px) 26px;
+}
+.pocket-scene-context,.pocket-scene-wallets {
+  position:absolute;
+  z-index:-1;
+  display:grid;
+  gap:6px;
+  border-radius:12px;
+  padding:15px 18px;
+  box-shadow:0 8px 20px #132c6615;
+  font-size:.8rem;
+}
+.pocket-scene-context {
+  inset:0 auto auto 4%;
+  width:42%;
+  background:#172a53;
+  color:#e4edff;
+}
+.pocket-scene-context strong { font-size:1.45rem }
+.pocket-scene-context strong small { font-size:.7rem }
+.pocket-scene-wallets {
+  inset:auto -18px 0 auto;
+  width:43%;
+  background:#f7faff;
+  border:1px solid #cedaf2;
+}
+.pocket-scene-wallets div { padding-block:5px; border-top:1px solid #dfe8fa }
+.pocket-preview-scene .pocket-preview-card {
+  width:min(100%, 400px);
+  justify-self:center;
+  margin:0;
+  box-shadow:0 12px 30px #132c6633;
+}
+.pocket-preview--payment .pocket-preview-amount { margin:0; border:0; border-radius:0 }
+.pocket-preview--closeout .pocket-preview-card { width:min(100%, 345px) }
+.pocket-preview--closeout .pocket-scene-context { inset-inline-start:9% }
+@media (max-width:480px) {
+  .pocket-preview { min-height:0 }
+  .pocket-preview-scene { padding:40px 12px 14px }
+  .pocket-scene-context { width:65% }
+  .pocket-preview-wallet,.pocket-preview-limits > div { padding-inline:10px }
+}
+
+.pocket-access-map { display:grid; width:min(100%,420px); justify-self:center; text-align:center }
+.pocket-access-hub { justify-self:center; padding:15px 25px; border-radius:10px; background:var(--night); color:white }
+.pocket-access-branches { width:50%; height:34px; margin:0 auto; border-inline:2px solid #5278d4; border-top:2px solid #5278d4; position:relative; margin-top:20px }
+.pocket-access-branches::before { content:""; position:absolute; left:50%; bottom:100%; height:22px; border-left:2px solid #5278d4 }
+.pocket-access-wallets { display:grid; grid-template-columns:1fr 1fr; gap:12px }
+.pocket-access-wallets > div { display:grid; gap:7px; justify-items:center; background:white; border:1px solid #c5d4ef; padding:15px 8px; border-radius:10px; font-size:.85rem }
+.pocket-access-wallets span { color:#1743a0; font-size:.8rem }
+.pocket-preview-limits dd small { color:#52617c; margin-inline-start:5px }
+.pocket-preview--access .pocket-preview-scene { padding:16px }
+.pocket-preview--payment .pocket-preview-scene { background:linear-gradient(160deg,#e8efff 49%,#dae6ff 50%) }
+.pocket-preview--closeout .pocket-preview-scene { background:#dbe7ff }
+
+.pocket-preview-flow {
+  display:grid; grid-template-columns:auto minmax(16px,1fr) auto;
+  align-items:center; gap:9px;
+  padding:11px 15px; background:#111f44; color:#eaf2ff; font-size:.75rem;
+}
+.pocket-preview-flow i { position:relative; height:1px; background:#adc9ff }
+.pocket-preview-flow i::before {
+  content:""; position:absolute; inset:-3px auto auto 0; width:7px; height:7px;
+  border-radius:50%; background:#8be4ff; animation:pocket-transfer .7s .2s ease-out both;
+}
+@keyframes pocket-transfer { from { left:0 } to { left:calc(100% - 7px) } }
+.pocket-preview-proof { margin-inline:18px }
+@media (prefers-reduced-motion:reduce) {
+  .pocket-preview-flow i::before { animation:none; left:calc(100% - 7px) }
+}

@@ -1,7 +1,11 @@
-import type { WalletIdentity } from './domain';
+import type { PocketState, WalletIdentity } from './domain';
 
 const STANDARD_LOCK = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
-const CONNECTOR_SUCCESS_GRACE_MS = 2_000;
+const PUDGE_GENESIS = '0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606';
+const RESTORE_WAIT_MS = 8_000;
+const CONNECT_WAIT_MS = 120_000;
+const CKB_PROVIDER_METHODS = ['connect', 'isConnected', 'getAccount', 'getPublicKey', 'getNetwork', 'switchNetwork', 'signMessage', 'signTransaction', 'on', 'removeListener'];
+type ConnectorModule = typeof import('@ckb-ccc/connector');
 type Signer = {
   isConnected(): Promise<boolean>;
   getPublicKey(): Promise<string>;
@@ -11,91 +15,212 @@ type Signer = {
   provider?: { getNetwork?: () => Promise<string> };
   onReplaced?: (listener: () => void) => () => void;
 };
+type ConnectorState = {
+  ready: boolean;
+  signer?: Signer;
+  walletName?: string;
+  open: () => unknown;
+  disconnect: () => unknown;
+  isOpen: boolean;
+};
+
+export class WalletProviderUnavailableError extends Error {
+  constructor() {
+    super('UTXO Global Wallet provider is not available to this page.');
+    this.name = 'WalletProviderUnavailableError';
+  }
+}
+
+export class WalletTemporarilyUnavailableError extends Error {
+  constructor(cause?: unknown) {
+    super('The wallet is connected, but its identity check is temporarily unavailable.', { cause });
+    this.name = 'WalletTemporarilyUnavailableError';
+  }
+}
+
+export function isTemporaryWalletError(error: unknown) {
+  if (error instanceof WalletTemporarilyUnavailableError) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /failed to fetch|networkerror|network error|timed? ?out|temporar|rpc unavailable|provider.*not responding|message port closed/i.test(message);
+}
+
+export function hasUtxoGlobalCkbProvider(value: unknown) {
+  try {
+    if (!value || typeof value !== 'object') return false;
+    const provider = (value as { ckbSigner?: unknown }).ckbSigner;
+    if (!provider || typeof provider !== 'object') return false;
+    return CKB_PROVIDER_METHODS.every((method) => typeof (provider as Record<string, unknown>)[method] === 'function');
+  } catch { return false; }
+}
 
 export class CkbWalletSession {
-  private element: (HTMLElement & { client: unknown; name: string; hideKhie: boolean; disconnect?: () => void }) | undefined;
+  private state: ConnectorState | undefined;
   private signer: Signer | undefined;
   private walletName = '';
-  private epoch = 0;
-  private loadConnector?: Promise<typeof import('@ckb-ccc/connector')>;
+  private connectorModule?: Promise<ConnectorModule>;
+  private readonly listeners = new Set<() => void>();
+  private signerReplacementCleanup?: () => void;
+  private explicitDisconnect = false;
+  private connectionEpoch = 0;
+  private restoreInFlight?: Promise<WalletIdentity | null>;
 
-  async connect(): Promise<WalletIdentity> {
-    const connector = await (this.loadConnector ??= import('@ckb-ccc/connector'));
-    if (this.element && this.signer) return this.identity();
-    if (this.element) {
-      this.element.hidden = false;
-      return new Promise((resolve, reject) => this.element!.addEventListener('connection', (event) => this.accept(event, resolve, reject), { once: true }));
+  get hasSigner() { return Boolean(this.signer); }
+  get connectorReady() { return Boolean(this.state?.ready); }
+
+  private connector() {
+    return this.connectorModule ??= import('@ckb-ccc/connector');
+  }
+
+  attachConnectorState(state: ConnectorState) {
+    const previousSigner = this.signer;
+    this.state = state;
+    if (state.signer && !this.explicitDisconnect) {
+      this.signer = state.signer;
+      this.walletName = state.walletName || '';
     }
-    const epoch = ++this.epoch;
-    const client = new connector.ClientPublicTestnet({ url: `${location.origin}/api/ckb`, fallbacks: [] });
-    const element = document.createElement('ccc-connector') as CkbWalletSession['element'] & HTMLElement;
-    element.client = client;
-    element.name = 'QuotaCell';
-    element.hideKhie = true;
-    this.element = element;
-    return new Promise((resolve, reject) => {
-      element.addEventListener('connection', (event) => {
-        if (epoch !== this.epoch) return reject(new Error('Wallet session changed. Connect again.'));
-        this.accept(event, resolve, reject);
-      }, { once: true });
-      // CCC dispatches close after its animation, then performs an async signer check
-      // before emitting connection. Give that success event time to arrive.
-      element.addEventListener('close', () => {
-        element.hidden = true;
-        window.setTimeout(() => {
-          if (epoch === this.epoch && !this.signer) reject(new Error('Wallet connection was canceled.'));
-        }, CONNECTOR_SUCCESS_GRACE_MS);
-      }, { once: true });
-      document.body.append(element);
-    });
+    if (previousSigner !== this.signer) {
+      this.signerReplacementCleanup?.();
+      this.signerReplacementCleanup = this.signer?.onReplaced?.(() => this.emit()) ?? undefined;
+    }
+    if (!state.signer && previousSigner && !this.explicitDisconnect) {
+      void previousSigner.isConnected().then((connected) => {
+        if (connected || this.signer !== previousSigner || this.explicitDisconnect) return;
+        this.signer = undefined;
+        this.walletName = '';
+        this.signerReplacementCleanup?.();
+        this.signerReplacementCleanup = undefined;
+        this.emit();
+      }).catch(() => {});
+    }
+    this.emit();
   }
 
-  private accept(event: Event, resolve: (identity: WalletIdentity) => void, reject: (error: Error) => void) {
-    try {
-      const detail = event as Event & { connectionOwner?: { value?: { signerInfo?: { signer?: Signer }; wallet?: { name?: string } } } };
-      this.signer = detail.connectionOwner?.value?.signerInfo?.signer;
-      this.walletName = detail.connectionOwner?.value?.wallet?.name || '';
-      void this.identity().then(resolve, reject);
-    } catch (error) { reject(error instanceof Error ? error : new Error(String(error))); }
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
-  async identity(): Promise<WalletIdentity> {
-    const connector = await (this.loadConnector ??= import('@ckb-ccc/connector'));
-    const signer = this.signer;
-    if (!signer || !await signer.isConnected()) throw new Error('Wallet disconnected. Connect again to continue.');
-    if (this.walletName !== 'UTXO Global Wallet') throw new Error('This prototype has verified UTXO Global Wallet signing only.');
+  private emit() {
+    for (const listener of this.listeners) listener();
+  }
+
+  private async validateSigner(signer: Signer, walletName: string): Promise<WalletIdentity> {
+    const connector = await this.connector();
+    let connected: boolean;
+    try { connected = await signer.isConnected(); }
+    catch (cause) { throw new WalletTemporarilyUnavailableError(cause); }
+    if (!connected) throw new Error('Wallet disconnected. Connect again to continue.');
+    if (walletName !== 'UTXO Global Wallet') throw new Error('This prototype has verified UTXO Global Wallet signing only.');
     if (signer.signType !== connector.SignerSignType.CkbSecp256k1) throw new Error('QCN4 needs a CKB secp256k1 wallet account.');
-    if (typeof signer.provider?.getNetwork !== 'function' || await signer.provider.getNetwork() !== 'nervos_testnet') throw new Error('Select CKB testnet in the wallet, then connect again.');
-    const publicKey = await signer.getPublicKey();
+    if (typeof signer.provider?.getNetwork !== 'function') throw new Error('The wallet does not expose its CKB network.');
+    let network: string;
+    try { network = await signer.provider.getNetwork(); }
+    catch (cause) { throw new WalletTemporarilyUnavailableError(cause); }
+    if (network !== 'nervos_testnet') throw new Error('Select CKB testnet in the wallet, then connect again.');
+    let publicKey: string;
+    try { publicKey = await signer.getPublicKey(); }
+    catch (cause) { throw new WalletTemporarilyUnavailableError(cause); }
     if (!/^0x0[23][0-9a-f]{64}$/i.test(publicKey)) throw new Error('The wallet did not provide a compressed CKB secp256k1 public key.');
-    const address = await signer.getRecommendedAddressObj();
+    let address: any;
+    try { address = await signer.getRecommendedAddressObj(); }
+    catch (cause) { throw new WalletTemporarilyUnavailableError(cause); }
     const expectedArgs = connector.hashCkb(connector.bytesFrom(publicKey)).slice(0, 42);
     if (!address?.script || address.script.codeHash !== STANDARD_LOCK || address.script.hashType !== 'type' || address.script.args !== expectedArgs) throw new Error('The connected address does not match the supported CKB lock.');
     return { publicKey, address: await address.toString() };
   }
 
+  private waitForSigner(timeoutMs: number) {
+    if (this.signer) return Promise.resolve(this.signer);
+    return new Promise<Signer | undefined>((resolve) => {
+      let settled = false;
+      let sawOpen = this.state?.isOpen === true;
+      const finish = (signer?: Signer) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        unsubscribe();
+        resolve(signer);
+      };
+      const unsubscribe = this.subscribe(() => {
+        if (this.signer) return finish(this.signer);
+        if (this.state?.isOpen) sawOpen = true;
+        else if (sawOpen) finish();
+      });
+      const timer = window.setTimeout(() => finish(this.signer), timeoutMs);
+    });
+  }
+
+  async restore(validatePudge?: (identity: WalletIdentity) => Promise<boolean>): Promise<WalletIdentity | null> {
+    if (this.restoreInFlight) return this.restoreInFlight;
+    const task = (async () => {
+      if (!this.state?.ready) return null;
+      const signer = await this.waitForSigner(RESTORE_WAIT_MS);
+      if (!signer) return null;
+      try {
+        const identity = await this.validateSigner(signer, this.walletName);
+        if (validatePudge && !await validatePudge(identity)) return null;
+        return identity;
+      } catch { return null; }
+    })();
+    const tracked = task.finally(() => { if (this.restoreInFlight === tracked) this.restoreInFlight = undefined; });
+    this.restoreInFlight = tracked;
+    return tracked;
+  }
+
+  async connect(): Promise<WalletIdentity> {
+    if (!this.state?.ready) throw new Error('Wallet connector is still starting. Try Connect wallet again in a moment.');
+    this.explicitDisconnect = false;
+    const epoch = ++this.connectionEpoch;
+    if (this.signer) return this.identity();
+    const connected = this.waitForSigner(CONNECT_WAIT_MS);
+    try { this.state.open(); }
+    catch (cause) { throw cause instanceof Error ? cause : new Error(String(cause)); }
+    const signer = await connected;
+    if (epoch !== this.connectionEpoch) throw new Error('Wallet session changed. Connect again.');
+    if (!signer) throw new Error('Wallet connection was canceled.');
+    return this.validateSigner(signer, this.walletName);
+  }
+
+  async identity(): Promise<WalletIdentity> {
+    const signer = this.signer;
+    if (!signer) throw new Error('Wallet disconnected. Connect again to continue.');
+    return this.validateSigner(signer, this.walletName);
+  }
+
   async sign(transactionHex: string, expectedPublicKey: string): Promise<string> {
-    const connector = await (this.loadConnector ??= import('@ckb-ccc/connector'));
+    const connector = await this.connector();
     const before = await this.identity();
-    if (before.publicKey !== expectedPublicKey) throw new Error('Connected wallet does not match the required Pocket role.');
+    if (before.publicKey.toLowerCase() !== expectedPublicKey.toLowerCase()) throw new Error('Connected wallet does not match the required Pocket role.');
     const signer = this.signer!;
     const prepared = connector.Transaction.fromBytes(transactionHex);
-    const signed = await signer.signOnlyTransaction(connector.Transaction.fromBytes(prepared.toBytes()));
+    let signed: { toHex(): string };
+    try { signed = await signer.signOnlyTransaction(connector.Transaction.fromBytes(prepared.toBytes())); }
+    catch (cause) { throw cause instanceof Error ? cause : new Error(String(cause)); }
     const after = await this.identity();
     if (signer !== this.signer || before.publicKey !== after.publicKey) throw new Error('Wallet account changed while signing. No transaction was submitted.');
     return signed.toHex();
   }
 
   onAccountOrNetworkChange(listener: () => void) {
-    return this.signer?.onReplaced?.(listener) ?? (() => undefined);
+    return this.subscribe(listener);
   }
 
   disconnect() {
-    this.epoch += 1;
-    this.element?.disconnect?.();
-    this.element?.remove();
-    this.element = undefined;
+    this.explicitDisconnect = true;
+    this.connectionEpoch += 1;
+    this.signerReplacementCleanup?.();
+    this.signerReplacementCleanup = undefined;
     this.signer = undefined;
     this.walletName = '';
+    this.emit();
+    void this.state?.disconnect();
   }
+}
+
+export const wallet = new CkbWalletSession();
+
+export function isVerifiedPudgeContext(state: PocketState, selectedPocket = '') {
+  return state.networkMode?.startsWith('pudge') === true
+    && state.genesis?.toLowerCase() === PUDGE_GENESIS
+    && (!selectedPocket || state.pocket?.toLowerCase() === selectedPocket.toLowerCase());
 }

@@ -91,6 +91,9 @@ try{
       assert.equal(state.creationRecovery.state,'uncertain');
       assert.equal(state.creationRecovery.recoveryAvailable,true);
 
+      const internal=await fetch(`${origin}/api/internal/intents`);
+      assert.equal(internal.status,404,'Worker-only journal routes must stay unavailable on the standalone backend');
+
       const blocked=await fetch(`${origin}/api/ckb`,{
         method:'POST',
         headers:{origin,'content-type':'application/json'},

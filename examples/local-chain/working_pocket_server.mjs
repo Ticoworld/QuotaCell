@@ -7,7 +7,7 @@ import {callRpc} from './pocket_rpc_retry.mjs';
 import {verifyNetwork} from './pocket_network.mjs';
 import {parseCkb,recipientArgs} from './pocket_input.mjs';
 import {buildGenesis} from './pocket_genesis.mjs';
-import {discoverIndexed,discoverIndexedWithRetry,withIndexedTipRetry} from './pocket_indexed_discovery.mjs';
+import {discoverIndexed,discoverIndexedWithRetry,discoverIndexedBatch,discoverActorPolicies,discoverActorPoliciesLocal,withIndexedTipRetry} from './pocket_indexed_discovery.mjs';
 import {discoverPolicy} from './pocket_discovery.mjs';
 import {discoverPlainCells} from './pocket_cell_discovery.mjs';
 import {buildPayment} from './pocket_payment.ts';
@@ -17,13 +17,17 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import {AsyncLocalStorage} from 'node:async_hooks';
 import {fileURLToPath} from 'node:url';
+import {acquireRuntimeLock} from './runtime_lock.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const developmentSigner=process.env.QUOTACELL_DEV_SIGNER==='1';
+const preparationTrace=new AsyncLocalStorage();
 const run=path.resolve(process.argv[2]||'');
 const port=Number(process.argv[3]||4173);
 assert(Number.isInteger(port)&&port>1024&&port<65536);
+const runtimeLock=process.env.QUOTACELL_SUPERVISOR_TOKEN?null:await acquireRuntimeLock(run);
 const origin=`http://127.0.0.1:${port}`;
 const load=async name=>JSON.parse(await fs.readFile(path.join(run,name+'.json'),'utf8'));
 const optional=async name=>{try{return await load(name);}catch(e){if(e.code==='ENOENT')return null;throw e;}};
@@ -36,6 +40,7 @@ assert(Boolean(initial)===Boolean(actors),'Development context and actors must b
 const environment=deployment||initial;
 assert(environment,'A public deployment.json is required when no development Pocket exists');
 const networkMode=process.env.QUOTACELL_NETWORK||'isolated';
+if(networkMode==='pudge-prepare-only')assert.notEqual(process.env.QUOTACELL_PUDGE_BROADCAST,'1','Pudge broadcast must stay disabled in preparation-only mode');
 const rpcUrl=process.env.QUOTACELL_TEST_RPC_PROXY||runtime.url;
 assert(!process.env.QUOTACELL_TEST_RPC_PROXY||networkMode==='isolated','The test RPC proxy is restricted to isolated chains');
 const K='0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
@@ -50,19 +55,55 @@ const transactionFromRaw=x=>c.Transaction.from({version:BigInt(x.version),cellDe
 async function atValidationPhase(phase,action){try{return await action();}catch(error){const wrapped=new Error(error?.message||String(error),{cause:error});wrapped.validationPhase=phase;if(error?.rpc)wrapped.rpc=error.rpc;throw wrapped;}}
 let rid=0;
 async function rpc(method,params=[]){
- return callRpc(method,async()=>{
+ const trace=preparationTrace.getStore(),started=performance.now();let failed=false;
+ try{return await callRpc(method,async()=>{
   const res=await fetch(rpcUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:++rid,method,params}),signal:AbortSignal.timeout(method==='get_live_cell'?30000:15000)});
   const x=await res.json();if(x.error)throw Object.assign(new Error(JSON.stringify(x.error)),{rpc:x.error,retryable:false});return x.result;
- });
+ });}catch(error){failed=true;throw error;}finally{
+  if(trace){const ms=Math.round((performance.now()-started)*100)/100;const metric=trace.rpc[method]||(trace.rpc[method]={count:0,totalMs:0,maxMs:0,failures:0});metric.count++;metric.totalMs+=ms;metric.maxMs=Math.max(metric.maxMs,ms);if(failed)metric.failures++;console.log(JSON.stringify({event:'pocket-preparation-rpc',id:trace.id,method,ms,failed}));}
+ }
+}
+async function preparationStage(name,action){
+ const trace=preparationTrace.getStore(),started=performance.now();let failed=false;
+ try{return await action();}catch(error){failed=true;throw error;}finally{
+  if(trace){const ms=Math.round((performance.now()-started)*100)/100;trace.stages[name]=ms;console.log(JSON.stringify({event:'pocket-preparation-stage',id:trace.id,stage:name,ms,failed}));}
+ }
+}
+async function tracePreparation(id,action){
+ const trace={id,stages:{},rpc:{}},started=performance.now();
+ try{return await preparationTrace.run(trace,action);}finally{console.log(JSON.stringify({event:'pocket-preparation-total',id,ms:Math.round((performance.now()-started)*100)/100,stages:trace.stages,rpc:trace.rpc}));}
 }
 async function live(p){const x=await rpc('get_live_cell',[point(p),true]);assert.equal(x.status,'live','Input is stale');return {...x,outPoint:p};}
-async function verifyEnvironment(){
- await verifyNetwork({mode:networkMode,url:rpcUrl,rpc,expectedGenesis:profile.genesisHeader.hash,developmentSigner});
- for(const n of ['A','F','Q']){const x=await live(environment.deployed[n]);assert.equal(c.hashCkb(buf(x.cell.data.content)),hashes[n],`Wrong ${n} dependency`);}
- const group=await live(environment.kdep.outPoint),data=buf(group.cell.data.content);assert.equal(data.length,76);assert.equal(data.readUInt32LE(0),2,'Invalid K dependency group');
+let verifiedDependencyCells;
+async function verifyDependencies(){
+ if(verifiedDependencyCells){
+  const current=await Promise.all(verifiedDependencyCells.map(async item=>({item,cell:await rpc('get_live_cell',[point(item.outPoint),false])})));
+  for(const {item,cell} of current){assert.equal(cell.status,'live',`${item.name} dependency is stale`);assert.deepEqual(cell.cell.output,item.cell.output,`${item.name} dependency output changed`);}
+  return;
+ }
+ const [a,f,q,group]=await Promise.all([
+  live(environment.deployed.A),live(environment.deployed.F),live(environment.deployed.Q),live(environment.kdep.outPoint)
+ ]);
+ for(const [n,x] of [['A',a],['F',f],['Q',q]])assert.equal(c.hashCkb(buf(x.cell.data.content)),hashes[n],`Wrong ${n} dependency`);
+ const data=buf(group.cell.data.content);assert.equal(data.length,76);assert.equal(data.readUInt32LE(0),2,'Invalid K dependency group');
  const members=[0,1].map(j=>({txHash:hex(data.subarray(4+j*36,36+j*36)),index:data.readUInt32LE(36+j*36)}));
- for(const [i,n] of ['Kdata','Kcode'].entries()){const x=await live(members[i]);assert.equal(c.hashCkb(buf(x.cell.data.content)),hashes[n]);if(n==='Kcode'){const t=x.cell.output.type;assert(t);assert.equal(c.Script.from({codeHash:t.code_hash,hashType:t.hash_type,args:t.args}).hash(),K);}}
+ const kCells=await Promise.all(members.map(live));
+ for(const [i,n] of ['Kdata','Kcode'].entries()){const x=kCells[i];assert.equal(c.hashCkb(buf(x.cell.data.content)),hashes[n]);if(n==='Kcode'){const t=x.cell.output.type;assert(t);assert.equal(c.Script.from({codeHash:t.code_hash,hashType:t.hash_type,args:t.args}).hash(),K);}}
  assert.deepEqual(environment.allDeps,[environment.kdep,...['A','F','Q'].map(n=>({outPoint:environment.deployed[n],depType:'code'}))]);
+ verifiedDependencyCells=[
+  {name:'A',outPoint:environment.deployed.A,cell:a.cell},
+  {name:'F',outPoint:environment.deployed.F,cell:f.cell},
+  {name:'Q',outPoint:environment.deployed.Q,cell:q.cell},
+  {name:'K dependency group',outPoint:environment.kdep.outPoint,cell:group.cell},
+  ...kCells.map((x,i)=>({name:i===0?'K data':'K code',outPoint:members[i],cell:x.cell})),
+ ];
+}
+async function verifyEnvironment(){
+ const [network]=await Promise.all([
+  verifyNetwork({mode:networkMode,url:rpcUrl,rpc,expectedGenesis:profile.genesisHeader.hash,developmentSigner}),
+  verifyDependencies()
+ ]);
+ void network;
 }
 const db=new DatabaseSync(path.join(run,'working-pocket.sqlite'));
 db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS intents (id TEXT PRIMARY KEY, genesis TEXT NOT NULL, pocket TEXT NOT NULL, actor TEXT NOT NULL, recipient TEXT NOT NULL, amount TEXT NOT NULL, tx_hash TEXT NOT NULL, signed TEXT NOT NULL, state TEXT NOT NULL, created TEXT NOT NULL, phase TEXT NOT NULL DEFAULT 'intent-persisted')");
@@ -71,6 +112,7 @@ if(!db.prepare('PRAGMA table_info(intents)').all().some(x=>x.name==='recovery_js
 if(!db.prepare('PRAGMA table_info(intents)').all().some(x=>x.name==='phase'))db.exec("ALTER TABLE intents ADD COLUMN phase TEXT NOT NULL DEFAULT 'legacy-unknown'");
 const insert=db.prepare('INSERT INTO intents (id,genesis,pocket,actor,recipient,amount,tx_hash,signed,state,created,phase,operation,recovery_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
 const rows=()=>db.prepare('SELECT * FROM intents ORDER BY rowid').all();
+const rowsForPocket=pocket=>rows().filter(item=>item.genesis===profile.genesisHeader.hash&&item.pocket===pocket);
 const update=db.prepare('UPDATE intents SET state=? WHERE id=?');
 const updatePhase=db.prepare('UPDATE intents SET phase=? WHERE id=?');
 await verifyEnvironment();
@@ -80,33 +122,43 @@ const walletBundle=(await build({entryPoints:[path.join(here,'working_pocket_wal
 async function canonicalCommit(tx){if(tx?.tx_status?.status!=='committed')return false;const header=await rpc('get_header',[tx.tx_status.block_hash]);return !!header && await rpc('get_block_hash',[header.number])===header.hash;}
 async function snapshot({currentIntent}={}){
  assert(initial&&actors,'No Pocket is open');
+ const pocketId=c.Script.from(initial.Q).hash(),pocketRows=rowsForPocket(pocketId);
  const state=structuredClone(initial);let unresolved=false,installedGenesis=null;
  let indexedTip=null;
  if(initial.expected){
   const expectedKeys=[initial.expected.ownerPublicKey,...initial.expected.delegates.map(d=>d.publicKey)];
-  for(const [i,role] of ['owner','alice','ben'].entries()){assert.equal(actors[role].publicKey,expectedKeys[i],'Pocket actor identity mismatch');assert(c.Script.from(actors[role].lock).eq(lockFor(expectedKeys[i])),'Pocket actor lock mismatch');}
+  for(const [i,role] of ['owner','alice','ben'].entries()){if(!expectedKeys[i])continue;assert.equal(actors[role].publicKey,expectedKeys[i],'Pocket actor identity mismatch');assert(c.Script.from(actors[role].lock).eq(lockFor(expectedKeys[i])),'Pocket actor lock mismatch');}
   assert(c.Script.from(initial.F).eq(c.Script.from({codeHash:hashes.F,hashType:'data1',args:c.Script.from(initial.Q).hash()})),'Pocket fund identity mismatch');
   let found,fundCells,ownerCells,aliceCells,benCells,unsupportedFunds=[];
   if(networkMode==='isolated'){
    found=await discoverPolicy({rpc,policy:initial.Q,expected:initial.expected});
-   const results=await Promise.all([initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map((lock,i)=>discoverPlainCells({rpc,lock,includeUnsupported:i===0})));[fundCells,ownerCells,aliceCells,benCells]=results.map(r=>r.cells);unsupportedFunds=results[0].unsupported;
+   const results=await Promise.all([initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map((lock,i)=>discoverPlainCells({rpc,lock,includeUnsupported:true})));[fundCells,ownerCells,aliceCells,benCells]=results.map(r=>r.cells);unsupportedFunds=results[0].unsupported;
   }else{
-   const results=await withIndexedTipRetry(async()=>{
-    const indexedSnapshot=await rpc('get_indexer_tip');
-    const scans=[discoverIndexed({rpc,policy:initial.Q,expected:initial.expected,indexedSnapshot}),...[initial.F,actors.owner.lock,actors.alice.lock,actors.ben.lock].map((lock,i)=>discoverIndexed({rpc,lock,includeUnsupported:i===0,indexedSnapshot}))];
-    const found=await Promise.all(scans),tip=found[0].indexedTip;for(const result of found)assert.deepEqual(result.indexedTip,tip,'Indexed snapshots differ');return found;
-   });
+   const results=await withIndexedTipRetry(()=>discoverIndexedBatch({rpc,networkVerified:true,finalCellValidation:false,queries:[
+    {policy:initial.Q,expected:initial.expected},
+    {lock:initial.F,includeUnsupported:true},
+    {lock:actors.owner.lock},
+    {lock:actors.alice.lock},
+    {lock:actors.ben.lock}
+   ]}));
    indexedTip=results[0].indexedTip;
-   found=results[0].cells[0];[fundCells,ownerCells,aliceCells,benCells]=results.slice(1).map(r=>r.cells);unsupportedFunds=results[1].unsupported;
+   found=results[0].cells[0];[fundCells,ownerCells]=results.slice(1,3).map(r=>r.cells);if(found.cell.data.content.length!==58)[aliceCells,benCells]=results.slice(3).map(r=>r.cells);else{aliceCells=[];benCells=[];}unsupportedFunds=results[1].unsupported;
   }
   state.policy={txHash:found.outPoint.tx_hash,index:Number(BigInt(found.outPoint.index))};
-  const points=cells=>cells.sort((a,b)=>BigInt(a.cell.output.capacity)>BigInt(b.cell.output.capacity)?-1:1).map(x=>({txHash:x.outPoint.tx_hash,index:Number(BigInt(x.outPoint.index))}));
+  const points=cells=>cells.sort((a,b)=>{
+   const capacityA=BigInt(a.cell.output.capacity),capacityB=BigInt(b.cell.output.capacity);
+   if(capacityA!==capacityB)return capacityA>capacityB?-1:1;
+   const hashOrder=a.outPoint.tx_hash.localeCompare(b.outPoint.tx_hash);
+   if(hashOrder)return hashOrder;
+   const indexA=BigInt(a.outPoint.index),indexB=BigInt(b.outPoint.index);
+   return indexA<indexB?-1:indexA>indexB?1:0;
+  }).map(x=>({txHash:x.outPoint.tx_hash,index:Number(BigInt(x.outPoint.index))}));
   state.unsupportedFunds=unsupportedFunds.map(x=>({outPoint:x.outPoint,capacity:x.cell.output.capacity,hasType:!!x.cell.output.type,dataBytes:(x.cell.data.content.length-2)/2}));const funds=points(fundCells);state.funds=funds;state.fund=funds[0]||null;
   state.ownerFee=points(ownerCells)[0];state.seeds.alice=points(aliceCells)[0];state.seeds.ben=points(benCells)[0];
  }
 
   let skippedCurrentIntent=false;
- for(const item of rows()){
+ for(const item of pocketRows){
   if(currentIntent&&item.id===currentIntent.id){
    assert(!skippedCurrentIntent,'Duplicate current intent id');
    assert.equal(item.genesis,profile.genesisHeader.hash,'Current intent belongs to a different chain identity');
@@ -141,7 +193,7 @@ async function snapshot({currentIntent}={}){
  if(installedGenesis)update.run('committed',installedGenesis.id);
  const u=o=>s.readBigUInt64LE(o)+(s.readBigUInt64LE(o+8)<<64n);
  const delegates=['alice','ben'].map((role,i)=>{if(closed)return {role,limit:'0',used:'0',perPayment:'0',enabled:false,recipient:'',publicKey:''};const o=158+154*i;return {role,limit:u(o+106).toString(),used:u(o+122).toString(),perPayment:u(o+138).toString(),enabled:Boolean(s[7]&(1<<i)),recipient:c.Script.fromBytes(s.subarray(o+33,o+106)).args,publicKey:hex(s.subarray(o,o+33))};});
- return {state,p,f,fs,unresolved,closed,view:{unsupportedFunds:state.unsupportedFunds||[],networkMode,indexedTip,pocket:c.Script.from(initial.Q).hash(),genesis:profile.genesisHeader.hash,owner:actors.owner.publicKey,policyOutpoint:state.policy,fundShannons:fs.reduce((n,x)=>n+BigInt(x.cell.output.capacity),0n).toString(),fundOccupiedShannons:(BigInt(fs.length)*7300000000n).toString(),sharedLimit:closed?'0':u(8).toString(),sharedUsed:closed?'0':u(24).toString(),delegates,closed,hasFund:!!f,policyCapacity:p.cell.output.capacity,history:rows().map(({id,tx_hash,state,amount,recipient,created,actor,operation,phase})=>({id,tx_hash,state,amount,recipient,created,actor,operation,phase})),unresolved}};
+ return {state,p,f,fs,unresolved,closed,view:{unsupportedFunds:state.unsupportedFunds||[],networkMode,indexedTip,pocket:pocketId,genesis:profile.genesisHeader.hash,owner:actors.owner.publicKey,policyOutpoint:state.policy,fundShannons:fs.reduce((n,x)=>n+BigInt(x.cell.output.capacity),0n).toString(),fundOccupiedShannons:(BigInt(fs.length)*7300000000n).toString(),sharedLimit:closed?'0':u(8).toString(),sharedUsed:closed?'0':u(24).toString(),delegates,closed,historicalTermsUnavailable:closed&&Boolean(initial.discoveredClosed),hasFund:!!f,policyCapacity:p.cell.output.capacity,history:pocketRows.map(({id,tx_hash,state,amount,recipient,created,actor,operation,phase})=>({id,tx_hash,state,amount,recipient,created,actor,operation,phase})),unresolved}};
 }
 async function creationRecoveryState(){
  const item=rows().findLast(x=>x.operation==='genesis');if(!item)return null;
@@ -150,24 +202,67 @@ async function creationRecoveryState(){
  if(recovered.ready)return null;
  return {empty:false,recoveryRequired:true,unresolved:true,genesis:profile.genesisHeader.hash,networkMode,creationRecovery:{txHash:item.tx_hash,state:recovered.outcome.state,reason:recovered.outcome.reason||'',recoveryAvailable:!!item.recovery_json}};
 }
+async function installGenesisDescriptor(request){
+ const value={initial:request.next,actors:request.identities},file=path.join(run,'pocket.json'),temp=file+'.tmp';
+ if(descriptor){assert(installedCreationMatches({recovery_json:JSON.stringify(value)},descriptor),'Pocket descriptor conflicts with committed genesis');return;}
+ await fs.writeFile(temp,JSON.stringify(value));await fs.rename(temp,file);descriptor=value;initial=value.initial;actors=value.actors;
+}
 const lockFor=publicKey=>c.Script.from({codeHash:K,hashType:'type',args:c.hashCkb(buf(publicKey)).slice(0,42)});
+function reconstructDiscovered(candidate){
+ const policy=candidate.policy,data=buf(candidate.cell.data.content),closed=data.length===28;
+ const ownerPublicKey=closed?null:hex(data.subarray(125,158));
+ const linkOwner=candidate.role==='owner'&&closed?null:ownerPublicKey;
+ const ownerKey=ownerPublicKey||candidate.publicKey;
+ const delegates=closed?[]:[0,1].map(i=>{const offset=158+154*i;return {publicKey:hex(data.subarray(offset,offset+33)),recipient:c.Script.fromBytes(data.subarray(offset+33,offset+106)),limit:(data.readBigUInt64LE(offset+106)+(data.readBigUInt64LE(offset+114)<<64n)).toString(),perPayment:(data.readBigUInt64LE(offset+138)+(data.readBigUInt64LE(offset+146)<<64n)).toString()};});
+ const actors={owner:{publicKey:ownerKey,lock:lockFor(ownerKey)}};
+ for(const [i,role] of ['alice','ben'].entries())if(delegates[i])actors[role]={publicKey:delegates[i].publicKey,lock:lockFor(delegates[i].publicKey)};
+ const initial={...environment,Q:policy,F:{codeHash:hashes.F,hashType:'data1',args:policy.hash()},policy:{txHash:candidate.outPoint.tx_hash,index:Number(BigInt(candidate.outPoint.index))},fund:null,funds:[],ownerFee:null,seeds:{},expected:{ownerPublicKey:ownerKey,delegates,sharedLimit:closed?'0':(data.readBigUInt64LE(8)+(data.readBigUInt64LE(16)<<64n)).toString()},discoveredClosed:closed};
+ return {initial,actors};
+}
+async function discoverWalletActor(publicKey){
+ if(networkMode==='isolated')return discoverActorPoliciesLocal({rpc,publicKey,expectedGenesis:profile.genesisHeader.hash});
+ return withIndexedTipRetry(()=>discoverActorPolicies({rpc,publicKey}));
+}
+async function resolveLinkedPocket(url){
+ const pocket=url.searchParams.get('pocket'),publicKey=url.searchParams.get('actor');
+ assert(pocket&&/^0x[0-9a-f]{64}$/i.test(pocket),'Pocket link must contain an exact policy identity');
+ assert(publicKey&&/^0x0[23][0-9a-f]{64}$/i.test(publicKey),'Connect the authorized CKB wallet to open this Pocket link');
+ const found=await discoverWalletActor(publicKey);
+ const matches=found.candidates.filter(x=>x.policyHash.toLowerCase()===pocket.toLowerCase());
+ assert.equal(matches.length,1,matches.length?'Ambiguous matching Pocket identity':'This wallet is not authorized for that live Pocket, or the Pocket is no longer discoverable');
+ const context=reconstructDiscovered(matches[0]);
+ assert.equal(c.Script.from(context.initial.Q).hash().toLowerCase(),pocket.toLowerCase(),'Resolved Pocket identity mismatch');
+ return {candidate:matches[0],context,indexedTip:found.indexedTip||null};
+}
+async function loadLinkedPocket(url){
+ const linked=await resolveLinkedPocket(url);
+ initial=linked.context.initial;actors=linked.context.actors;
+ return linked;
+}
 async function selectedFee(){if(networkMode==='isolated')return 2000n;const f=await rpc('get_fee_rate_statistics',['0x65']);assert(f?.median,'Fee statistics unavailable');const fee=BigInt(f.median)*8n;assert(fee>0n&&fee<=1000000n,'Current fee exceeds policy bound');return fee;}
-async function transactionFee(tx){let total=0n;for(const i of tx.inputs){const cell=await live(i.previousOutput);total+=BigInt(cell.cell.output.capacity);}return (total-tx.outputs.reduce((sum,o)=>sum+o.capacity,0n)).toString();}
+async function transactionFee(tx,verifiedCells=[]){
+ const cells=new Map(verifiedCells.map(cell=>[cell.outPoint.txHash.toLowerCase()+':'+BigInt(cell.outPoint.index),cell]));
+ const missing=tx.inputs.map(input=>input.previousOutput).filter(point=>!cells.has(point.txHash.toLowerCase()+':'+BigInt(point.index)));
+ const fresh=await Promise.all(missing.map(live));for(const cell of fresh)cells.set(cell.outPoint.txHash.toLowerCase()+':'+BigInt(cell.outPoint.index),cell);
+ let total=0n;for(const input of tx.inputs){const key=input.previousOutput.txHash.toLowerCase()+':'+BigInt(input.previousOutput.index),cell=cells.get(key);assert(cell,'Missing verified transaction input');total+=BigInt(cell.cell.output.capacity);}
+ return (total-tx.outputs.reduce((sum,o)=>sum+o.capacity,0n)).toString();
+}
 async function prepareGenesis(body){
  assert(!busy,'Another action is in progress');busy=true;
  try{
   assert(!initial&&!rows().some(x=>x.operation==='genesis'),'A Pocket creation already exists');assert.match(body.id||'',/^[0-9a-f-]{36}$/);
   assert(!requests.has(body.id),'Intent already exists');assert(requests.size<128,'Too many outstanding signing requests');
   await verifyEnvironment();
-  const found=networkMode==='isolated'?await discoverPlainCells({rpc,lock:lockFor(body.publicKey)}):await discoverIndexedWithRetry({rpc,lock:lockFor(body.publicKey)});
+  const found=networkMode==='isolated'?await discoverPlainCells({rpc,lock:lockFor(body.publicKey),includeUnsupported:true}):await discoverIndexedWithRetry({rpc,lock:lockFor(body.publicKey)});
   const candidate=found.cells.find(x=>BigInt(x.cell.output.capacity)>=66100002000n);assert(candidate,'Owner needs a plain cell covering policy capacity and change');
   const ownerInput=await live({txHash:candidate.outPoint.tx_hash,index:Number(BigInt(candidate.outPoint.index))});
   const built=buildGenesis({ownerPublicKey:body.publicKey,delegates:body.delegates,sharedLimit:body.sharedLimit,ownerInput,deps:environment.allDeps,fee:await selectedFee()});
   const tx=built.transaction,client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}),info=await tx.getSignHashInfo(lockFor(body.publicKey),client);
   const next={...environment,Q:{codeHash:built.policy.codeHash,hashType:built.policy.hashType,args:built.policy.args},F:{codeHash:hashes.F,hashType:'data1',args:built.policy.hash()},policy:{txHash:tx.hash(),index:0},ownerFee:{txHash:tx.hash(),index:1},fund:null,seeds:{},expected:{ownerPublicKey:body.publicKey,delegates:body.delegates,sharedLimit:body.sharedLimit}};
   const identities=Object.fromEntries([['owner',body.publicKey],...body.delegates.map((d,i)=>[i?'ben':'alice',d.publicKey])].map(([role,publicKey])=>[role,{publicKey,lock:JSON.parse(JSON.stringify(lockFor(publicKey)))}]));
-  requests.set(body.id,{bytes:tx.toHex(),message:info.message,position:0,publicKey:body.publicKey,points:[ownerInput.outPoint],pocket:built.policy.hash(),amount:'0',recipient:lockFor(body.publicKey).args,operation:'genesis',expires:Date.now()+300000,next,identities});
-  return {id:body.id,transaction:tx.toHex(),publicKey:body.publicKey,genesis:profile.genesisHeader.hash,fee:await transactionFee(tx)};
+  requests.set(body.id,{bytes:tx.toHex(),message:info.message,position:0,publicKey:body.publicKey,points:[ownerInput.outPoint],pocket:built.policy.hash(),amount:'0',recipient:lockFor(body.publicKey).args,operation:'genesis',expires:Date.now()+30*60_000,next,identities});
+  const fee=await transactionFee(tx);
+  return {id:body.id,transaction:tx.toHex(),publicKey:body.publicKey,genesis:profile.genesisHeader.hash,fee,ownerInputCapacity:ownerInput.cell.output.capacity.toString(),ownerChangeCapacity:tx.outputs[1].capacity.toString(),policyCapacity:tx.outputs[0].capacity.toString(),minimumOwnerInputCapacity:(tx.outputs[0].capacity+6100000000n+BigInt(fee)).toString(),terminalCapacity:'13400000000'};
  }finally{busy=false;}
 }
 async function prepareExternal(body){
@@ -177,14 +272,16 @@ async function prepareExternal(body){
   assert(requests.size<128,'Too many outstanding signing requests');
   assert.match(body.id||'',/^[0-9a-f-]{36}$/);body.recipient=await recipientArgs(body.recipient,new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]}));
   assert(['alice','ben'].includes(body.role),'Unknown delegate');assert(!requests.has(body.id)&&!rows().some(x=>x.id===body.id),'Intent already exists');
-  await verifyEnvironment();const snap=await snapshot();assert(!snap.unresolved,'An earlier outcome is uncertain');
+   await preparationStage('network-and-dependency-verification',verifyEnvironment);
+   const snap=await preparationStage('pocket-policy-and-cell-discovery',snapshot);assert(!snap.unresolved,'An earlier outcome is uncertain');
   const grant=snap.view.delegates.find(d=>d.role===body.role);assert.equal(body.recipient,grant.recipient,'Recipient changed');
   assert.equal(body.publicKey,grant.publicKey,'Connected account is not the selected delegate');
-  const actor=await live(snap.state.seeds[body.role]),amount=parseCkb(body.amount);
-  const tx=buildPayment({policy:snap.p,actor,funds:snap.fs,deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee:await selectedFee()});
-  const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[]});const lock=c.Script.from(actors[body.role].lock),info=await tx.getSignHashInfo(lock,client);assert.equal(info.position,1);
-  const record={bytes:tx.toHex(),message:info.message,position:info.position,publicKey:grant.publicKey,points:[snap.state.policy,snap.state.seeds[body.role],...snap.state.funds||[snap.state.fund]],pocket:snap.view.pocket,amount:amount.toString(),recipient:body.recipient,operation:'pay',expires:Date.now()+300000};
-  requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash,fee:await transactionFee(tx)};
+   const amount=parseCkb(body.amount),actorPromise=preparationStage('canonical-chain-and-input-validation',()=>live(snap.state.seeds[body.role]));
+   const {actor,tx}=await preparationStage('fee-estimation-and-transaction-construction',async()=>{const [actor,fee]=await Promise.all([actorPromise,selectedFee()]);return {actor,tx:buildPayment({policy:snap.p,actor,funds:snap.fs,deps:environment.allDeps,delegate:body.role==='alice'?0:1,amount,fee})};});
+   const client=new c.ClientPublicTestnet({url:runtime.url,fallbacks:[],scripts:{[c.KnownScript.Secp256k1Blake160]:{codeHash:K,hashType:'type',cellDeps:[{cellDep:environment.kdep}]}}}),lock=c.Script.from(actors[body.role].lock),info=await preparationStage('signature-hash-preparation',()=>tx.getSignHashInfo(lock,client));assert.equal(info.position,1);
+  const record={bytes:tx.toHex(),message:info.message,position:info.position,publicKey:grant.publicKey,points:[snap.state.policy,snap.state.seeds[body.role],...snap.state.funds||[snap.state.fund]],pocket:snap.view.pocket,amount:amount.toString(),recipient:body.recipient,operation:'pay',expires:Date.now()+30*60_000};
+   const fee=await preparationStage('verified-input-fee-calculation',()=>transactionFee(tx,[snap.p,actor,...snap.fs]));
+   requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash,fee};
  }finally{busy=false;}
 }
 async function submitExternal(body){
@@ -205,7 +302,7 @@ async function submitExternal(body){
    for(const p of request.points)await live(p);
   }
   const recovery=request.operation==='genesis'?JSON.stringify({initial:request.next,actors:request.identities}):null;
-  const persistIntent=()=>{db.exec('BEGIN IMMEDIATE');try{assert(!rows().some(x=>x.state!=='committed'),'An outcome is uncertain');if(request.operation==='genesis')assert(!rows().some(x=>x.operation==='genesis'),'A Pocket creation already exists');insert.run(body.id,profile.genesisHeader.hash,request.pocket,request.publicKey,request.recipient,request.amount,signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),'intent-persisted',request.operation,recovery);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}};
+  const persistIntent=()=>{db.exec('BEGIN IMMEDIATE');try{assert(!rowsForPocket(request.pocket).some(x=>x.state!=='committed'),'An outcome is uncertain');if(request.operation==='genesis')assert(!rows().some(x=>x.operation==='genesis'),'A Pocket creation already exists');insert.run(body.id,profile.genesisHeader.hash,request.pocket,request.publicKey,request.recipient,request.amount,signed.hash(),JSON.stringify(signedRaw),'uncertain',new Date().toISOString(),'intent-persisted',request.operation,recovery);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}};
   const dryRun=async()=>{
    await atValidationPhase('network-check',verifyEnvironment);
    if(request.operation!=='genesis'){
@@ -219,8 +316,8 @@ async function submitExternal(body){
   };
   const submitted=await submitDurableCreation({persistIntent,dryRun,checkpoint:async phase=>updatePhase.run(phase,body.id),submit:async()=>networkMode==='pudge'?submitPublicTransaction({rpc,hash:signed.hash(),signed:signedRaw,enabled:process.env.QUOTACELL_PUDGE_BROADCAST==='1'}):(assert.equal(await rpc('send_transaction',[signedRaw,'passthrough']),signed.hash()),{state:'submitted'})});
   if(submitted.state==='uncertain'){update.run('uncertain',body.id);return {txHash:signed.hash(),...submitted};}
-  if(networkMode==='pudge'){update.run(submitted.state,body.id);return {txHash:signed.hash(),...submitted};}
-  for(let i=0;i<20;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));if(await canonicalCommit(await rpc('get_transaction',[signed.hash()]))){update.run('committed',body.id);if(request.operation==='genesis'){const d={initial:request.next,actors:request.identities};await fs.writeFile(path.join(run,'pocket.json.tmp'),JSON.stringify(d));await fs.rename(path.join(run,'pocket.json.tmp'),path.join(run,'pocket.json'));initial=d.initial;actors=d.actors;}return {txHash:signed.hash(),state:'committed'};}}
+  if(networkMode==='pudge'){update.run(submitted.state,body.id);if(request.operation==='genesis'&&submitted.state==='committed')await installGenesisDescriptor(request);return {txHash:signed.hash(),...submitted};}
+  for(let i=0;i<20;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));if(await canonicalCommit(await rpc('get_transaction',[signed.hash()]))){update.run('committed',body.id);if(request.operation==='genesis')await installGenesisDescriptor(request);return {txHash:signed.hash(),state:'committed'};}}
   return {txHash:signed.hash(),state:'uncertain'};
  }finally{busy=false;}
 }
@@ -331,7 +428,7 @@ async function ownerAction(body,external=false){
   if(external){
    for(const [id,request] of requests)if(request.expires<=Date.now())requests.delete(id);
    assert(requests.size<128,'Too many outstanding signing requests');
-   const record={bytes:tx.toHex(),message:info.message,position,publicKey:actors.owner.publicKey,points:inputs,pocket:snap.view.pocket,amount:amount.toString(),recipient:actors.owner.lock.args,operation:op,expires:Date.now()+300000};
+   const record={bytes:tx.toHex(),message:info.message,position,publicKey:actors.owner.publicKey,points:inputs,pocket:snap.view.pocket,amount:amount.toString(),recipient:actors.owner.lock.args,operation:op,expires:Date.now()+30*60_000};
    requests.set(body.id,record);return {id:body.id,transaction:record.bytes,publicKey:record.publicKey,genesis:profile.genesisHeader.hash,fee:await transactionFee(tx)};
   }
   const secret=await load('keys/owner'),signer=new c.SignerCkbPrivateKey(client,secret.privateKey);assert.equal(signer.publicKey,actors.owner.publicKey);
@@ -346,6 +443,8 @@ async function ownerAction(body,external=false){
 const html=await fs.readFile(path.join(here,'working_pocket.html'));
 const server=http.createServer(async(req,res)=>{
  try{
+  if(process.env.QUOTACELL_SUPERVISOR_TOKEN)assert.equal(req.headers['x-quotacell-supervisor-token'],process.env.QUOTACELL_SUPERVISOR_TOKEN,'Supervisor authorization required');
+  if(req.url.startsWith('/api/internal/')&&!process.env.QUOTACELL_SUPERVISOR_TOKEN){res.writeHead(404);res.end();return;}
   if(req.headers.host!==`127.0.0.1:${port}`)throw new Error('Invalid host');
   res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Content-Security-Policy',"default-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'self'");
   if(req.method==='GET'&&req.url==='/'){res.writeHead(200,{'content-type':'text/html; charset=utf-8'});res.end(html);return;}
@@ -355,11 +454,17 @@ const server=http.createServer(async(req,res)=>{
    const call=JSON.parse(body);assert(['get_fee_rate_statistics','get_tip_header','get_live_cell','get_transaction','get_header','get_block_hash','get_consensus'].includes(call.method),'RPC method unavailable');
    const result=await rpc(call.method,call.params||[]);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({jsonrpc:'2.0',id:call.id,result}));return;
   }
-  if(req.method==='GET'&&req.url==='/api/state'){const recovery=await creationRecoveryState();const s=recovery?{view:recovery}:initial?await snapshot():{view:{empty:true,genesis:profile.genesisHeader.hash,developmentSigner,networkMode}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(s.view));return;}
+  if(req.method==='GET'&&req.url.startsWith('/api/internal/health')){res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({genesis:profile.genesisHeader.hash,networkMode,pocket:initial?c.Script.from(initial.Q).hash():null}));return;}
+  if(req.method==='GET'&&req.url.startsWith('/api/internal/resolve?')){const resolved=await resolveLinkedPocket(new URL(req.url,origin));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({context:resolved.context,indexedTip:resolved.indexedTip,role:resolved.candidate.role}));return;}
+  if(req.method==='GET'&&req.url.startsWith('/api/internal/intent?')){const id=new URL(req.url,origin).searchParams.get('id');const item=rows().find(x=>x.id===id);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({intent:item?{id:item.id,genesis:item.genesis,pocket:item.pocket,txHash:item.tx_hash,state:item.state,phase:item.phase,operation:item.operation}:null}));return;}
+  if(req.method==='GET'&&req.url.startsWith('/api/internal/intents')){const items=rows().filter(x=>x.state!=='committed').map(item=>{const tx=transactionFromRaw(JSON.parse(item.signed));return {id:item.id,genesis:item.genesis,pocket:item.pocket,txHash:item.tx_hash,state:item.state,phase:item.phase,operation:item.operation,inputs:tx.inputs.map(input=>({txHash:input.previousOutput.txHash,index:BigInt(input.previousOutput.index).toString()}))};});res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({intents:items}));return;}
+  if(req.method==='POST'&&req.url==='/api/internal/cancel'){let body='';for await(const chunk of req){body+=chunk;assert(body.length<4096);}const input=JSON.parse(body);assert(!rows().some(x=>x.id===input.id),'A journaled intent cannot be canceled');requests.delete(input.id);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({canceled:true}));return;}
+  if(req.method==='GET'&&req.url.startsWith('/api/state')){const url=new URL(req.url,origin);if(url.searchParams.has('pocket')&&!url.searchParams.has('actor')){const view={connectRequired:true,pocket:url.searchParams.get('pocket'),genesis:profile.genesisHeader.hash,networkMode};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(view));return;}if(url.searchParams.has('actor')&&url.searchParams.has('selected')){const actor=url.searchParams.get('actor'),recovery=await creationRecoveryState();if(recovery){res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(recovery));return;}let view={empty:true,genesis:profile.genesisHeader.hash,networkMode};if(initial&&actors){const current=(await snapshot()).view,authorized=current.owner?.toLowerCase()===actor.toLowerCase()||!current.closed&&current.delegates?.some(item=>item.publicKey?.toLowerCase()===actor.toLowerCase());if(authorized)view=current;}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(view));return;}let linked=null;if(url.searchParams.has('pocket'))linked=await loadLinkedPocket(url);else if(url.searchParams.has('actor')){const actor=url.searchParams.get('actor');const found=await discoverWalletActor(actor),discovery=found.candidates.map(x=>({pocket:x.policyHash,role:x.role,closed:x.closed}));const view=discovery.length?{discovery,genesis:profile.genesisHeader.hash,networkMode}:{empty:true,genesis:profile.genesisHeader.hash,networkMode};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(view));return;}const recovery=await creationRecoveryState();const s=recovery?{view:recovery}:initial?await snapshot():{view:{empty:true,genesis:profile.genesisHeader.hash,developmentSigner,networkMode}};const view=s.view;if(linked)view.indexedTip=linked.indexedTip;res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(view));return;}
   if(req.method==='POST'&&networkMode==='pudge-readonly'&&!['/api/ckb','/api/reconcile'].includes(req.url))throw new Error('Pudge transactions are disabled pending dependency and wallet qualification');
+  if(req.method==='POST'&&networkMode==='pudge-prepare-only'&&!['/api/ckb','/api/reconcile','/api/external/genesis'].includes(req.url))throw new Error('Pudge preparation-only mode permits genesis review, not wallet signing or transaction submission');
   if(req.method==='POST'&&['/api/external/genesis','/api/external/prepare','/api/external/owner','/api/external/submit','/api/external/retry'].includes(req.url)){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');let body='';for await(const chunk of req){body+=chunk;assert(body.length<210000);}
-   const input=JSON.parse(body);const result=await (req.url.endsWith('/genesis')?prepareGenesis(input):req.url.endsWith('/owner')?ownerAction(input,true):req.url.endsWith('/prepare')?prepareExternal(input):req.url.endsWith('/retry')?retryExternal(input):submitExternal(input));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));return;
+    const input=JSON.parse(body);const result=await (req.url.endsWith('/genesis')?prepareGenesis(input):req.url.endsWith('/owner')?ownerAction(input,true):req.url.endsWith('/prepare')?tracePreparation(input.id||'missing-id',()=>prepareExternal(input)):req.url.endsWith('/retry')?retryExternal(input):submitExternal(input));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));return;
   }
   if(req.method==='POST'&&req.url==='/api/pay'){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');let body='';for await(const chunk of req){body+=chunk;assert(body.length<4096);}
@@ -371,9 +476,16 @@ const server=http.createServer(async(req,res)=>{
   }
   if(req.method==='POST'&&req.url==='/api/reconcile'){
    assert.equal(req.headers.origin,origin,'Invalid origin');assert.equal(req.headers['content-type'],'application/json');assert(!busy,'Another action is in progress');busy=true;
-   try{await verifyEnvironment();const outcomes=[];if(networkMode.startsWith('pudge')){for(const item of rows()){const result=await observePublicTransaction({rpc,hash:item.tx_hash,signed:JSON.parse(item.signed),priorState:item.state});update.run(result.state,item.id);outcomes.push({txHash:item.tx_hash,...result});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));return;}for(const item of rows().filter(x=>x.state!=='committed')){let tx=await rpc('get_transaction',[item.tx_hash]);if(['pending','proposed'].includes(tx?.tx_status?.status)){for(let i=0;i<8;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));tx=await rpc('get_transaction',[item.tx_hash]);if(await canonicalCommit(tx))break;}}if(await canonicalCommit(tx))update.run('committed',item.id);outcomes.push({txHash:item.tx_hash,status:tx?.tx_status?.status||'unknown'});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));}finally{busy=false;}return;
+   try{await verifyEnvironment();const outcomes=[];if(networkMode.startsWith('pudge')){for(const item of rows()){const result=await observePublicTransaction({rpc,hash:item.tx_hash,signed:JSON.parse(item.signed),priorState:item.state});update.run(result.state,item.id);outcomes.push({txHash:item.tx_hash,operation:item.operation,...result});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));return;}for(const item of rows().filter(x=>x.state!=='committed')){let tx=await rpc('get_transaction',[item.tx_hash]);if(['pending','proposed'].includes(tx?.tx_status?.status)){for(let i=0;i<8;i++){await rpc('generate_block');await new Promise(r=>setTimeout(r,200));tx=await rpc('get_transaction',[item.tx_hash]);if(await canonicalCommit(tx))break;}}if(await canonicalCommit(tx))update.run('committed',item.id);outcomes.push({txHash:item.tx_hash,status:tx?.tx_status?.status||'unknown',operation:item.operation});}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({outcomes}));}finally{busy=false;}return;
   }
   res.writeHead(404);res.end('Not found');
- }catch(e){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:e.message}));}
+ }catch(e){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:e.message,phase:e.validationPhase}));}
 });
+let shuttingDown=false;
+const shutdown=()=>{
+ if(shuttingDown)return;
+ shuttingDown=true;
+ server.close(()=>{db.close();runtimeLock?.release();process.exit(0);});
+};
+process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
 server.listen(port,'127.0.0.1',()=>console.log(`Working Pocket ${networkMode}: ${origin}`));

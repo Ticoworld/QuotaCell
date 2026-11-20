@@ -105,7 +105,7 @@ try{
  const hold=net.createServer();backendPort=await listen(hold);await close(hold);
  const origin='http://127.0.0.1:'+backendPort;
  runner=spawn('python',[path.join(here,'working_pocket_start.py'),'--scenario','app','--run-dir',run,'--port',String(backendPort)],{
-  cwd:here,windowsHide:true,env:{...process.env,QUOTACELL_TEST_RPC_PROXY:'http://127.0.0.1:'+proxyPort},stdio:['ignore','pipe','pipe']
+  cwd:here,windowsHide:true,env:{...process.env,QUOTACELL_TEST_RPC_PROXY:'http://127.0.0.1:'+proxyPort,QUOTACELL_TEST_RESULTS_DIR:path.join(root,'test-evidence')},stdio:['ignore','pipe','pipe']
  });
  runner.stdout.setEncoding('utf8');runner.stderr.setEncoding('utf8');
  runner.stdout.on('data',chunk=>{stdout=(stdout+chunk).slice(-12000);});runner.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-4000);});

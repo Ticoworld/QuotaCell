@@ -38,7 +38,7 @@ try{
   child.stdout.on('data',chunk=>output+=chunk);
   child.stderr.on('data',chunk=>output+=chunk);
 
-  const startupDeadline=Date.now()+15000;
+  const startupDeadline=Date.now()+90000;
   while(!output.includes('Working Pocket')){
     if(child.exitCode!==null)throw new Error(`Read-only backend exited with ${child.exitCode}:\n${output}`);
     assert(Date.now()<startupDeadline,`Read-only backend did not listen:\n${output}`);

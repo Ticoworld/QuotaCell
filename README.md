@@ -23,3 +23,7 @@ See the [WO18 public closeout and transaction evidence](examples/local-chain/WO1
 The interface remains developer-grade. Public lifecycle acceptance used one configured Pudge RPC endpoint; it is not an independent multi-provider audit or a security audit. The verified public lifecycle used UTXO Global Wallet. Reorganization handling, multi-fund consolidation, independent recovery, and descriptor-free cross-device Pocket operation remain limited. The owner key is required for owner recovery and its loss can strand funds. The public evidence records nine transactions, not broad production adoption.
 
 QuotaCell is licensed under [Apache-2.0](LICENSE), Copyright 2026 Ticoworld. Upstream components retain their own terms; see [third-party notices](THIRD_PARTY_NOTICES.md).
+
+## Public Pudge beta candidate
+
+The public web application runs on [Netlify](https://quotacell.netlify.app/). The beta candidate serves the product site at / and the wallet at /app. Use a compatible CKB wallet configured for Pudge and test CKB. See the [release note and tester guide](docs/PUBLIC_BETA.md) for network, capacity and audit limitations and the [public lifecycle record](examples/local-chain/WO18_PUBLIC_CLOSEOUT_20261115.md) for canonical transaction evidence.
