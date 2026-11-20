@@ -108,3 +108,71 @@ body { margin: 0 }
  height:12px;
  background:var(--blue);
 }
+/* The relationship and wallet share one continuous product surface. */
+.land-product {
+  background:linear-gradient(180deg,#081633,#102755 59%,#101e42);
+  color:#f1f6ff;
+}
+.land-relationship { display:grid; grid-template-columns:minmax(0,.73fr) minmax(0,1fr); align-items:center; gap:clamp(28px,6vw,96px); text-align:left }
+.land-relationship p { margin-inline:0 }
+.land-relationship h2,.land-showcase h2 { font-size:clamp(2.5rem,5.4vw,5.25rem) }
+.land-plan {
+  position:relative; isolation:isolate; overflow:hidden; margin:0;
+  background:radial-gradient(ellipse at center,#1d4381,#0a1838 72%);
+  border-color:#45679a; padding:30px clamp(16px,4vw,50px) 20px;
+}
+.land-circuit { position:absolute; inset:0; z-index:-1; pointer-events:none; opacity:.48 }
+.land-circuit i { position:absolute; inset:14% 9%; border:1px solid #547dbe; border-radius:38px; transform:rotate(-12deg) }
+.land-circuit i:nth-child(2) { inset:20% 5%; transform:rotate(12deg) }
+.land-circuit i:nth-child(3) { inset:26% 18%; border-color:#63c3ff; box-shadow:0 0 25px #407bd344 }
+.land-plan-owner,.land-plan button { background:#142956; color:#eaf4ff; border-color:#557caf }
+.land-plan-center { border-color:#7cddff; box-shadow:0 0 26px #42aaff56 }
+.land-plan-center::before,.land-plan-center::after,.land-plan button[aria-pressed=true]::before { background:#78e7ff }
+.land-path-note { color:#d7e7ff; text-align:center; font-size:.95rem!important }
+.land-rules { background:transparent; color:inherit }
+.land-showcase { border-top:1px solid #3c5682; padding-top:clamp(48px,7vw,94px) }
+.land-showcase > div:first-child { max-width:800px }
+.land-wallet {
+  display:grid; grid-template-columns:minmax(0,1fr) minmax(245px,32%); align-items:center;
+  gap:0; width:100%; background:none; border:0; overflow:visible; box-shadow:none;
+}
+.land-wallet-frame { border:1px solid #5888d0; background:#091b40; border-radius:16px; overflow:hidden; box-shadow:0 28px 70px #030c26a8 }
+.land-wallet-frame img { max-height:390px; object-fit:contain; object-position:left center }
+.land-wallet .land-policy {
+  z-index:1; margin-left:-22px; padding:12px 18px; border:1px solid #668fce;
+  border-radius:12px; color:#f0f6ff; background:#132953; box-shadow:0 12px 40px #050c2480;
+}
+.land-policy dt { color:#c3d6f9 }
+.land-policy dd { text-align:right }
+.land-control { border-top:1px solid #314c7f }
+.land-proof { background:#e7efff }
+.land-ledger { display:grid; grid-template-columns:minmax(0,.75fr) minmax(0,1.25fr); gap:clamp(24px,6vw,88px); align-items:start }
+.land-ledger h2 { font-size:clamp(2.35rem,4.8vw,4.5rem) }
+.land-receipts { background:#f6f9ff; border:1px solid #b4c8ed; border-radius:16px; overflow:hidden }
+.land-receipt-header { display:flex; justify-content:space-between; align-items:center; padding:14px 20px; background:#0c1b3e; color:#e5f1ff; font-weight:700 }
+.land-receipt-header i { display:inline-block; width:8px; height:8px; background:#79eaff; border-radius:50%; margin-right:8px }
+.land-receipt-header time { font-variant-numeric:tabular-nums; font-size:.82rem }
+.land-ledger ol { margin:0; padding:0 18px; list-style:none }
+.land-ledger li a { align-items:center; text-decoration:none; min-height:52px }
+.land-ledger li a:hover span { text-decoration:underline }
+.land-ledger li a:focus-visible { outline-offset:-3px }
+.land-ledger li:last-child a { border-bottom:0 }
+.land-ledger li code { color:#325789; font-size:.8rem }
+.land-end {
+  position:relative; isolation:isolate; overflow:hidden;
+  padding-inline:20px; color:white; background:#07132f;
+}
+.land-end::before {
+  content:""; position:absolute; inset:0; z-index:-1;
+  background:url('/field.webp') center 76% / cover;
+  opacity:.26; mask-image:linear-gradient(transparent,#000 85%);
+}
+.land-end .land-button { background:#bdf3ff; color:#07132f!important; padding-inline:26px }
+@media(max-width:800px) {
+  .land-relationship,.land-ledger { grid-template-columns:1fr }
+}
+@media(max-width:650px) {
+  .land-wallet { grid-template-columns:1fr }
+  .land-wallet .land-policy { margin:-10px 12px 0 }
+  .land-wallet-frame img { max-height:245px }
+}
