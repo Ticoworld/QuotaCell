@@ -18,7 +18,7 @@ import { isTemporaryWalletError, isVerifiedPudgeContext, wallet, WalletProviderU
 import { RegistrationPage } from './RegistrationPage';
 import { PocketDiscoveryPage } from './PocketDiscoveryPage';
 import { OperationDialog, type Intent, type Operation } from './OperationDialog';
-import { PocketPicker } from './PocketPicker';
+import { PocketPicker, pocketNameKey } from './PocketPicker';
 import { createPocketDraft, listPocketDrafts, pocketDraftIndexKey, removePocketDraft } from './drafts';
 import { clearPaymentIntent, paymentRequestFromIntent, readSavedPaymentIntent, type SavedPaymentIntent } from './paymentIntent';
 
@@ -87,6 +87,7 @@ function localizedConnectionError(error: unknown, t: (key: string) => string): s
 function App() {
   const { t, i18n } = useTranslation();
   const [state, setState] = useState<PocketState | null>(null);
+  const verifiedLists = useRef(new Map<string, PocketState>());
   const lastGoodState = useRef<PocketState | null>(null);
   const refreshInFlight = useRef<Promise<PocketState | null> | null>(null);
   const refreshInFlightActor = useRef<string | null>(null);
@@ -151,7 +152,7 @@ function App() {
           try {
             next = await getPocketState(actor ?? undefined);
           } catch (cause) {
-            if (attempt >= 2 || !(cause instanceof ApiError) || !cause.retryable || cause.timedOut) throw cause;
+            if (attempt >= 2 || (!browserMode && (!(cause instanceof ApiError) || !cause.retryable || cause.timedOut))) throw cause;
             await new Promise((resolve) => window.setTimeout(resolve, 700 * (attempt + 1)));
             continue;
           }
@@ -172,6 +173,7 @@ function App() {
           setStateStale(true);
           return null;
         }
+        if (actor && next.discovery) verifiedLists.current.set(actor.toLowerCase(), next);
         lastGoodState.current = next;
         setState(next);
         stateActorRef.current = actor?.toLowerCase() ?? null;
@@ -184,6 +186,7 @@ function App() {
         if (!current()) return null;
         setWaitingForIndex(cause instanceof PocketIndexSyncError);
         const message = cause instanceof Error ? cause.message : String(cause);
+        setLoadError(message);
         if (actor && stateActorRef.current !== actor.toLowerCase()) {
           setState(null);
           stateActorRef.current = null;
@@ -245,13 +248,13 @@ function App() {
       const routePocket = new URLSearchParams(window.location.search).get('pocket');
       if (!current() || routePocket?.toLowerCase() !== pocket.toLowerCase()) return;
       if (!result || result.connectRequired || result.pocket?.toLowerCase() !== pocket.toLowerCase()) {
-        const hasLastGood = stateActorRef.current === identity?.publicKey.toLowerCase() && lastGoodState.current?.pocket?.toLowerCase() === pocket.toLowerCase();
+        const hasLastGood = stateActorRef.current === (identity?.publicKey.toLowerCase() ?? null) && lastGoodState.current?.pocket?.toLowerCase() === pocket.toLowerCase();
         setStateStale(hasLastGood);
         setSelectedPocketError(!hasLastGood);
       }
     } catch {
       if (current()) {
-        const hasLastGood = stateActorRef.current === identity?.publicKey.toLowerCase() && lastGoodState.current?.pocket?.toLowerCase() === pocket.toLowerCase();
+        const hasLastGood = stateActorRef.current === (identity?.publicKey.toLowerCase() ?? null) && lastGoodState.current?.pocket?.toLowerCase() === pocket.toLowerCase();
         setStateStale(hasLastGood);
         setSelectedPocketError(!hasLastGood);
       }
@@ -521,7 +524,7 @@ function App() {
     } finally { setWorking(false); }
   };
 
-  const prepareCreation = async (body: unknown, people: People) => {
+  const prepareCreation = async (body: unknown, people: People, pocketName?: string) => {
     if (stateStale) throw new Error(t('stateRefreshPaused'));
     if (state?.unresolved || clientTransactionUnresolved) throw new Error(t('unresolvedBody'));
     if (state?.multiPocket !== true) throw new Error(t('creationUnavailable'));
@@ -529,6 +532,10 @@ function App() {
     setWorking(true); setOperationError('');
     try {
       const request = await prepareGenesis(body);
+      if (pocketName && request.targetPocket) {
+        try { localStorage.setItem(pocketNameKey(request.genesis, request.targetPocket), pocketName); }
+        catch { toast.error(t('pocketNameSaveFailed')); }
+      }
       setPendingPeople(people);
       setPrepared(request);
       setIntent({ operation: 'genesis' });
@@ -979,6 +986,7 @@ function App() {
   }, [pudge, refresh, t, transactionNotice?.hash, transactionNotice?.operation, transactionNotice?.state]);
   const explorerUrl = (hash: string) => `https://pudge.explorer.nervos.org/transaction/${hash}`;
   const displayIdentityRole = role === 'owner' ? t('owner') : role === 'alice' ? labelFor(delegates.find((d) => d.role === 'alice')?.publicKey, t('delegateOne')) : role === 'ben' ? labelFor(delegates.find((d) => d.role === 'ben')?.publicKey, t('delegateTwo')) : role === 'unrecognized' ? t('unknownRole') : '';
+  const verifiedList = identity && verifiedLists.current.get(identity.publicKey.toLowerCase());
   const identityDiscoveryLoading = Boolean(identity && !loadError && (stateActor !== identity.publicKey.toLowerCase() || (state?.empty && refreshing)));
   const noticeTitle = transactionNotice?.state === 'uncertain' ? t('statusUncertain') : transactionNotice?.state === 'not-sent' || transactionNotice?.state === 'error' && (transactionNotice.phase === 'signing-request' || ['network-check', 'pocket-check', 'input-fee-check', 'dry-run', 'pool-admission'].includes(transactionNotice.phase || '')) ? t('statusNotSent') : transactionNotice?.state === 'error' ? t('statusFailed') : transactionNotice?.state === 'checked' ? t('checkedStatus') : transactionNotice?.state === 'metadata' ? t('metadataLocal') : transactionNotice ? historyState(transactionNotice.state) : '';
 
@@ -1000,7 +1008,7 @@ function App() {
 
     {showCreation && identity && state?.genesis && activeDraftId && activeDraftKey ? <CreationFlow key={`${state.genesis}:${activeDraftOwner}:${activeDraftId}`} draftId={activeDraftId} draftIndexKey={draftIndexKey} draftKey={activeDraftKey} pudgeReadOnly={pudgeReadOnly} prepareOnly={pudgePrepareOnly} canPrepareCreation={state.multiPocket === true && !pudgeReadOnly && !actionsBlocked} creationBlocked={Boolean(state.unresolved || clientTransactionUnresolved)} connectedIdentity={identity} onConnectParticipant={connectParticipant} onPrepare={prepareCreation} onCancel={() => { setActiveDraftId(''); setActiveDraftOwner(''); setShowCreation(false); setShowPocketList(false); setPocketListError(''); }}/> : state?.creationRecovery ? <main className="loading-page mx-auto grid min-h-[55vh] w-[min(100%-2rem,64rem)] place-items-center text-slate-600"><section className="load-error w-full max-w-xl rounded-lg border border-red-200 bg-white p-5 shadow-sm" role="alert"><h1 className="text-lg font-semibold text-red-900">{t('creationRecoveryTitle')}</h1><p className="text-sm leading-6 text-slate-700">{t('creationRecoveryBody', { state: state.creationRecovery.state })}</p><p className="break-all text-xs text-slate-600"><code dir="ltr">{state.creationRecovery.txHash}</code></p><button className="secondary-button" disabled={reconcileBusy} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section></main>
       : selectedPocketLoading ? <main className="mx-auto min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] py-7 sm:py-10" aria-busy="true"><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><h1 className="m-0 text-2xl font-bold text-navy">{t('openingPocket')}</h1><p className="mt-1 text-sm text-slate-600" role="status">{t('verifyingPocket')}</p></div><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('backToMyPockets')}</button></div><section className="grid grid-cols-1 gap-3 md:grid-cols-2" aria-hidden="true"><div className="animate-pulse rounded-lg border border-line bg-white p-5"><div className="mb-4 h-3 w-28 rounded-sm bg-slate-200"/><div className="mb-3 h-9 w-40 rounded-sm bg-slate-100"/><div className="h-3 w-3/4 rounded-sm bg-slate-100"/></div><div className="animate-pulse rounded-lg border border-line bg-white p-5"><div className="mb-4 h-3 w-32 rounded-sm bg-slate-200"/><div className="mb-3 h-9 w-36 rounded-sm bg-slate-100"/><div className="h-3 w-2/3 rounded-sm bg-slate-100"/></div></section><div className="mt-7 divide-y divide-slate-200 border-y border-slate-200" aria-hidden="true">{[0, 1, 2].map((item) => <div key={item} className="flex items-center justify-between gap-4 py-4"><div className="animate-pulse space-y-2"><div className="h-3 w-32 rounded-sm bg-slate-200"/><div className="h-3 w-56 max-w-[70vw] rounded-sm bg-slate-100"/></div><div className="h-10 w-28 animate-pulse rounded-md bg-slate-100"/></div>)}</div></main>
-      : selectedPocketError ? <main className="mx-auto grid min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] place-items-center py-10"><section className="w-full max-w-xl rounded-md border border-red-200 bg-white p-5" role="alert"><h1 className="m-0 text-lg font-semibold text-navy">{t('pocketLoadFailed')}</h1><p className="my-2 text-sm leading-6 text-slate-600">{t('pocketCouldNotBeVerified')}</p><div className="mt-4 flex flex-wrap gap-2"><button className="primary-button" type="button" onClick={() => void loadSelectedPocket(selectedPocketId)}>{t('retry')}</button><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('backToMyPockets')}</button></div></section></main>
+      : selectedPocketError ? <main className="mx-auto grid min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] place-items-center py-10"><section className="w-full max-w-xl rounded-md border border-red-200 bg-white p-5" role="alert"><h1 className="m-0 text-lg font-semibold text-navy">{t('pocketLoadFailed')}</h1><p className="my-2 text-sm leading-6 text-slate-600">{t(/index|canonical|page|ambiguous/i.test(loadError) ? 'publicIndexerLag' : 'pocketCouldNotBeVerified')}</p><div className="mt-4 flex flex-wrap gap-2"><button className="primary-button" type="button" onClick={() => void loadSelectedPocket(selectedPocketId)}>{t('retry')}</button></div></section></main>
       : state?.connectRequired ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><h1 className="mb-2 text-xl font-semibold text-navy">{t('activePocket')}</h1><p className="mb-5 text-sm text-slate-600">{t('pocketLinkConnect')}</p><button className="primary-button" type="button" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button></main>
       : browserMode && !selectedPocketId ? <>
         <main className="mx-auto w-[min(100%-2rem,64rem)] py-10">
@@ -1022,8 +1030,8 @@ function App() {
           </form>
           <button className="secondary-button" onClick={() => openSelectedPocket(demoPocket)}>{t('viewLiveDemoPocket')}</button>
         </main>
-        {identity && <PocketPicker pockets={state?.discovery || []} drafts={savedDrafts} ownerCanCreate={Boolean(identity)} locale={i18n.language} loading={identityDiscoveryLoading} error={loadError ? t('pocketListError') : ''} t={key => t(key)} onOpen={openSelectedPocket} onCreate={startNewDraft} onResume={resumeDraft} onDiscard={discardDraft}/>}
-      </> : showPocketList || state?.discovery || (state?.empty && identity) || identityDiscoveryLoading ? <PocketPicker pockets={showPocketList ? pocketChoices : state?.discovery || []} drafts={savedDrafts} ownerCanCreate={!browserMode && Boolean(identity)} locale={i18n.language} loading={showPocketList ? pocketListLoading : identityDiscoveryLoading} error={pocketListError} t={(key) => t(key)} onOpen={(pocket) => void openSelectedPocket(pocket)} onCreate={startNewDraft} onResume={resumeDraft} onDiscard={discardDraft}/>
+        {identity && <PocketPicker pockets={verifiedList?.discovery || []} verified={Boolean(verifiedList)} genesis={verifiedList?.genesis || state?.genesis} drafts={savedDrafts} ownerCanCreate={Boolean(identity)} locale={i18n.language} loading={identityDiscoveryLoading} error={loadError ? t('pocketListError') : ''} t={key => t(key)} onOpen={openSelectedPocket} onCreate={startNewDraft} onResume={resumeDraft} onDiscard={discardDraft}/>}
+      </> : showPocketList || state?.discovery || (state?.empty && identity) || identityDiscoveryLoading ? <PocketPicker pockets={showPocketList ? pocketChoices : state?.discovery || []} verified={!pocketListLoading && !pocketListError && (showPocketList || Boolean(state?.discovery))} genesis={state?.genesis} drafts={savedDrafts} ownerCanCreate={!browserMode && Boolean(identity)} locale={i18n.language} loading={showPocketList ? pocketListLoading : identityDiscoveryLoading} error={pocketListError} t={(key) => t(key)} onOpen={(pocket) => void openSelectedPocket(pocket)} onCreate={startNewDraft} onResume={resumeDraft} onDiscard={discardDraft}/>
       : state?.empty ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><div className="empty-cell-mark mb-5 grid size-14 place-items-center rounded-xl border border-blue-100 bg-blue-wash text-blue"><CellMark/></div><h1 className="mb-2 max-w-2xl text-3xl font-bold leading-tight text-navy sm:text-4xl">{t('emptyTitle')}</h1><p className="mb-5 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">{t('emptyBody')}</p><button className="primary-button" type="button" disabled={!identity} onClick={startNewDraft}>{t('createPocket')} <span aria-hidden="true">→</span></button></main>
       : state && !state.empty ? <main id="home" className="app-page mx-auto w-[min(100%-2rem,64rem)] py-6 sm:py-8">
         <div className="pocket-heading mb-5 flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><h1 className="m-0 text-2xl font-bold text-navy sm:text-[28px]">{state.pocket ? t('activePocket') : t('brand')}</h1><p className="mt-1 text-xs text-slate-600 sm:text-sm">{identity ? displayIdentityRole : t('connectToSeeActions')}</p></div><div className="flex max-w-full flex-wrap items-center justify-end gap-2"><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('myPockets')}</button><button className="secondary-button" type="button" onClick={() => void copyPocketId()}>{t('sharePocketLink')}</button><span className={closed ? 'state-mark state-closed' : 'state-mark'}>{closed ? t('closedStatus') : t('active')}</span></div></div>

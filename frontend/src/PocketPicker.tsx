@@ -6,6 +6,8 @@ import type { SavedPocketDraft } from './drafts';
 type Props = {
   pockets: NonNullable<PocketState['discovery']>;
   drafts: SavedPocketDraft[];
+  genesis?: string;
+  verified?: boolean;
   ownerCanCreate: boolean;
   locale: string;
   loading: boolean;
@@ -17,7 +19,8 @@ type Props = {
   onDiscard: (draftId: string) => boolean;
 };
 
-export function PocketPicker({ pockets, drafts, ownerCanCreate, locale, loading, error, t, onOpen, onCreate, onResume, onDiscard }: Props) {
+export function PocketPicker({ pockets, drafts, genesis, verified, ownerCanCreate, locale, loading, error, t, onOpen, onCreate, onResume, onDiscard }: Props) {
+  const [nameError, setNameError] = useState(false);
   const [discardDraftId, setDiscardDraftId] = useState('');
   const discardDraft = drafts.find((draft) => draft.id === discardDraftId);
   const date = (value: number) => new Intl.DateTimeFormat(locale === 'zh-Hans' ? 'zh-CN' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(value);
@@ -27,21 +30,23 @@ export function PocketPicker({ pockets, drafts, ownerCanCreate, locale, loading,
       <h1 className="m-0 text-2xl font-bold text-navy">{t('myPockets')}</h1>
       {ownerCanCreate && <button className="primary-button" type="button" onClick={onCreate}>{t('newPocket')} <span aria-hidden="true">→</span></button>}
     </div>
-    {loading && <section className="border-y border-slate-200" aria-busy="true" aria-label={t('checkingPocketList')}>
+    {loading && pockets.length === 0 && <section className="border-y border-slate-200" aria-busy="true" aria-label={t('checkingPocketList')}>
       <p className="py-3 text-sm text-slate-600" role="status">{t('checkingPocketList')}</p>
       {Array.from({ length: 2 }, (_, index) => <div key={index} className="flex flex-col justify-between gap-3 border-t border-slate-200 py-4 sm:flex-row sm:items-center" aria-hidden="true">
         <div className="min-w-0 flex-1 animate-pulse space-y-2"><div className="h-4 w-36 rounded-sm bg-slate-200"/><div className="h-3 w-[min(100%,28rem)] rounded-sm bg-slate-100"/><div className="h-3 w-48 rounded-sm bg-slate-100"/></div>
         <div className="h-10 w-32 animate-pulse rounded-md bg-slate-100"/>
       </div>)}
     </section>}
+    {nameError && <p role="alert">{t('copyPocketIdFailed')}</p>}
     {error && <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm leading-5 text-red-800" role="alert">{error}</p>}
-    {!loading && pockets.length > 0 && <section aria-label={t('myPockets')}>
+    {loading && pockets.length > 0 && <p role="status">{t('checkingPocketList')}</p>}
+    {pockets.length > 0 && <section aria-label={t('myPockets')}>
       <div className="divide-y divide-slate-200 border-y border-slate-200">{pockets.map((item) => <div key={item.pocket} className="flex flex-col justify-between gap-3 py-4 sm:flex-row sm:items-center">
-        <div className="min-w-0"><strong className="text-sm text-navy">{item.closed ? t('closedPocket') : t('activePocket')}</strong><span className="ml-2 text-xs text-slate-600">{t(item.role === 'owner' ? 'owner' : item.role === 'alice' ? 'delegateOne' : 'delegateTwo')}</span><code className="mt-1 block break-all text-xs text-slate-600" dir="ltr">{item.pocket}</code>{item.closed && <small className="mt-1 block text-xs text-slate-500">{t('historicalPocketUnavailable')}</small>}</div>
+        <div className="min-w-0"><PocketName key={genesis + ':' + item.pocket} genesis={genesis} pocket={item.pocket} t={t}/><strong className="text-sm text-navy">{item.closed ? t('closedPocket') : t('activePocket')}</strong><span className="ml-2 text-xs text-slate-600">{t(item.role === 'owner' ? 'owner' : item.role === 'alice' ? 'delegateOne' : 'delegateTwo')}</span><code className="mt-1 block break-all text-xs text-slate-600" dir="ltr">{item.pocket.slice(0, 10)}…{item.pocket.slice(-8)}</code><button className="text-button" type="button" onClick={() => void navigator.clipboard.writeText(item.pocket).catch(() => setNameError(true))}>{t('copyPocketId')}</button>{item.verifiedAt && <small className="block text-xs text-slate-500">{t('lastVerifiedPocket')} · {date(item.verifiedAt)}</small>}{item.closed && <small className="mt-1 block text-xs text-slate-500">{t('historicalPocketUnavailable')}</small>}</div>
         <button className="secondary-button shrink-0" type="button" onClick={() => onOpen(item.pocket)}>{t('openPocket')}</button>
       </div>)}</div>
     </section>}
-    {!loading && pockets.length === 0 && <p className="border-y border-slate-200 py-4 text-sm text-slate-600" role="status">{t('noPocketsForWallet')}</p>}
+    {verified && !error && !loading && pockets.length === 0 && <p className="border-y border-slate-200 py-4 text-sm text-slate-600" role="status">{t('noPocketsForWallet')}</p>}
     {drafts.length > 0 && <section className="mt-8">
       <h2 className="mb-3 text-base font-semibold text-navy">{t('savedDrafts')}</h2>
       <div className="divide-y divide-slate-200 border-y border-slate-200">{drafts.map((draft) => <div key={draft.id} className="flex flex-col justify-between gap-3 py-3 sm:flex-row sm:items-center">
@@ -59,3 +64,39 @@ export function PocketPicker({ pockets, drafts, ownerCanCreate, locale, loading,
     </AlertDialog.Root>
   </>;
 }
+
+
+function PocketName({ genesis, pocket, t }: { genesis?: string; pocket: string; t: Props['t'] }) {
+  const key = genesis && pocketNameKey(genesis, pocket);
+  const [name, setName] = useState(() => {
+    try { return key ? localStorage.getItem(key)?.slice(0, 60) || '' : ''; }
+    catch { return ''; }
+  });
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [failed, setFailed] = useState(false);
+  return <div className="mb-1">
+    <strong className="text-base text-navy">{name || `${t('pocketNameDefault')} ${pocket.slice(0, 10)}…${pocket.slice(-6)}`}</strong>
+    {key && !editing && <button className="text-button ml-2" type="button" onClick={() => { setDraft(name); setEditing(true); }}>{t('editPocketName')}</button>}
+    {editing && key && <form className="mt-2 flex flex-wrap items-center gap-2" onSubmit={event => {
+      event.preventDefault();
+      const value = draft.trim();
+      try {
+        if (value) localStorage.setItem(key, value);
+        else localStorage.removeItem(key);
+        setName(value);
+        setFailed(false);
+        setEditing(false);
+      } catch { setFailed(true); }
+    }}>
+      <input className="rounded border border-slate-300 px-2 py-1" aria-label={t('pocketNameDefault')} value={draft} maxLength={60} onChange={event => setDraft(event.target.value)}/>
+      <button className="secondary-button" type="submit">{t('save')}</button>
+      <button className="text-button" type="button" onClick={() => { setEditing(false); setFailed(false); }}>{t('cancel')}</button>
+      <small className="basis-full text-slate-500">{t('pocketNameLocal')}</small>
+      {failed && <small role="alert">{t('pocketNameSaveFailed')}</small>}
+    </form>}
+  </div>;
+}
+
+export const pocketNameKey = (genesis: string, pocket: string) =>
+  `quotacell.pocket-name.v1:${genesis.toLowerCase()}:${pocket.toLowerCase()}`;

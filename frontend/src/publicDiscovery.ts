@@ -157,8 +157,7 @@ export async function discoverPublicPocket(pocketId: string, rpc: Rpc = httpRpc,
 }
 
 async function discover(publicKey: string | undefined, targetPocket: string | undefined, rpc: Rpc): Promise<Discovery[]> {
-  const consensus = await rpc<{ id: string }>('get_consensus');
-  if (consensus.id !== 'ckb_testnet' || (await rpc<string>('get_block_hash', ['0x0'])).toLowerCase() !== GENESIS) throw new Error('Public RPC is not the verified Pudge testnet.');
+  if ((await rpc<string>('get_block_hash', ['0x0'])).toLowerCase() !== GENESIS) throw new Error('Public RPC is not the verified Pudge testnet.');
   const [tip, indexed] = await Promise.all([rpc<any>('get_tip_header'), rpc<any>('get_indexer_tip')]);
   if (!tip || !indexed || !/^0x[0-9a-f]{64}$/i.test(tip.hash) || !/^0x[0-9a-f]{64}$/i.test(indexed.block_hash)) throw new Error('Invalid node or indexer tip.');
   const nodeHeight = BigInt(tip.number), indexerHeight = BigInt(indexed.block_number);
@@ -166,7 +165,7 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
   const canonicalTips = await Promise.all([rpc<string>('get_block_hash', [indexed.block_number]), rpc<string>('get_block_hash', [tip.number])]);
   if (canonicalTips[0].toLowerCase() !== indexed.block_hash.toLowerCase() || canonicalTips[1].toLowerCase() !== tip.hash.toLowerCase()) throw new Error('Node or indexer tip is not canonical.');
   const knownScript = rpc === httpRpc && targetPocket ? policyScripts.get(targetPocket) : undefined;
-  const key = { script: knownScript || { code_hash: POLICY_CODE, hash_type: 'data2', args: '0x' }, script_type: 'type', script_search_mode: knownScript ? 'exact' : 'prefix', with_data: true };
+  const key = { filter: { block_range: ['0x0', '0x' + (indexerHeight + 1n).toString(16)] }, script: knownScript || { code_hash: POLICY_CODE, hash_type: 'data2', args: '0x' }, script_type: 'type', script_search_mode: knownScript ? 'exact' : 'prefix', with_data: true };
   const candidates: Array<Discovery & { cell: any }> = [];
   const seen = new Set<string>();
   let cursor: string | undefined;
@@ -184,13 +183,15 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
       if (seen.has(id)) throw new Error('Duplicate indexer outpoint.');
       seen.add(id);
       if (item.output_data !== item.output_data?.toLowerCase() || !/^0x(?:[0-9a-f]{2})*$/i.test(item.output_data)) throw new Error('Invalid indexed policy data.');
+      const indexedPolicy = item.output.type as Script;
+      const pocketId = parseScript(indexedPolicy).hash().toLowerCase();
+      if (targetPocket && pocketId !== targetPocket) continue;
+      const indexedRole = candidateRole({ output: item.output, data: { content: item.output_data } }, publicKey);
+      if (!targetPocket && !indexedRole.role) continue;
       const live = await rpc<any>('get_live_cell', [point, true]);
       if (live?.status !== 'live' || !live.cell?.output || live.cell.data?.content !== item.output_data || !equal(normalizeOutput(live.cell.output), normalizeOutput(item.output))) throw new Error('Indexed policy does not match its live chain Cell.');
       const policy = live.cell.output.type as Script;
-      const pocketId = parseScript(policy).hash().toLowerCase();
-      if (targetPocket && pocketId !== targetPocket) continue;
-      const role = candidateRole(live.cell, publicKey);
-      if (targetPocket ? pocketId !== targetPocket : !role.role) continue;
+      const role = indexedRole;
       const transaction = await rpc<any>('get_transaction', [point.tx_hash]);
       if (transaction?.tx_status?.status !== 'committed' || !transaction.tx_status.block_hash) throw new Error('Indexed policy transaction is not committed.');
       const header = await rpc<any>('get_header', [transaction.tx_status.block_hash]);
@@ -204,6 +205,12 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
     cursor = result.last_cursor;
   }
   if (!finished) throw new Error('Pudge discovery exceeded its page limit.');
+  // A single verified Type ID cell is sufficient for a targeted open. A list
+  // or empty result requires a complete enumeration of a stable live index.
+  if (!targetPocket || candidates.length !== 1 || cursor !== undefined) {
+    const finalIndex = await rpc<{ block_hash: string }>('get_indexer_tip');
+    if (finalIndex?.block_hash !== indexed.block_hash) throw new Error('Pudge indexer changed during discovery.');
+  }
   const finalTips = await Promise.all([rpc<string>('get_block_hash', [indexed.block_number]), rpc<string>('get_block_hash', [tip.number])]);
   if (finalTips[0].toLowerCase() !== indexed.block_hash.toLowerCase() || finalTips[1].toLowerCase() !== tip.hash.toLowerCase()) throw new Error('Pudge chain changed during discovery.');
   for (const candidate of candidates) {

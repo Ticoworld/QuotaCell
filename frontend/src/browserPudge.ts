@@ -259,7 +259,7 @@ export async function browserState(pocket?: string, actor?: string): Promise<Poc
     return { ...base, empty: true, unresolved: Boolean(pending), history: pending ? [{
       id: pending.payment.id, tx_hash: pending.hash, state: 'uncertain', actor: pending.payment.publicKey,
       amount: '0', recipient: '', created: pending.created, operation: 'genesis',
-    }] : [], discovery: discovered.flatMap(({ role, pocket, closed }) => role === 'public' ? [] : [{ role, pocket, closed }]) };
+    }] : [], discovery: discovered.flatMap(({ role, pocket, closed }) => role === 'public' ? [] : [{ role, pocket, closed, verifiedAt: Date.now() }]) };
   }
   const { policy, funds, unsupportedFunds } = await locked(pocket, () => snapshot(pocket));
   const journal = entries(pocket);
@@ -609,7 +609,7 @@ export function prepareBrowserOwner(scope: string, request: OwnerRequest) {
     requireCondition(info?.position === position, 'Invalid owner signer position');
     const prepared = {
       id: request.id, transaction: transaction.toHex(), publicKey: request.publicKey, genesis: deployment.genesis,
-      fee: fee.toString(), journalScope: scope, ownerChangeCapacity: change.toString(),
+      fee: fee.toString(), targetPocket: pocket, journalScope: scope, ownerChangeCapacity: change.toString(),
       ownerInputCapacity: owner.cell.output.capacity ? BigInt(owner.cell.output.capacity).toString() : undefined,
       policyCapacity: request.operation === 'genesis' ? '60000000000' : policy && BigInt(policy.cell.output.capacity).toString(),
       terminalCapacity: '13400000000', operationAmount: amount.toString(), releasedCapacity: release.toString(),

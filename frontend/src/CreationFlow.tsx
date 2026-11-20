@@ -60,7 +60,7 @@ type Props = {
   creationBlocked: boolean;
   connectedIdentity: WalletIdentity | null;
   onConnectParticipant: () => Promise<WalletIdentity>;
-  onPrepare: (body: unknown, people: People) => Promise<void>;
+  onPrepare: (body: unknown, people: People, pocketName?: string) => Promise<void>;
   onCancel: () => void;
   draftId: string;
   draftIndexKey: string;
@@ -69,6 +69,7 @@ type Props = {
 
 export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, creationBlocked, connectedIdentity, onConnectParticipant, onPrepare, onCancel, draftId, draftIndexKey, draftKey }: Props) {
   const { t } = useTranslation();
+  const [pocketName, setPocketName] = useState('');
   const [initialDraft] = useState(() => readDraft(draftKey));
   const saved = initialDraft.value;
   const savedStep = typeof saved?.step === 'number' && saved.step >= 0 && saved.step <= 2 ? saved.step : 0;
@@ -250,7 +251,7 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
       pending ||= { id: crypto.randomUUID(), fingerprint };
       pendingGenesisRef.current = pending;
       try { sessionStorage.setItem(`quotacell.genesis-preparation:${draftKey}`, JSON.stringify(pending)); } catch { /* The in-memory request ID still supports retry in this tab. */ }
-      await onPrepare({ id: pending.id, ...payload }, people);
+      await onPrepare({ id: pending.id, ...payload }, people, pocketName.trim());
       pendingGenesisRef.current = null;
       setResumePreparation(false);
       try { sessionStorage.removeItem(`quotacell.genesis-preparation:${draftKey}`); } catch { /* Session storage is optional. */ }
@@ -342,6 +343,10 @@ export function CreationFlow({ pudgeReadOnly, prepareOnly, canPrepareCreation, c
           {(['alice', 'ben'] as const).map((slot, index) => { const isFirst = index === 0; const limit = isFirst ? terms.firstLimit : terms.secondLimit; const max = isFirst ? terms.firstMax : terms.secondMax; const recipient = isFirst ? terms.firstRecipient : terms.secondRecipient; return <div className="review-delegate" key={slot}><strong>{people[slot]?.name.trim() || (isFirst ? t('delegateOne') : t('delegateTwo'))}</strong><div className="review-row"><span>{t('personalAllowance')}</span><b>{limit} CKB</b></div><div className="review-row"><span>{t('perPayment')}</span><b>{max} CKB</b></div><div className="review-row recipient-review"><span>{t('approvedRecipient')}</span><code dir="ltr">{recipient}</code></div></div>; })}
         </section>
       </div>
+      <label className="field-block">{t('pocketNameDefault')} ({t('optional')})
+        <input maxLength={60} value={pocketName} onChange={event => setPocketName(event.target.value)}/>
+        <small>{t('pocketNameLocal')}</small>
+      </label>
       <p className="quiet-note mt-3 text-xs leading-5 text-slate-500">{t('draftCapacity')}</p>
       {!canPrepareCreation && <p className="quiet-note mt-3 text-sm text-slate-700" role="status">{pudgeReadOnly ? t('readonlyAction') : creationBlocked ? t('unresolvedBody') : t('creationUnavailable')}</p>}
     </section>}

@@ -329,8 +329,13 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
       return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div><script type="module" src="/app.js"></script>' });
     });
     let delayHistory = false;
+    let failPocketOpen = false;
     await page.route(url + '/**', async route => {
       const request = route.request().postDataJSON();
+      if (failPocketOpen && request.method === 'get_cells') {
+        failPocketOpen = false;
+        return route.fulfill({ status: 503, body: 'Temporary indexer failure' });
+      }
       if (delayHistory && request.method === 'get_transactions' && request.params[0]?.filter?.block_range) {
         return route.fulfill({ json: { jsonrpc: '2.0', id: request.id, result: null } });
       }
@@ -457,6 +462,12 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
     assert.equal(BigInt(created.outputs[0].capacity), 600n * CKB);
     assert.deepEqual(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).map(d => d.id), draftKey), [unrelated]);
     const createdUrl = page.url();
+    failPocketOpen = true;
+    await page.goto(createdUrl);
+    await page.getByText('Protected balance', { exact: true }).waitFor();
+    assert.equal(failPocketOpen, false);
+    assert.equal(await page.getByRole('heading', { name: 'Pocket could not be opened' }).count(), 0);
+    console.log('Pipeline PASS Pocket opens after a transient indexer failure without manual retry');
     await connect(0, 'This wallet has no permission in this Pocket.', other[2].privateKey);
     for (const action of ['Pay', 'Add funds', 'Update permissions', 'Close and recover', 'Revoke permission']) {
       assert.equal(await button(action).count(), 0, action);

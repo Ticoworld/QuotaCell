@@ -33,7 +33,7 @@ export type UnsupportedFund = {
 export type PocketState = {
   empty?: boolean;
   connectRequired?: boolean;
-  discovery?: { pocket: string; role: 'owner' | 'alice' | 'ben'; closed: boolean }[];
+  discovery?: { pocket: string; role: 'owner' | 'alice' | 'ben'; closed: boolean; verifiedAt?: number }[];
   closed?: boolean;
   historicalTermsUnavailable?: boolean;
   unresolved?: boolean;
@@ -77,6 +77,7 @@ export type PreparedTransaction = {
   minimumOwnerInputCapacity?: string;
   terminalCapacity?: string;
   journalScope?: string;
+  targetPocket?: string;
   operationAmount?: string;
   releasedCapacity?: string;
   adminTerms?: { shared: string; alice: string; ben: string; mask: number };
