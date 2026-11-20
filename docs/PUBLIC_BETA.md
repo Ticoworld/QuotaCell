@@ -1,11 +1,17 @@
 # QuotaCell Pudge public beta
 
-QuotaCell lets the owner of a shared Pocket fund it, allocate spending to two independent delegate wallets, set spending limits, and restrict payments to approved recipients. The owner can revoke and restore access or close the Pocket and recover supported funds.
+Open the [production site](https://quotacell.netlify.app/) or the [wallet](https://quotacell.netlify.app/app). The landing page is available in English and Simplified Chinese. Legacy Pocket query links continue to open the wallet.
 
-This release candidate introduces a bilingual product site and separates the wallet into /app. Legacy query links continue to use the wallet router. The historical November 15 public closeout documents committed creation, funding, delegate payments, revocations, closure and recovery of a 73 CKB late deposit. Any later sweep needs separate owner verification.
+QuotaCell lets an owner fund a shared Pocket, set a shared spending allowance and individual limits for two independent delegate wallets, and choose approved recipients at creation. Owners can revoke or restore access, close the Pocket, and recover supported funds. Funding does not reset spending authority.
 
-QCN4 supports two fixed delegates and fixed recipients. Ordinary payments start at 61 CKB. Active policy capacity is 600 CKB. Closure releases 466 CKB and permanently retains 134 CKB. Public Pudge RPC latency varies. This is testnet-only software. It has no independent security audit.
+## QCN4 deployment and evidence
 
-## External tester guide
+The native CKB policy uses QCN4 for active Pockets and QCT4 for closed Pockets on Pudge. The [WO18 public closeout record](../examples/local-chain/WO18_PUBLIC_CLOSEOUT_20261115.md) identifies the deployed code dependencies, audit endpoint, canonical transactions and blocks. Its nine recorded transactions cover creation, funding, two delegate payments, two revocations, closure, and receipt and recovery of a 73 CKB late deposit. The audit used one configured Pudge RPC endpoint.
 
-Open /app with a compatible CKB wallet configured for Pudge. You can inspect the public Pocket and transaction receipts before connecting. To test roles, start with a disposable testnet wallet and compare the controls shown for owner, delegate and unrelated wallet. Report the URL, language, browser, role and visible status. Share public transaction IDs where relevant and keep wallet secrets private.
+The minimum ordinary payment is 61 CKB. The verified active policy held 600 CKB in policy capacity. Closure released 466 CKB of policy capacity before fees and left 134 CKB occupied in the terminal policy Cell. Separately, the closure returned the Pocket’s 134 CKB supported fund balance to the owner.
+
+## Limits and testing
+
+This beta is experimental, testnet-only and unaudited. Use test CKB only. The two delegate slots and approved recipients are fixed at creation. Public RPC response times vary. Reorganization handling, multi-fund consolidation, independent recovery and descriptor-free cross-device use remain limited. Owner recovery requires the owner key.
+
+You can inspect public transactions before connecting a compatible wallet configured for Pudge. When reporting issues, include the URL, browser, language, role and visible status. Share public transaction IDs when relevant and keep wallet secrets private.

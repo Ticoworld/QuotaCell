@@ -24,6 +24,6 @@ The interface remains developer-grade. Public lifecycle acceptance used one conf
 
 QuotaCell is licensed under [Apache-2.0](LICENSE), Copyright 2026 Ticoworld. Upstream components retain their own terms; see [third-party notices](THIRD_PARTY_NOTICES.md).
 
-## Public Pudge beta candidate
+## Public Pudge beta
 
-The public web application runs on [Netlify](https://quotacell.netlify.app/). The beta candidate serves the product site at / and the wallet at /app. Use a compatible CKB wallet configured for Pudge and test CKB. See the [release note and tester guide](docs/PUBLIC_BETA.md) for network, capacity and audit limitations and the [public lifecycle record](examples/local-chain/WO18_PUBLIC_CLOSEOUT_20261115.md) for canonical transaction evidence.
+Open the [production site](https://quotacell.netlify.app/) or the [wallet](https://quotacell.netlify.app/app). The English and Simplified Chinese site explains the Pocket lifecycle and links to the public evidence. The wallet supports Pocket lookup and role-based flows with a compatible CKB wallet configured for Pudge. See the [release notes](docs/PUBLIC_BETA.md) for deployment details, capabilities and limitations. Use test CKB only. QuotaCell has no independent security audit.
