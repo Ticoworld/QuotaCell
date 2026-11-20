@@ -109,6 +109,7 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
     }
     if (String(target) === url && request?.method === 'get_cells' && request.params[0].script.code_hash ===
         '0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a' && (fundFailure || omittedFund)) {
+      if (fundFailure === 'unavailable') return new Response(null, { status: 503 });
       if (request.params.length === 4 && fundFailure === 'interrupted') throw new Error('Interrupted fund pagination');
       const response = await originalFetch(target, options);
       const body = await response.json();
@@ -211,7 +212,9 @@ export async function qualifyBrowserBuilders({ rpc, live, commit, raw, deps, cli
   assert.equal((await pipeline.browserState(scope, owner.publicKey)).unsupportedFunds.length, 2);
   console.log('Pipeline PASS fund pagination, mixed cells, duplicate pages, interrupted and malformed data');
   const ownerRequest = { id: crypto.randomUUID(), publicKey: owner.publicKey, operation: 'deposit', amount: '250' };
+  fundFailure = 'unavailable';
   const prepared = await pipeline.prepareBrowserOwner(scope, ownerRequest);
+  fundFailure = undefined;
   await pipeline.validateBeforeSigning(scope, prepared);
   assert.equal((await pipeline.prepareBrowserOwner(scope, ownerRequest)).transaction, prepared.transaction);
   const independent = c.Transaction.fromBytes(prepared.transaction);

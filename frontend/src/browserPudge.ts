@@ -577,8 +577,10 @@ export function prepareBrowserOwner(scope: string, request: OwnerRequest) {
       return existing.prepared;
     }
     const lock = ownerLockFor(request.publicKey);
+    // Deposits create a fund Cell using a wallet input and need only the current policy.
     const [context, available, statistics] = await Promise.all([
-      request.operation === 'genesis' ? undefined : snapshot(scope),
+      request.operation === 'deposit' ? discoverPublicPocket(scope).then(policy => ({ policy, funds: undefined })) :
+        request.operation === 'genesis' ? undefined : snapshot(scope),
       plainCells(lock, 64), httpRpc<{ median: string }>('get_fee_rate_statistics', ['0x65']), verifyDependencies(),
     ]);
     const eligible = available.filter(item => !reservedInputs.some(input =>
