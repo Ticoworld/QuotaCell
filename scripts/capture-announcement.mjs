@@ -60,6 +60,20 @@ try {
     const response = await publicApp.goto(site + '/app?pocket=' + pocket, { waitUntil: 'domcontentloaded', timeout: 60000 });
     if (!response || !response.ok() || new URL(publicApp.url()).origin !== site) throw new Error('Public Pocket route did not return the live site');
     await publicApp.locator('main.app-page').waitFor({ state: 'visible', timeout: 90000 });
+    // Confirm that the live app is serving the new official blue logo,
+    // not the older cell glyph captured in the previous media kit.
+    const logo = publicApp.locator('.topbar .brand img');
+    await logo.waitFor({ state: 'visible', timeout: 15000 });
+    const logoCheck = await logo.evaluate(img => ({
+      src: img.currentSrc,
+      loaded: img.complete && img.naturalWidth > 0,
+      width: img.naturalWidth,
+      height: img.naturalHeight
+    }));
+    if (!logoCheck.loaded || !logoCheck.src.includes('quotacell-logo-blue')) {
+      throw new Error('Production /app does not show the updated official blue brand logo: ' + JSON.stringify(logoCheck));
+    }
+    report.walletHeaderLogo = logoCheck;
     // The history is verified asynchronously. Never publish a screenshot
     // showing a loading placeholder as completed public proof.
     await publicApp.locator('text=/Loading committed transactions from Pudge/i').waitFor({ state: 'hidden', timeout: 65000 });
@@ -81,4 +95,4 @@ try {
   await writeFile(join(output, 'capture-report.json'), JSON.stringify(report, null, 2) + '\n');
   console.log('CAPTURE RESULTS', JSON.stringify(report));
 }
-if (report.screenshots.length < 3) process.exitCode = 1;
+if (report.screenshots.length < 5 || !report.walletHeaderLogo?.loaded) process.exitCode = 1;
