@@ -232,3 +232,68 @@ body { margin: 0 }
 .experience-signal { stroke-dasharray:13 200 }
 .experience-recovery svg { max-height:124px }
 html[lang="zh-Hans"] .land-wallet-frame img { object-position:center }
+.land-rules {
+  position:relative;
+  color:#10234a;
+  background:#e7efff;
+}
+.land-rules::before {
+  content:"";
+  position:absolute;
+  pointer-events:none;
+  inset:auto 0 calc(100% - 1px);
+  height:clamp(30px,5vw,74px);
+  background:inherit;
+  clip-path:polygon(0 100%,42% 100%,51% 0,100% 0,100% 100%);
+}
+.land-showcase { border-top:0; padding-top:clamp(40px,6vw,82px) }
+.land-wallet-rules {
+  display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center;
+  gap:16px 28px; margin-top:32px; border-block:1px solid #aabedd; padding-block:18px;
+}
+.land-wallet-rules dl { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px 24px }
+.land-wallet-rules dl div { display:grid; align-content:start; gap:4px; border:0; padding:0 }
+.land-wallet-rules dt { color:#3e587e; font-size:.86rem }
+.land-wallet-link { display:inline-flex; gap:10px; align-items:center; min-height:44px; font-weight:700 }
+.land-control { position:relative; isolation:isolate; overflow:hidden }
+.land-control .land-section { grid-template-columns:minmax(0,1fr); gap:clamp(24px,4vw,48px) }
+.land-control-copy { max-width:730px; padding-block:clamp(12px,3vw,44px) }
+.land-control-copy p { max-width:44ch }
+.land-control-art {
+  position:absolute; z-index:-1; width:min(78%,1080px); inset:-10% -8% auto auto; opacity:.47;
+  mask-image:radial-gradient(ellipse at 69% 40%,#000 12%,transparent 68%);
+}
+.land-control .experience-recovery { grid-row:auto; background:#0a1936f2 }
+.land-proof { background:linear-gradient(180deg,#f6f9ff,#e7efff) }
+.land-ledger { align-items:center }
+.land-receipts { box-shadow:0 18px 46px #153a7217 }
+.land-ledger li a:hover { background:#edf4ff }
+.land-end::before { background:radial-gradient(ellipse at 50% 100%,#234d9d,transparent 66%); opacity:1; mask-image:none }
+.land-close-panel { padding:clamp(32px,6vw,80px) 14px; border-block:1px solid #6c91ce68 }
+.experience-instruction { margin:6px 0 10px; color:#c2d9fb; font-size:.85rem!important }
+.experience-next { display:inline-flex; align-items:center; gap:8px; min-height:44px; color:#bdf3ff!important; font-weight:700 }
+.experience-select { position:relative; display:inline-flex }
+.experience-select select { appearance:none; padding-right:36px; cursor:pointer }
+.experience-select::after {
+  content:""; position:absolute; pointer-events:none; width:8px; height:8px; top:50%; right:15px;
+  border-right:2px solid #9deeff; border-bottom:2px solid #9deeff; transform:translateY(-70%) rotate(45deg);
+}
+.experience-receipt { margin-top:18px; padding:12px 14px; border-left:2px solid #74d8ff; background:#0a1936; font-size:.9rem }
+.experience-receipt p { margin:0; font-size:inherit }
+.experience-receipt dl div { padding:4px 0; border:0; flex-wrap:wrap }
+.experience-receipt dd { color:#bdf3ff }
+.experience-demo-actions .experience-payer { font-size:1.18rem; font-weight:750; margin:0 }
+.experience-demo-actions .experience-payer-limit { margin:4px 0 16px; color:#c2d9fb }
+.experience-switch,.experience-options summary {
+  min-height:44px; background:none; border:0; padding:8px 0; color:#bdf3ff;
+  cursor:pointer; text-decoration:underline; text-underline-offset:4px;
+}
+.experience-options { margin-top:12px; border-top:1px solid #45699c }
+.experience-options[open] summary,.experience-options .experience-delegates { margin-bottom:8px }
+@media(max-width:760px) { .land-wallet-rules { grid-template-columns:1fr } }
+@media(max-width:680px) { .land-control-art { width:100%; inset:0 -20% auto auto; opacity:.35 } }
+@media(max-width:480px) {
+  .land-wallet-rules dl { grid-template-columns:1fr }
+  .land-wallet-rules dl div { grid-template-columns:1fr 1fr; align-items:baseline }
+  .land-wallet-rules dd { text-align:right }
+}
