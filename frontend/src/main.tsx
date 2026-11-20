@@ -96,6 +96,11 @@ function App() {
   const [stateActor, setStateActor] = useState<string | null>(null);
   const stateActorRef = useRef<string | null>(null);
   const [identity, setIdentity] = useState<WalletIdentity | null>(null);
+  const refreshScope = useRef({ actor: identity?.publicKey ?? null, generation: 0 });
+  useLayoutEffect(() => {
+    refreshScope.current = { actor: identity?.publicKey ?? null, generation: refreshScope.current.generation + 1 };
+  }, [identity?.publicKey]);
+
   const [identityError, setIdentityError] = useState('');
   const [walletBusy, setWalletBusy] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -130,28 +135,19 @@ function App() {
 
   const refresh = useCallback(async (quiet = false) => {
     const actor = identity?.publicKey ?? null;
-    const refreshKey = JSON.stringify([actor, window.location.search]);
-    const showProgress = !quiet || Boolean(actor && stateActorRef.current === actor.toLowerCase() && lastGoodState.current?.empty);
-    while (refreshInFlight.current) {
-      const current = refreshInFlight.current;
-      if (refreshInFlightActor.current === refreshKey) {
-        if (showProgress) setRefreshing(true);
-        try { return await current; }
-        finally { if (showProgress) setRefreshing(false); }
-      }
-      if (showProgress) setRefreshing(true);
-      await current;
-      if (refreshInFlight.current === current) {
-        refreshInFlight.current = null;
-        refreshInFlightActor.current = null;
-      }
-    }
-    if (showProgress) setRefreshing(true);
+    const route = location.search;
+    const scope = refreshScope.current;
+    const current = () => refreshScope.current === scope && scope.actor === actor && location.search === route;
+    if (!current()) return null;
+    const refreshKey = JSON.stringify([scope.generation, actor, route]);
+    if (refreshInFlightActor.current === refreshKey && refreshInFlight.current) return refreshInFlight.current;
+    if (!quiet) setRefreshing(true);
     const task = (async (): Promise<PocketState | null> => {
       try {
         let next: PocketState;
         const routePocket = new URLSearchParams(window.location.search).get('pocket')?.toLowerCase();
         for (let attempt = 0; ; attempt++) {
+          if (!current()) return null;
           try {
             next = await getPocketState(actor ?? undefined);
           } catch (cause) {
@@ -166,6 +162,7 @@ function App() {
           }
           break;
         }
+        if (!current()) return null;
         if (next.creationRecovery && lastGoodState.current && !lastGoodState.current.creationRecovery) {
           setStateStale(true);
           return null;
@@ -184,6 +181,7 @@ function App() {
         setLoadError('');
         return next;
       } catch (cause) {
+        if (!current()) return null;
         setWaitingForIndex(cause instanceof PocketIndexSyncError);
         const message = cause instanceof Error ? cause.message : String(cause);
         if (actor && stateActorRef.current !== actor.toLowerCase()) {
@@ -191,13 +189,16 @@ function App() {
           stateActorRef.current = null;
           setStateActor(null);
           setLoadError(message);
-        } else if (lastGoodState.current) setStateStale(true);
+        } else if (lastGoodState.current && stateActorRef.current === actor?.toLowerCase() &&
+          lastGoodState.current.pocket === new URLSearchParams(route).get('pocket')) setStateStale(true);
         else { setState(null); setLoadError(message); }
         return null;
       } finally {
-        refreshInFlight.current = null;
-        refreshInFlightActor.current = null;
-        if (showProgress) setRefreshing(false);
+        if (refreshInFlightActor.current === refreshKey) {
+          refreshInFlight.current = null;
+          refreshInFlightActor.current = null;
+          if (current()) setRefreshing(false);
+        }
       }
     })();
     refreshInFlight.current = task;
@@ -221,27 +222,41 @@ function App() {
     void update(false);
     return () => { active = false; window.clearTimeout(timer); };
   }, [refresh]);
+  useEffect(() => {
+    if (!browserMode || !state?.genesis) return;
+    const onStorage = (event: StorageEvent) => {
+      const pocket = new URLSearchParams(location.search).get('pocket')?.toLowerCase();
+      if (pocket && event.key === 'quotacell.browser.v1:' + state.genesis + ':' + pocket) {
+        setStateStale(true);
+        void refresh(true);
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [refresh, state?.genesis]);
   const loadSelectedPocket = useCallback(async (pocket: string) => {
+    const scope = refreshScope.current;
+    const current = () => refreshScope.current === scope &&
+      new URLSearchParams(location.search).get('pocket')?.toLowerCase() === pocket.toLowerCase();
     setSelectedPocketLoading(true);
     setSelectedPocketError(false);
-    setStateStale(false);
     try {
       const result = await refresh();
       const routePocket = new URLSearchParams(window.location.search).get('pocket');
-      if (routePocket?.toLowerCase() !== pocket.toLowerCase()) return;
+      if (!current() || routePocket?.toLowerCase() !== pocket.toLowerCase()) return;
       if (!result || result.connectRequired || result.pocket?.toLowerCase() !== pocket.toLowerCase()) {
         const hasLastGood = stateActorRef.current === identity?.publicKey.toLowerCase() && lastGoodState.current?.pocket?.toLowerCase() === pocket.toLowerCase();
         setStateStale(hasLastGood);
         setSelectedPocketError(!hasLastGood);
       }
     } catch {
-      if (new URLSearchParams(window.location.search).get('pocket')?.toLowerCase() === pocket.toLowerCase()) {
+      if (current()) {
         const hasLastGood = stateActorRef.current === identity?.publicKey.toLowerCase() && lastGoodState.current?.pocket?.toLowerCase() === pocket.toLowerCase();
         setStateStale(hasLastGood);
         setSelectedPocketError(!hasLastGood);
       }
     } finally {
-      if (new URLSearchParams(window.location.search).get('pocket')?.toLowerCase() === pocket.toLowerCase()) setSelectedPocketLoading(false);
+      if (current()) setSelectedPocketLoading(false);
     }
   }, [identity?.publicKey, refresh]);
   useEffect(() => {
@@ -834,7 +849,7 @@ function App() {
         return;
       }
       const detail = status === 'committed'
-        ? `${t('statusCommitted')} Â· ${t('blockNumber')} ${result.blockNumber || 'â€”'}`
+        ? `${t('statusCommitted')} · ${t('blockNumber')} ${result.blockNumber || '—'}`
         : status === 'pending' ? t('statusPending')
           : status === 'proposed' ? t('statusProposed')
             : status === 'rejected' ? t('transactionRejected')
@@ -970,10 +985,10 @@ function App() {
   return <>
     <header className="topbar sticky top-0 z-40 flex h-16 w-full items-center justify-between gap-3 border-b border-line bg-white/95 px-4 backdrop-blur sm:px-6 lg:px-[max(26px,calc((100vw-1160px)/2))]"><a className="brand inline-flex shrink-0 items-center gap-2.5 text-lg font-bold text-navy no-underline" href="#home" aria-label={t('brand')}><CellMark/><span>{t('brand')}</span></a>
       <div className="topbar-controls flex min-w-0 items-center justify-end gap-1.5 sm:gap-3">
-        {state && <div className={`network-state ${pudgeActionsDisabled ? 'is-readonly' : ''}`} role="status" aria-label={`${pudge ? t('networkPudge') : t('networkLocal')}${pudgeReadOnly ? ` Â· ${t('readOnly')}` : pudgePrepareOnly ? ` Â· ${t('prepareOnly')}` : ''}`}><i aria-hidden="true"/><span className="network-full" aria-hidden="true">{pudge ? t('networkPudge') : t('networkLocal')}</span><span className="network-compact" aria-hidden="true">{pudge ? t('networkPudgeShort') : t('networkLocalShort')}</span>{pudgeReadOnly && <small>{t('readOnly')}</small>}{pudgePrepareOnly && <small>{t('prepareOnly')}</small>}</div>}
+        {state && <div className={`network-state ${pudgeActionsDisabled ? 'is-readonly' : ''}`} role="status" aria-label={`${pudge ? t('networkPudge') : t('networkLocal')}${pudgeReadOnly ? ` · ${t('readOnly')}` : pudgePrepareOnly ? ` · ${t('prepareOnly')}` : ''}`}><i aria-hidden="true"/><span className="network-full" aria-hidden="true">{pudge ? t('networkPudge') : t('networkLocal')}</span><span className="network-compact" aria-hidden="true">{pudge ? t('networkPudgeShort') : t('networkLocalShort')}</span>{pudgeReadOnly && <small>{t('readOnly')}</small>}{pudgePrepareOnly && <small>{t('prepareOnly')}</small>}</div>}
         <label className="language-control"><span className="sr-only">{t('language')}</span><select value={i18n.language === 'zh-Hans' ? 'zh-Hans' : 'en'} onChange={(event) => void i18n.changeLanguage(event.target.value)} aria-label={t('language')}><option value="en">EN</option><option value="zh-Hans">ç®€</option></select></label>
-        <button className="icon-button refresh-button" type="button" onClick={() => selectedPocketId ? void loadSelectedPocket(selectedPocketId) : void refresh()} disabled={refreshing || selectedPocketLoading} aria-label={refreshing || selectedPocketLoading ? t('refreshing') : t('refresh')} title={t('refresh')}>{refreshing || selectedPocketLoading ? 'â€¦' : 'â†»'}</button>
-        {identity ? <div className="connected-account"><div><strong>{displayIdentityRole || t('connected')}</strong><code dir="ltr">{shortHash(identity.address, 12, 7)}</code></div><button className="text-button disconnect-button" onClick={() => { wallet.disconnect(); setIdentity(null); setIdentityError(''); }} type="button">Ã—</button></div> : <button className="connect-button" type="button" disabled={walletBusy} onClick={() => void connectWallet()}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button>}
+        <button className="icon-button refresh-button" type="button" onClick={() => selectedPocketId ? void loadSelectedPocket(selectedPocketId) : void refresh()} disabled={refreshing || selectedPocketLoading} aria-label={refreshing || selectedPocketLoading ? t('refreshing') : t('refresh')} title={t('refresh')}>{refreshing || selectedPocketLoading ? '…' : '↻'}</button>
+        {identity ? <div className="connected-account"><div><strong>{displayIdentityRole || t('connected')}</strong><code dir="ltr">{shortHash(identity.address, 12, 7)}</code></div><button className="text-button disconnect-button" onClick={() => { wallet.disconnect(); setIdentity(null); setIdentityError(''); }} type="button">×</button></div> : <button className="connect-button" type="button" disabled={walletBusy} onClick={() => void connectWallet()}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button>}
       </div>
     </header>
 
@@ -1009,7 +1024,7 @@ function App() {
         </main>
         {identity && <PocketPicker pockets={state?.discovery || []} drafts={savedDrafts} ownerCanCreate={Boolean(identity)} locale={i18n.language} loading={identityDiscoveryLoading} error={loadError ? t('pocketListError') : ''} t={key => t(key)} onOpen={openSelectedPocket} onCreate={startNewDraft} onResume={resumeDraft} onDiscard={discardDraft}/>}
       </> : showPocketList || state?.discovery || (state?.empty && identity) || identityDiscoveryLoading ? <PocketPicker pockets={showPocketList ? pocketChoices : state?.discovery || []} drafts={savedDrafts} ownerCanCreate={!browserMode && Boolean(identity)} locale={i18n.language} loading={showPocketList ? pocketListLoading : identityDiscoveryLoading} error={pocketListError} t={(key) => t(key)} onOpen={(pocket) => void openSelectedPocket(pocket)} onCreate={startNewDraft} onResume={resumeDraft} onDiscard={discardDraft}/>
-      : state?.empty ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><div className="empty-cell-mark mb-5 grid size-14 place-items-center rounded-xl border border-blue-100 bg-blue-wash text-blue"><CellMark/></div><h1 className="mb-2 max-w-2xl text-3xl font-bold leading-tight text-navy sm:text-4xl">{t('emptyTitle')}</h1><p className="mb-5 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">{t('emptyBody')}</p><button className="primary-button" type="button" disabled={!identity} onClick={startNewDraft}>{t('createPocket')} <span aria-hidden="true">â†’</span></button></main>
+      : state?.empty ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><div className="empty-cell-mark mb-5 grid size-14 place-items-center rounded-xl border border-blue-100 bg-blue-wash text-blue"><CellMark/></div><h1 className="mb-2 max-w-2xl text-3xl font-bold leading-tight text-navy sm:text-4xl">{t('emptyTitle')}</h1><p className="mb-5 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">{t('emptyBody')}</p><button className="primary-button" type="button" disabled={!identity} onClick={startNewDraft}>{t('createPocket')} <span aria-hidden="true">→</span></button></main>
       : state && !state.empty ? <main id="home" className="app-page mx-auto w-[min(100%-2rem,64rem)] py-6 sm:py-8">
         <div className="pocket-heading mb-5 flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><h1 className="m-0 text-2xl font-bold text-navy sm:text-[28px]">{state.pocket ? t('activePocket') : t('brand')}</h1><p className="mt-1 text-xs text-slate-600 sm:text-sm">{identity ? displayIdentityRole : t('connectToSeeActions')}</p></div><div className="flex max-w-full flex-wrap items-center justify-end gap-2"><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('myPockets')}</button><button className="secondary-button" type="button" onClick={() => void copyPocketId()}>{t('sharePocketLink')}</button><span className={closed ? 'state-mark state-closed' : 'state-mark'}>{closed ? t('closedStatus') : t('active')}</span></div></div>
 
@@ -1024,17 +1039,17 @@ function App() {
           <article className="metric allowance-metric min-w-0 rounded-lg border border-line bg-white p-4 sm:p-5"><span className="text-xs font-semibold text-slate-600">{closed ? t('terminalCapacity') : t('sharedAllowance')}</span><strong className="metric-value my-2 block break-words text-3xl font-bold leading-tight tabular-nums text-navy sm:text-4xl">{closed ? <>{formatCkb(state.policyCapacity || '0')} <i className="text-base font-medium not-italic text-slate-500">CKB</i></> : <>{formatCkb(sharedRemaining)} <i className="text-base font-medium not-italic text-slate-500">CKB</i></>}</strong><p className="mb-2 text-xs text-slate-600">{closed ? t('terminalCapacityHint') : t('sharedUsedOf', { used: formatCkb(sharedUsed), total: formatCkb(sharedLimit) })}</p>{!closed && <div className="capacity-bar allowance-bar h-1.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-label={t('sharedAllowance')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent(sharedUsed.toString(), sharedLimit.toString())}><span className="block h-full rounded-full bg-blue" style={{ width: `${progressPercent(sharedUsed.toString(), sharedLimit.toString())}%` }}/></div>}{!closed && <small className="mt-2 block text-[11px] leading-4 text-slate-500">{t('allowanceExplanation')}</small>}</article>
         </section>
 
-        {!identity && <section className="connect-prompt mb-6 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div><h2 className="mb-1 text-base font-semibold text-navy">{t('connectToContinue')}</h2><p className="m-0 max-w-xl text-xs leading-5 text-slate-600">{t(browserMode ? 'browserDisclosure' : 'localDisclosure')}</p></div><button className="primary-button w-full sm:w-auto" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')} <span aria-hidden="true">â†’</span></button></section>}
+        {!identity && <section className="connect-prompt mb-6 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div><h2 className="mb-1 text-base font-semibold text-navy">{t('connectToContinue')}</h2><p className="m-0 max-w-xl text-xs leading-5 text-slate-600">{t(browserMode ? 'browserDisclosure' : 'localDisclosure')}</p></div><button className="primary-button w-full sm:w-auto" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')} <span aria-hidden="true">→</span></button></section>}
         {identity && role === 'unrecognized' && <p className="role-message" role="status">{t('unknownRole')}</p>}
 
         {identity && role === 'owner' && !closed && <section className="owner-actions mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div className="section-title"><div><h2 className="text-base font-semibold text-navy">{t('ownerControls')}</h2><p className="mt-1 text-xs text-slate-600">{t('ownerDescription')}</p></div></div><div className="owner-action-list flex w-full flex-wrap gap-2 sm:w-auto"><button className="secondary-button flex-1 sm:flex-none" disabled={pudgeActionsDisabled || depositBlocked} onClick={() => beginOperation('deposit')}>{t('fund')}</button>{browserMode && <button className="secondary-button" disabled={actionsBlocked} onClick={() => beginOperation('admin')}>{t('actionAdmin')}</button>}{state.hasFund && <button className="secondary-button flex-1 sm:flex-none" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('close')}>{t('closePocket')}</button>}</div></section>}
-        {identity && role === 'owner' && closed && <section className="owner-actions late-funds mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center"><div><h2 className="text-sm font-semibold text-amber-950">{state.hasFund ? t('lateFunds') : t('lateDepositTitle')}</h2><p className="mt-1 text-sm text-amber-900">{state.hasFund ? `${formatCkb(funds)} CKB` : t('lateDepositBody')}</p></div>{state.hasFund ? <button className="primary-button" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('sweep')}>{t('sweep')} <span aria-hidden="true">â†’</span></button> : <button className="primary-button" disabled={pudgeActionsDisabled || depositBlocked} onClick={() => beginOperation('deposit')}>{t('lateDepositTitle')} <span aria-hidden="true">â†’</span></button>}</section>}
+        {identity && role === 'owner' && closed && <section className="owner-actions late-funds mt-7 flex flex-col items-start justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center"><div><h2 className="text-sm font-semibold text-amber-950">{state.hasFund ? t('lateFunds') : t('lateDepositTitle')}</h2><p className="mt-1 text-sm text-amber-900">{state.hasFund ? `${formatCkb(funds)} CKB` : t('lateDepositBody')}</p></div>{state.hasFund ? <button className="primary-button" disabled={pudgeActionsDisabled || actionsBlocked} onClick={() => beginOperation('sweep')}>{t('sweep')} <span aria-hidden="true">→</span></button> : <button className="primary-button" disabled={pudgeActionsDisabled || depositBlocked} onClick={() => beginOperation('deposit')}>{t('lateDepositTitle')} <span aria-hidden="true">→</span></button>}</section>}
 
         {identity && (role === 'alice' || role === 'ben') && activeDelegate && !closed && <section className="delegate-focus mb-7 rounded-lg border border-t-[3px] border-t-blue border-line bg-white p-4 sm:p-5">
           <div className="delegate-focus-heading flex items-start justify-between gap-3"><div className="flex min-w-0 items-start gap-2.5"><span className={`permission-dot mt-2 size-2 shrink-0 rounded-full ${activeDelegate.enabled ? 'bg-emerald-600' : 'is-revoked bg-red-600'}`} aria-hidden="true"/><div className="min-w-0"><h2 className="m-0 text-lg font-semibold text-navy">{labelFor(activeDelegate.publicKey, role === 'alice' ? t('delegateOne') : t('delegateTwo'))}</h2>{descriptionFor(activeDelegate.publicKey) && <p className="mt-1 text-xs text-slate-600">{descriptionFor(activeDelegate.publicKey)}</p>}</div></div><span className={activeDelegate.enabled ? 'permission-status' : 'permission-status is-revoked'}>{activeDelegate.enabled ? t('active') : t('revoked')}</span></div>
           <div className="delegate-summary mt-5 grid grid-cols-2 gap-3 border-y border-slate-100 py-4 sm:grid-cols-3 sm:gap-4"><div className="min-w-0"><span className="text-xs font-medium text-slate-600">{t('remaining')}</span><strong className="my-1 block break-words text-xl font-semibold tabular-nums text-navy">{formatCkb(BigInt(activeDelegate.limit) > BigInt(activeDelegate.used) ? BigInt(activeDelegate.limit) - BigInt(activeDelegate.used) : 0n)} <i className="text-xs font-normal not-italic text-slate-500">CKB</i></strong><small className="text-[11px] leading-4 text-slate-500">{formatCkb(activeDelegate.used)} {t('usedOf')} {formatCkb(activeDelegate.limit)} CKB</small></div><div className="min-w-0"><span className="text-xs font-medium text-slate-600">{t('maxPayment')}</span><strong className="my-1 block break-words text-xl font-semibold tabular-nums text-navy">{formatCkb(activeDelegate.perPayment)} <i className="text-xs font-normal not-italic text-slate-500">CKB</i></strong><small className="text-[11px] leading-4 text-slate-500">{t('perPaymentHint')}</small></div><div className="col-span-2 min-w-0 border-t border-slate-100 pt-3 sm:col-span-1 sm:border-0 sm:pt-0"><span className="text-xs font-medium text-slate-600">{t('sharedRemaining')}</span><strong className="my-1 block break-words text-xl font-semibold tabular-nums text-navy">{formatCkb(sharedRemaining)} <i className="text-xs font-normal not-italic text-slate-500">CKB</i></strong><small className="text-[11px] leading-4 text-slate-500">{t('sharedAuthorityHint')}</small></div></div>
           <div className="approved-recipient mt-3 flex flex-col gap-1 border-t border-slate-100 pt-3 sm:flex-row sm:justify-between sm:gap-4"><span className="text-xs font-medium text-slate-600">{t('recipient')}</span><code className="min-w-0 break-all text-left text-xs text-slate-700 sm:max-w-[70%] sm:text-right" dir="ltr" title={recipientAddress(activeDelegate.recipient)}>{recipientAddress(activeDelegate.recipient)}</code></div>
-          {activeDelegate.enabled && <button className="primary-button pay-button mt-4 min-w-40" disabled={pudgeActionsDisabled || actionsBlocked || !state.hasFund} onClick={() => beginOperation('pay', activeDelegate.role)}>{t('pay')} <span aria-hidden="true">â†’</span></button>}
+          {activeDelegate.enabled && <button className="primary-button pay-button mt-4 min-w-40" disabled={pudgeActionsDisabled || actionsBlocked || !state.hasFund} onClick={() => beginOperation('pay', activeDelegate.role)}>{t('pay')} <span aria-hidden="true">→</span></button>}
           {!activeDelegate.enabled && <p className="revoked-message" role="status">{t('permissionRevokedMessage')}</p>}
         </section>}
 
@@ -1044,7 +1059,7 @@ function App() {
             const name = labelFor(delegate.publicKey, fallback);
             const remaining = BigInt(delegate.limit) > BigInt(delegate.used) ? BigInt(delegate.limit) - BigInt(delegate.used) : 0n;
             return <article key={delegate.role} className="permission-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t border-line px-3 py-3 first:border-0 sm:grid-cols-[minmax(0,1.5fr)_minmax(120px,.8fr)_auto] sm:gap-4 sm:px-4">
-              <div className="permission-person"><div className="participant-mark" aria-hidden="true">{index + 1}</div><div><div className="permission-name"><h3>{name}</h3><span className={delegate.enabled ? 'permission-status' : 'permission-status is-revoked'}>{delegate.enabled ? t('active') : t('revoked')}</span><button type="button" className="text-button edit-name" onClick={() => setEditPerson({ publicKey: delegate.publicKey, role: delegate.role, fallback: name })}>{t('rename')}</button></div>{descriptionFor(delegate.publicKey) && <p>{descriptionFor(delegate.publicKey)}</p>}<span className="permission-subline">{t('remaining')} {formatCkb(remaining)} / {formatCkb(delegate.limit)} CKB Â· {t('used')} {formatCkb(delegate.used)} CKB Â· {t('maxPayment')} {formatCkb(delegate.perPayment)} CKB</span></div></div>
+              <div className="permission-person"><div className="participant-mark" aria-hidden="true">{index + 1}</div><div><div className="permission-name"><h3>{name}</h3><span className={delegate.enabled ? 'permission-status' : 'permission-status is-revoked'}>{delegate.enabled ? t('active') : t('revoked')}</span><button type="button" className="text-button edit-name" onClick={() => setEditPerson({ publicKey: delegate.publicKey, role: delegate.role, fallback: name })}>{t('rename')}</button></div>{descriptionFor(delegate.publicKey) && <p>{descriptionFor(delegate.publicKey)}</p>}<span className="permission-subline">{t('remaining')} {formatCkb(remaining)} / {formatCkb(delegate.limit)} CKB · {t('used')} {formatCkb(delegate.used)} CKB · {t('maxPayment')} {formatCkb(delegate.perPayment)} CKB</span></div></div>
               <div className="permission-recipient"><span>{t('recipient')}</span><code dir="ltr" title={recipientAddress(delegate.recipient)}>{shortHash(recipientAddress(delegate.recipient), 18, 8)}</code></div>
             <div className="permission-actions"><details className="participant-inspector"><summary>{t('details')}</summary><div><span>{t('publicKey')}</span><code dir="ltr">{delegate.publicKey}</code><span>{t('recipient')}</span><code dir="ltr">{recipientAddress(delegate.recipient)}</code><span>{t('used')}</span><code>{formatCkb(delegate.used)} CKB</code></div></details>{<button type="button" className="text-button revoke-button" disabled={!delegate.enabled || actionsBlocked || pudgeActionsDisabled || closed} onClick={() => beginOperation('revoke', delegate.role, name)}>{t('revoke')}</button>}</div>
             </article>;
@@ -1053,9 +1068,9 @@ function App() {
 
         {identity && role === 'unrecognized' && <section className="public-permissions"><h2>{t('delegatePermissions')}</h2><div className="permission-list">{delegates.map((delegate, index) => <div className="public-permission-row" key={delegate.role}><strong>{labelFor(delegate.publicKey, index === 0 ? t('delegateOne') : t('delegateTwo'))}</strong><span>{formatCkb(BigInt(delegate.limit) > BigInt(delegate.used) ? BigInt(delegate.limit) - BigInt(delegate.used) : 0n)} / {formatCkb(delegate.limit)} CKB</span><span>{delegate.enabled ? t('active') : t('revoked')}</span></div>)}</div></section>}
 
-        {closed && <section className="closed-summary"><div className="closed-icon" aria-hidden="true">âœ“</div><div><h2>{t('closedTitle')}</h2><p>{t('closedBody')}</p>{history.filter((item) => item.operation === 'close' && item.state === 'committed').slice(-1).map((item) => <p key={item.id}>{t('recoveredAmount')}: <strong>{formatCkb(item.amount)} CKB</strong></p>)}{state.hasFund && <p>{t('lateFunds')}</p>}</div></section>}
+        {closed && <section className="closed-summary"><div className="closed-icon" aria-hidden="true">✓</div><div><h2>{t('closedTitle')}</h2><p>{t('closedBody')}</p>{history.filter((item) => item.operation === 'close' && item.state === 'committed').slice(-1).map((item) => <p key={item.id}>{t('recoveredAmount')}: <strong>{formatCkb(item.amount)} CKB</strong></p>)}{state.hasFund && <p>{t('lateFunds')}</p>}</div></section>}
 
-        {unsupported.length > 0 && <section className="unsupported-section" role="status"><div className="unsupported-heading"><span aria-hidden="true">!</span><div><h2>{t('unsupportedTitle')}</h2><p>{t('unsupportedBody')}</p></div></div><details><summary>{t('details')}</summary><div className="unsupported-list">{unsupported.map((item) => { const outPoint = item.outPoint; const hash = outPoint.txHash || outPoint.tx_hash || ''; return <div className="unsupported-row" key={`${hash}:${outPoint.index}`}><strong>{formatCkb(item.capacity)} CKB</strong><span>{item.hasType ? t('typedCell') : t('dataCell')} Â· {item.dataBytes} {t('bytes')}</span><code dir="ltr">{shortHash(hash, 14, 8)}:{outPoint.index}</code></div>; })}</div></details></section>}
+        {unsupported.length > 0 && <section className="unsupported-section" role="status"><div className="unsupported-heading"><span aria-hidden="true">!</span><div><h2>{t('unsupportedTitle')}</h2><p>{t('unsupportedBody')}</p></div></div><details><summary>{t('details')}</summary><div className="unsupported-list">{unsupported.map((item) => { const outPoint = item.outPoint; const hash = outPoint.txHash || outPoint.tx_hash || ''; return <div className="unsupported-row" key={`${hash}:${outPoint.index}`}><strong>{formatCkb(item.capacity)} CKB</strong><span>{item.hasType ? t('typedCell') : t('dataCell')} · {item.dataBytes} {t('bytes')}</span><code dir="ltr">{shortHash(hash, 14, 8)}:{outPoint.index}</code></div>; })}</div></details></section>}
 
         {identity && <section className="metadata-tools"><details><summary>{t('participantNames')}</summary><p>{t('metadataNote')}</p><div className="metadata-actions"><button type="button" className="text-button" onClick={downloadNames}>{t('exportNames')}</button><label className="file-import">{t('importNames')}<input type="file" accept="application/json,.json" onChange={(event) => void loadNames(event.target.files?.[0])}/></label></div></details></section>}
 
@@ -1064,7 +1079,7 @@ function App() {
           {history.length ? <ol className="history-list">{[...history].reverse().slice(0, 8).map((item) => <HistoryRow item={item} key={item.id} locale={i18n.language} label={item.actor ? labelFor(item.actor, item.actor === state.owner ? t('owner') : t(delegates[0]?.publicKey === item.actor ? 'delegateOne' : 'delegateTwo')) : ''} stateLabel={historyState(item.state)} explorer={explorerEnabled ? explorerUrl(item.tx_hash) : undefined} t={t}/>)}</ol> : (!browserMode || currentHistory?.rows && !currentHistory.failed) && <p className="empty-history">{t('noHistory')}</p>}
         </section>
 
-        <details className="technical-footer"><summary>{t('technical')}</summary><div><p>{t(browserMode ? 'browserDisclosure' : 'localDisclosure')}</p><dl><div><dt>{t('appIdentity')}</dt><dd><code dir="ltr">{state.genesis}</code></dd></div>{state.pocket && <div><dt>{t('policyId')}</dt><dd><code dir="ltr">{state.pocket}</code></dd></div>}{state.indexedTip && <div><dt>{t('indexerTip')}</dt><dd><code dir="ltr">{state.indexedTip.block_number} Â· {state.indexedTip.block_hash}</code></dd></div>}</dl></div></details>
+        <details className="technical-footer"><summary>{t('technical')}</summary><div><p>{t(browserMode ? 'browserDisclosure' : 'localDisclosure')}</p><dl><div><dt>{t('appIdentity')}</dt><dd><code dir="ltr">{state.genesis}</code></dd></div>{state.pocket && <div><dt>{t('policyId')}</dt><dd><code dir="ltr">{state.pocket}</code></dd></div>}{state.indexedTip && <div><dt>{t('indexerTip')}</dt><dd><code dir="ltr">{state.indexedTip.block_number} · {state.indexedTip.block_hash}</code></dd></div>}</dl></div></details>
       </main>
       : <main id="home" className="loading-page">{loadError ? <section className="load-error" role="alert"><h1>{t('loadError')}</h1><p>{localizedError(loadError, t)}</p><button className="primary-button" onClick={() => void refresh()}>{t('retry')}</button><div className="mt-4 flex flex-wrap gap-4 text-sm"><a href={`${window.location.pathname}?register=1`}>{t('shareWalletIdentity')}</a><a href={`${window.location.pathname}?discover=1`}>{t('discoverMyPocket')}</a></div></section> : <p role="status">{t('loadingState')}</p>}</main>}
 
@@ -1103,24 +1118,24 @@ function TransactionNoticePanel({ notice, title, pudge, explorerUrl, t, classNam
   const message = notice.detail || (notice.hash ? notice.state : t('noUncertainTransactions'));
   const canDismiss = Boolean(onDismiss && ['committed', 'checked', 'not-sent', 'error', 'rejected', 'failed'].includes(notice.state));
   return <section className={`transaction-notice notice-${tone} ${className}`} role={tone === 'error' || tone === 'warning' ? 'alert' : 'status'} aria-live={tone === 'error' || tone === 'warning' ? 'assertive' : 'polite'} aria-atomic="true">
-    <span className="notice-marker" aria-hidden="true">{tone === 'success' ? 'âœ“' : tone === 'info' ? 'i' : '!'}</span>
+    <span className="notice-marker" aria-hidden="true">{tone === 'success' ? '✓' : tone === 'info' ? 'i' : '!'}</span>
     <div className="notice-content"><strong>{title}</strong><p>{message}</p>{['uncertain', 'pending', 'proposed', 'submitted'].includes(notice.state) && <p className="mt-1 text-xs text-slate-600">{t('automaticTracking')}</p>}
       {notice.hash && <div className="notice-transaction"><code dir="ltr">{notice.hash}</code>{pudge && <a href={explorerUrl(notice.hash)} target="_blank" rel="noreferrer">{t('explorer')}</a>}</div>}
       {(notice.technicalError || notice.phase) && <details className="notice-technical"><summary>{t('technical')}</summary>{notice.phase && <p><code>{notice.phase}</code></p>}{notice.technicalError && <pre dir="ltr">{notice.technicalError}</pre>}</details>}
     </div>
-    <div className="notice-actions">{canCheck && <button type="button" className="secondary-button" disabled={checkingStatus} onClick={onCheckStatus}>{checkingStatus ? t('checkingStatus') : t('checkStatus')}</button>}{onRetry && <button type="button" className="secondary-button" disabled={retryBusy} onClick={onRetry}>{t('retrySameTransaction')}</button>}{canDismiss && <button type="button" className="icon-button notice-dismiss" onClick={onDismiss} aria-label={t('close')}>Ã—</button>}</div>
+    <div className="notice-actions">{canCheck && <button type="button" className="secondary-button" disabled={checkingStatus} onClick={onCheckStatus}>{checkingStatus ? t('checkingStatus') : t('checkStatus')}</button>}{onRetry && <button type="button" className="secondary-button" disabled={retryBusy} onClick={onRetry}>{t('retrySameTransaction')}</button>}{canDismiss && <button type="button" className="icon-button notice-dismiss" onClick={onDismiss} aria-label={t('close')}>×</button>}</div>
   </section>;
 }
 
 function HistoryRow({ item, locale, label, stateLabel, explorer, t }: { item: HistoryItem; locale: string; label: string; stateLabel: string; explorer?: string; t: (key: string) => string }) {
   const operationLabel = item.operation === 'genesis' ? t('actionGenesis') : item.operation === 'pay' ? t('actionPay') : item.operation === 'deposit' ? t('actionDeposit') : item.operation === 'admin' ? t('actionAdmin') : item.operation === 'revoke' ? t('actionRevoke') : item.operation === 'close' ? t('actionClose') : item.operation === 'sweep' ? t('actionSweep') : t('chainHistoryUnknown');
-  return <li className="history-row grid grid-cols-[28px_minmax(0,1fr)_auto_auto] items-center gap-2.5 border-t border-slate-100 px-3 py-3 first:border-0 sm:px-4"><span className="history-symbol grid size-7 place-items-center rounded-md bg-blue-50 text-sm text-blue-800" aria-hidden="true">{item.operation === 'pay' ? 'â†—' : item.operation === 'deposit' ? '+' : item.operation === 'revoke' ? 'âˆ’' : 'â—ˆ'}</span><div className="history-description grid min-w-0 gap-1"><strong className="text-xs font-semibold text-slate-800">{operationLabel}{item.operation === 'pay' || item.operation === 'deposit' || item.operation === 'close' || item.operation === 'sweep' ? ` Â· ${formatCkb(item.amount)} CKB` : ''}</strong><span className="text-[10px] text-slate-500">{label && `${label} Â· `}{new Intl.DateTimeFormat(locale === 'zh-Hans' ? 'zh-CN' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(item.created))}</span></div><span className={`history-state whitespace-nowrap px-1.5 py-0.5 text-[10px] ${item.state === 'uncertain' ? 'is-uncertain text-amber-800' : item.state === 'committed' ? 'is-confirmed text-emerald-800' : 'text-slate-600'}`}>{stateLabel}</span>{explorer ? <a className="history-link grid size-7 place-items-center rounded text-blue hover:bg-blue-wash" href={explorer} target="_blank" rel="noreferrer" aria-label={`${t('explorer')}: ${item.tx_hash}`}>â†—</a> : <code className="history-hash whitespace-nowrap text-[10px] text-slate-500" title={item.tx_hash}>{shortHash(item.tx_hash, 10, 7)}</code>}</li>;
+  return <li className="history-row grid grid-cols-[28px_minmax(0,1fr)_auto_auto] items-center gap-2.5 border-t border-slate-100 px-3 py-3 first:border-0 sm:px-4"><span className="history-symbol grid size-7 place-items-center rounded-md bg-blue-50 text-sm text-blue-800" aria-hidden="true">{item.operation === 'pay' ? '↗' : item.operation === 'deposit' ? '+' : item.operation === 'revoke' ? '−' : '◈'}</span><div className="history-description grid min-w-0 gap-1"><strong className="text-xs font-semibold text-slate-800">{operationLabel}{item.operation === 'pay' || item.operation === 'deposit' || item.operation === 'close' || item.operation === 'sweep' ? ` · ${formatCkb(item.amount)} CKB` : ''}</strong><span className="text-[10px] text-slate-500">{label && `${label} · `}{new Intl.DateTimeFormat(locale === 'zh-Hans' ? 'zh-CN' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(item.created))}</span></div><span className={`history-state whitespace-nowrap px-1.5 py-0.5 text-[10px] ${item.state === 'uncertain' ? 'is-uncertain text-amber-800' : item.state === 'committed' ? 'is-confirmed text-emerald-800' : 'text-slate-600'}`}>{stateLabel}</span>{explorer ? <a className="history-link grid size-7 place-items-center rounded text-blue hover:bg-blue-wash" href={explorer} target="_blank" rel="noreferrer" aria-label={`${t('explorer')}: ${item.tx_hash}`}>↗</a> : <code className="history-hash whitespace-nowrap text-[10px] text-slate-500" title={item.tx_hash}>{shortHash(item.tx_hash, 10, 7)}</code>}</li>;
 }
 
 function EditParticipantDialog({ participant, initial, onClose, onSave, t }: { participant: Participant; initial?: { name: string; description?: string }; onClose: () => void; onSave: (participant: Participant, name: string, description: string) => void; t: (key: string) => string }) {
   const [name, setName] = useState(initial?.name || '');
   const [description, setDescription] = useState(initial?.description || '');
-  return <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}><Dialog.Portal><Dialog.Overlay className="dialog-overlay"/><Dialog.Content className="dialog-content name-dialog" aria-modal="true"><div className="dialog-top"><span className="dialog-symbol" aria-hidden="true"><CellMark/></span><Dialog.Close asChild><button className="icon-button" aria-label={t('close')}>Ã—</button></Dialog.Close></div><Dialog.Title className="dialog-title">{t('rename')}</Dialog.Title><Dialog.Description className="dialog-description">{t('metadataNote')}</Dialog.Description><label className="field-block">{t('name')}<input autoFocus value={name} maxLength={32} onChange={(event) => setName(event.target.value)} placeholder={participant.fallback}/></label><label className="field-block">{t('description')}<input value={description} maxLength={72} onChange={(event) => setDescription(event.target.value)}/></label><div className="dialog-actions"><Dialog.Close asChild><button className="secondary-button">{t('cancel')}</button></Dialog.Close><button className="primary-button" onClick={() => onSave(participant, name, description)}>{t('save')}</button></div></Dialog.Content></Dialog.Portal></Dialog.Root>;
+  return <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}><Dialog.Portal><Dialog.Overlay className="dialog-overlay"/><Dialog.Content className="dialog-content name-dialog" aria-modal="true"><div className="dialog-top"><span className="dialog-symbol" aria-hidden="true"><CellMark/></span><Dialog.Close asChild><button className="icon-button" aria-label={t('close')}>×</button></Dialog.Close></div><Dialog.Title className="dialog-title">{t('rename')}</Dialog.Title><Dialog.Description className="dialog-description">{t('metadataNote')}</Dialog.Description><label className="field-block">{t('name')}<input autoFocus value={name} maxLength={32} onChange={(event) => setName(event.target.value)} placeholder={participant.fallback}/></label><label className="field-block">{t('description')}<input value={description} maxLength={72} onChange={(event) => setDescription(event.target.value)}/></label><div className="dialog-actions"><Dialog.Close asChild><button className="secondary-button">{t('cancel')}</button></Dialog.Close><button className="primary-button" onClick={() => onSave(participant, name, description)}>{t('save')}</button></div></Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
 function CellMark() {

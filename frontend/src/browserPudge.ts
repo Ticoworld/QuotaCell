@@ -26,7 +26,7 @@ const creationEntries = (actor: string) => [...entries(actorCreationScope(actor)
   .filter(entry => entry.payment.publicKey === actor.toLowerCase());
 type OwnerRequest = { id: string; draftId?: string; publicKey: string; operation: OwnerOperation; amount?: string; role?: 'alice' | 'ben'; shared?: string; alice?: string; ben?: string; mask?: number } & Partial<Terms>;
 type Entry = {
-  operation?: OwnerOperation;
+  operation?: OwnerOperation | 'pay';
   targetPocket?: string;
   ownerRequest?: OwnerRequest;
   policyPoint?: Point;
@@ -43,7 +43,7 @@ const save = (pocket: string, records: Entry[]) => localStorage.setItem(key(pock
 const locked = <T>(pocket: string, action: () => Promise<T>) => navigator.locks.request(key(pocket), action) as unknown as Promise<T>;
 
 const reservesInputs = (entry: Entry) => entry.state === 'signed' || entry.state === 'uncertain';
-const depositCanOverlap = (entry: Entry) => !entry.operation || ['admin', 'revoke'].includes(entry.operation);
+const depositCanOverlap = (entry: Entry) => !entry.operation || ['pay', 'admin', 'revoke'].includes(entry.operation);
 
 function checkReservations(journal: Entry[], entry: Entry) {
   const inputs = c.Transaction.fromBytes(entry.prepared.transaction).inputs;
@@ -61,7 +61,7 @@ function requireCondition(value: unknown, message: string): asserts value {
 }
 
 async function canonical(point: Point) {
-  const tx = await httpRpc<any>('get_transaction', [point.tx_hash]);
+  const tx = await httpRpc<any>('get_transaction', [point.tx_hash], 'safety');
   const header = tx?.tx_status?.status === 'committed' && await httpRpc<any>('get_header', [tx.tx_status.block_hash]);
   requireCondition(header && header.hash === tx.tx_status.block_hash && await httpRpc('get_block_hash', [header.number]) === header.hash, 'Input transaction is not canonical.');
   requireCondition(tx.transaction && rpcFormat.transactionTo(tx.transaction).hash() === point.tx_hash, 'Canonical transaction hash mismatch');
@@ -186,6 +186,8 @@ export class PocketIndexSyncError extends Error {
   constructor() { super('Confirmed transaction is awaiting Pocket synchronization'); }
 }
 
+const historicalChecks = new Map<string, { height: string; hash: string; spent: Set<string>; entries: Map<string, string> }>();
+
 async function snapshot(pocket: string) {
   const [policy, funds] = await Promise.all([
     discoverPublicPocket(pocket),
@@ -197,13 +199,22 @@ async function snapshot(pocket: string) {
   const committed = journal.filter(entry => entry.state === 'committed');
   const indexedPoints = new Set(funds.funds.map(cell => cell.outPoint.txHash + ':' + cell.outPoint.index));
   indexedPoints.add(policy.outPoint.tx_hash + ':' + Number(BigInt(policy.outPoint.index)));
+  const checkpoint = policyHeight <= fundHeight ? policy.indexedTip : funds.fundTip;
+  const prior = historicalChecks.get(pocket);
+  const validPrior = prior && BigInt(prior.height) <= BigInt(checkpoint.block_number) &&
+    await httpRpc('get_block_hash', [prior.height]) === prior.hash ? prior : undefined;
+  const spent = new Set(validPrior?.spent);
+  const priorVerifiedEntries = validPrior?.entries ?? new Map<string, string>();
+  const verifiedEntries = new Map<string, string>();
   let backfilled = false;
   await Promise.all(committed.map(async entry => {
     const reviewed = c.Transaction.fromBytes(entry.prepared.transaction);
     requireCondition(reviewed.hash() === entry.hash && entry.prepared.genesis === deployment.genesis &&
       entry.prepared.publicKey === entry.payment.publicKey, 'Committed journal identity mismatch');
     if (!entry.committedHeight || !entry.committedBlock ||
-        await httpRpc('get_block_hash', [entry.committedHeight]) !== entry.committedBlock) {
+        (!(validPrior && BigInt(entry.committedHeight) <= BigInt(validPrior.height) &&
+          priorVerifiedEntries.get(entry.hash) === entry.committedBlock) &&
+          await httpRpc('get_block_hash', [entry.committedHeight]) !== entry.committedBlock)) {
       const { anchor } = await canonical({ tx_hash: entry.hash, index: '0x0' });
       entry.committedHeight = anchor.height;
       entry.committedBlock = anchor.hash;
@@ -212,19 +223,29 @@ async function snapshot(pocket: string) {
     if (BigInt(entry.committedHeight) > policyHeight || BigInt(entry.committedHeight) > fundHeight) {
       throw new PocketIndexSyncError();
     }
+    verifiedEntries.set(entry.hash, entry.committedBlock);
     await Promise.all(reviewed.outputs.map(async (output, index) => {
       const protectedFund = output.lock.codeHash === fundCode && output.lock.hashType === 'data1' &&
         output.lock.args === pocket && !output.type && reviewed.outputsData[index] === '0x';
       const pocketPolicy = output.type?.hash() === pocket;
-      if ((!protectedFund && !pocketPolicy) || indexedPoints.has(entry.hash + ':' + index)) return;
-      const result = await httpRpc<{ status: string }>('get_live_cell', [{ tx_hash: entry.hash, index: hex(index) }, false]);
-      if (result?.status === 'dead') return;
-      if (result?.status === 'unknown' && await canonicalSpender(
-        { tx_hash: entry.hash, index: hex(index) }, entry.committedHeight!, rpcFormat.cellOutputFrom(output),
-      )) return;
+      const outputKey = entry.hash + ':' + index;
+      if ((!protectedFund && !pocketPolicy) || indexedPoints.has(outputKey) || spent.has(outputKey)) return;
+      const point = { tx_hash: entry.hash, index: hex(index) };
+      const result = await httpRpc<{ status: string }>('get_live_cell', [point, false]);
+      if (result?.status === 'dead' || result?.status === 'unknown') {
+        const spender = await canonicalSpender(point, entry.committedHeight!, rpcFormat.cellOutputFrom(output));
+        if (spender && BigInt(spender.height) <= BigInt(checkpoint.block_number)) {
+          spent.add(outputKey);
+          return;
+        }
+      }
       throw new PocketIndexSyncError();
     }));
   }));
+  if (await httpRpc('get_block_hash', [checkpoint.block_number]) !== checkpoint.block_hash) {
+    throw new PocketIndexSyncError();
+  }
+  historicalChecks.set(pocket, { height: checkpoint.block_number, hash: checkpoint.block_hash, spent, entries: verifiedEntries });
   if (backfilled) save(pocket, journal);
   return { policy, ...funds };
 }
@@ -342,7 +363,7 @@ export function prepareBrowserPayment(pocket: string, payment: Payment) {
     const info = await tx.getSignHashInfo(actorLock, client);
     requireCondition(info?.position === 1, 'Invalid signer position');
     const prepared = { id: payment.id, transaction: tx.toHex(), publicKey: payment.publicKey, genesis: deployment.genesis, fee: fee.toString() };
-    journal.push({ payment, prepared, message: info.message, hash: tx.hash(), state: 'prepared', created: new Date().toISOString() });
+    journal.push({ operation: 'pay', payment, prepared, message: info.message, hash: tx.hash(), state: 'prepared', created: new Date().toISOString() });
     save(pocket, journal);
     return prepared;
   }).finally(() => {
@@ -374,7 +395,7 @@ async function validatePaymentInputs(pocket: string, tx: c.Transaction, entry: E
     entry.operation === 'genesis' ? undefined : discoverPublicPocket(pocket, undefined, entry.payment.publicKey),
     freshInputs(tx), verifyDependencies(),
   ]);
-  if (entry.operation) {
+  if (entry.operation && entry.operation !== 'pay') {
     if (entry.operation !== 'genesis') {
       requireCondition(policy?.role === 'owner', 'Owner permissions changed');
       if (entry.operation === 'deposit') {
@@ -495,14 +516,14 @@ async function canonicalSpender(
     let cursor: string | undefined;
     for (let page = 0; page < 8; page++) {
       const result = await httpRpc<{ objects: { io_type: string; tx_hash: string }[]; last_cursor: string }>(
-        'get_transactions', cursor ? [query, 'desc', '0x40', cursor] : [query, 'desc', '0x40'],
+        'get_transactions', cursor ? [query, 'desc', '0x40', cursor] : [query, 'desc', '0x40'], 'safety',
       );
       requireCondition(Array.isArray(result?.objects), 'Invalid conflict indexer response');
       const candidates = new Set(result.objects.filter(hit => hit.io_type === 'input' && hit.tx_hash !== exclude).map(hit => hit.tx_hash));
       for (const hash of candidates) {
-        const { transaction } = await canonical({ tx_hash: hash, index: '0x0' });
+        const { transaction, anchor } = await canonical({ tx_hash: hash, index: '0x0' });
         if (transaction.inputs.some((input: { previous_output: Point }) =>
-          input.previous_output.tx_hash === point.tx_hash && BigInt(input.previous_output.index) === BigInt(point.index))) return true;
+          input.previous_output.tx_hash === point.tx_hash && BigInt(input.previous_output.index) === BigInt(point.index))) return anchor;
       }
       if (result.objects.length < 64 || !result.last_cursor || result.last_cursor === cursor) break;
       cursor = result.last_cursor;
@@ -519,7 +540,7 @@ export function reconcileBrowser(pocket: string, actor?: string, hash?: string) 
     if (uncertain.length) requireCondition(await httpRpc('get_block_hash', ['0x0']) === deployment.genesis, 'Wrong Pudge genesis');
     const outcomes: { txHash: string; state: string; pocket: string; operation: string; status?: string; reason?: string }[] = matching.filter(entry => entry.state === 'committed' || entry.state === 'conflict').map(entry => ({ txHash: entry.hash, state: entry.state === 'committed' ? 'committed' : 'rejected', operation: entry.operation || 'pay', pocket: entry.targetPocket || pocket }));
     for (const entry of uncertain) {
-      const response = await httpRpc<any>('get_transaction', [entry.hash]);
+      const response = await httpRpc<any>('get_transaction', [entry.hash], 'safety');
       let status = response?.tx_status?.status;
       if (!['committed', 'pending', 'proposed'].includes(status)) status = 'uncertain';
       if (status === 'committed') {

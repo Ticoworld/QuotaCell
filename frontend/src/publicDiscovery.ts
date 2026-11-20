@@ -41,21 +41,22 @@ const rpcReads = new Map<string, Promise<unknown>>();
 let rpcActive = 0;
 const rpcQueue: (() => void)[] = [];
 const historyQueue: (() => void)[] = [];
+const safetyQueue: (() => void)[] = [];
 
-export function httpRpc<T>(method: string, params: unknown[] = []): Promise<T> {
+export function httpRpc<T>(method: string, params: unknown[] = [], purpose: 'safety' | 'financial' | 'history' = 'financial'): Promise<T> {
   const read = method.startsWith('get_');
   const key = JSON.stringify([method, params]);
   const current = read && rpcReads.get(key);
   if (current) return current as Promise<T>;
-  const queue = method === 'get_transactions' ? historyQueue : rpcQueue;
+  const queue = purpose === 'history' ? historyQueue : purpose === 'safety' ? safetyQueue : rpcQueue;
   const task = (async () => {
     if (rpcActive >= 6) await new Promise<void>(resolve => queue.push(resolve));
     else rpcActive++;
     const start = performance.now();
-    try { return await requestRpc<T>(method, params); }
+    try { return await requestRpc<T>(method, params, purpose); }
     finally {
       performance.measure('quotacell.rpc.' + method, { start, end: performance.now() });
-      const next = rpcQueue.shift() ?? historyQueue.shift();
+      const next = safetyQueue.shift() ?? rpcQueue.shift() ?? historyQueue.shift();
       if (next) next();
       else rpcActive--;
     }
@@ -64,7 +65,7 @@ export function httpRpc<T>(method: string, params: unknown[] = []): Promise<T> {
   return task;
 }
 
-async function requestRpc<T>(method: string, params: unknown[] = []): Promise<T> {
+async function requestRpc<T>(method: string, params: unknown[], purpose: string): Promise<T> {
   const start = performance.now();
   const request = JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method, params });
   let responseBytes = 0;
@@ -92,7 +93,7 @@ async function requestRpc<T>(method: string, params: unknown[] = []): Promise<T>
     throw error;
   } finally {
     performance.measure('quotacell.transport.' + method, {
-      start, end: performance.now(), detail: { outcome, requestBytes: new TextEncoder().encode(request).byteLength, responseBytes },
+      start, end: performance.now(), detail: { purpose, outcome, requestBytes: new TextEncoder().encode(request).byteLength, responseBytes },
     });
   }
 }

@@ -1,7 +1,9 @@
 import { hexFrom, Script, WitnessArgs, bytesFrom, hashCkb } from '@ckb-ccc/core';
 import { JsonRpcTransformers as format } from '@ckb-ccc/core/advanced';
-import { httpRpc } from './publicDiscovery';
+import { httpRpc as requestRpc } from './publicDiscovery';
 import type { HistoryItem } from './domain';
+
+const httpRpc = <T>(method: string, params: unknown[]) => requestRpc<T>(method, params, 'history');
 
 type Raw = Parameters<typeof format.transactionTo>[0];
 type RawScript = Parameters<typeof format.scriptTo>[0];
