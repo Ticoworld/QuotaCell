@@ -76,9 +76,11 @@ try {
     const decodedInlineLogo = logoCheck.src.startsWith('data:image/svg+xml,')
       ? decodeURIComponent(logoCheck.src.split(',').slice(1).join(','))
       : '';
-    const isOfficialInlineLogo = decodedInlineLogo.includes('viewBox="0 0 425 390"')
-      && decodedInlineLogo.includes('fill="#2457e8"')
-      && decodedInlineLogo.includes('aria-label="QuotaCell logo"');
+    // SVG URL encoding uses single quotes even when the original asset uses double quotes.
+    const normalizedInlineLogo = decodedInlineLogo.replaceAll("'", '"');
+    const isOfficialInlineLogo = normalizedInlineLogo.includes('viewBox="0 0 425 390"')
+      && normalizedInlineLogo.includes('fill="#2457e8"')
+      && normalizedInlineLogo.includes('aria-label="QuotaCell logo"');
     if (!logoCheck.loaded || (!isExternalOfficialLogo && !isOfficialInlineLogo)) {
       throw new Error('Production /app does not show the updated official blue brand logo: ' + JSON.stringify(logoCheck));
     }
