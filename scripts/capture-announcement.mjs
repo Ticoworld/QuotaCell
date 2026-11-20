@@ -70,9 +70,19 @@ try {
       width: img.naturalWidth,
       height: img.naturalHeight
     }));
-    if (!logoCheck.loaded || !logoCheck.src.includes('quotacell-logo-blue')) {
+    const isExternalOfficialLogo = logoCheck.src.includes('quotacell-logo-blue');
+    // Vite can inline small SVG imports as data URLs. Compare its actual
+    // geometry and fill against the source-controlled official brand mark.
+    const decodedInlineLogo = logoCheck.src.startsWith('data:image/svg+xml,')
+      ? decodeURIComponent(logoCheck.src.split(',').slice(1).join(','))
+      : '';
+    const isOfficialInlineLogo = decodedInlineLogo.includes('viewBox="0 0 425 390"')
+      && decodedInlineLogo.includes('fill="#2457e8"')
+      && decodedInlineLogo.includes('aria-label="QuotaCell logo"');
+    if (!logoCheck.loaded || (!isExternalOfficialLogo && !isOfficialInlineLogo)) {
       throw new Error('Production /app does not show the updated official blue brand logo: ' + JSON.stringify(logoCheck));
     }
+    logoCheck.match = isExternalOfficialLogo ? 'official-file' : 'official-inlined-svg';
     report.walletHeaderLogo = logoCheck;
     // The history is verified asynchronously. Never publish a screenshot
     // showing a loading placeholder as completed public proof.
