@@ -53,8 +53,53 @@ assert.equal(activeResult.closed, false);
 assert.equal(activeResult.role, 'public');
 assert.equal(activeResult.summary.sharedLimit, '12200000000');
 assert.equal(activeResult.summary.delegates.length, 2);
+
+const advancedIndex = { block_number: '0x11', block_hash: `0x${'66'.repeat(32)}` };
+let indexReads = 0;
+const advancingRpc = async (method, params = []) => {
+  if (method === 'get_indexer_tip') return ++indexReads === 1 ? indexed : advancedIndex;
+  if (method === 'get_block_hash' && params[0] === advancedIndex.block_number) return advancedIndex.block_hash;
+  return activeRpc(method, params);
+};
+const advancedList = await discoverPublicPockets(ownerKey, advancingRpc);
+assert.deepEqual(advancedList.map((item) => item.pocket), [activePocketId]);
+assert.equal(advancedList[0].role, 'owner');
+assert.equal(advancedList[0].indexedTip.block_number, indexed.block_number);
+
+let regressReads = 0;
+const regressingRpc = async (method, params = []) => {
+  if (method === 'get_indexer_tip') return ++regressReads === 1 ? indexed : { block_number: '0xf', block_hash: tip.hash };
+  return activeRpc(method, params);
+};
+await assert.rejects(discoverPublicPockets(ownerKey, regressingRpc), /indexer regressed/);
+let forkReads = 0;
+const noncanonicalAdvanceRpc = async (method, params = []) => {
+  if (method === 'get_indexer_tip') return ++forkReads === 1 ? indexed : advancedIndex;
+  return activeRpc(method, params);
+};
+await assert.rejects(discoverPublicPockets(ownerKey, noncanonicalAdvanceRpc), /not canonical after discovery/);
+
+const originalFetch = globalThis.fetch;
+let fallbackRequests = 0;
+try {
+  globalThis.fetch = async (url, options) => {
+    if (String(url).includes('testnet.ckb.dev')) return new Response(null, { status: 503 });
+    assert.equal(String(url), 'https://testnet.ckbapp.dev/');
+    fallbackRequests++;
+    const request = JSON.parse(options.body);
+    const result = await activeRpc(request.method, request.params);
+    return Response.json({ jsonrpc: '2.0', id: request.id, result });
+  };
+  const backupList = await discoverPublicPockets(ownerKey);
+  assert.deepEqual(backupList.map((item) => item.pocket), [activePocketId]);
+  assert.equal(backupList[0].role, 'owner');
+  assert.ok(fallbackRequests > 0);
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
 await assert.rejects(discoverPublicPockets(publicKey, async (method) => method === 'get_consensus' ? { id: 'ckb_dev' } : null), /not the verified Pudge testnet/);
 await assert.rejects(discoverPublicPockets(publicKey, rpcFor({ tip: { number: '0x100', hash: tip.hash }, indexed: { block_number: '0x1', block_hash: tip.hash } })), /too far behind/);
 await assert.rejects(discoverPublicPockets(publicKey, rpcFor({ canonical: false })), /not canonical/);
 await assert.rejects(discoverPublicPockets('0x1234', rpcFor()), /compressed public key/);
-console.log('Hosted discovery rejects wrong network, stale/noncanonical indexer snapshots, and malformed wallet identities');
+console.log('Hosted discovery validates snapshots, tolerates canonical tip advancement, rejects rollback/forks, and falls back across public RPC providers');

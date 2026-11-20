@@ -12,6 +12,7 @@ type Props = {
   locale: string;
   loading: boolean;
   error: string;
+  errorDetail?: string;
   onRetry?: () => void;
   t: (key: string) => string;
   onOpen: (pocket: string) => void;
@@ -20,7 +21,7 @@ type Props = {
   onDiscard: (draftId: string) => boolean;
 };
 
-export function PocketPicker({ pockets, drafts, genesis, verified, ownerCanCreate, locale, loading, error, t, onRetry, onOpen, onCreate, onResume, onDiscard }: Props) {
+export function PocketPicker({ pockets, drafts, genesis, verified, ownerCanCreate, locale, loading, error, errorDetail, t, onRetry, onOpen, onCreate, onResume, onDiscard }: Props) {
   const [nameError, setNameError] = useState(false);
   const [discardDraftId, setDiscardDraftId] = useState('');
   const discardDraft = drafts.find((draft) => draft.id === discardDraftId);
@@ -40,7 +41,9 @@ export function PocketPicker({ pockets, drafts, genesis, verified, ownerCanCreat
     </section>}
     {nameError && <p role="alert">{t('copyPocketIdFailed')}</p>}
     {error && (!loading || !onRetry) && <div className={onRetry ? 'flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900' : 'rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800'}>
-      <p role={onRetry ? 'status' : 'alert'}>{error}</p>
+      <div className="min-w-0 flex-1"><p role={onRetry ? 'status' : 'alert'}>{error}</p>
+        {errorDetail && <details className="mt-1 text-xs"><summary className="cursor-pointer">{t('technical')}</summary><code className="mt-1 block break-all">{errorDetail.slice(0, 360)}</code></details>}
+      </div>
       {onRetry && <button className="secondary-button" type="button" onClick={onRetry}>{t('retry')}</button>}
     </div>}
     {loading && pockets.length > 0 && <p role="status">{t('checkingPocketList')}</p>}
