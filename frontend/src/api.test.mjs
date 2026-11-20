@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {ApiError,getActorPockets,getPocketState,prepareGenesis,prepareOwnerAction,preparePayment,resolvePudgeTransaction,submitTransaction} from './api.ts';
+import {createServer} from 'vite';
+const server = await createServer({server:{middlewareMode:true,ws:false},configFile:false,optimizeDeps:{noDiscovery:true,include:[]}});
+const {ApiError,getActorPockets,getPocketState,prepareGenesis,prepareOwnerAction,preparePayment,resolvePudgeTransaction,submitTransaction} = await server.ssrLoadModule('/src/api.ts');
+await server.close();
 
 globalThis.window={location:{search:''}};
 

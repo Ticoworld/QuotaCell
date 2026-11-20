@@ -1,55 +1,110 @@
-body {margin:0}
-.landing {--paper:#f5f2e9;--ink:#25382c;--line:#c5cbbd;background:var(--paper);color:var(--ink);font: 16px/1.55 system-ui,sans-serif}
-.landing * {box-sizing:border-box}
-.landing a {color:inherit;text-underline-offset:.25em}
-.landing :focus-visible {outline:3px solid #ac6f36;outline-offset:4px}
-.land-wrap {width:min(100% - 96px,1280px);margin-inline:auto}
-.land-header,.land-footer {display:flex;align-items:center;justify-content:space-between;gap:14px;min-height:80px;border-bottom:1px solid var(--line)}
-.land-brand,.land-header nav {display:flex;align-items:center;gap:18px}
-.land-brand {gap:9px;font-weight:750;text-decoration:none}
-.land-header button {background:none;border:0;color:inherit;cursor:pointer;font:inherit;min-height:44px;padding:0 5px}
-.land-button {display:inline-flex;align-items:center;min-height:46px;padding:10px 20px;background:#263d31;color:#fff9ec!important;text-decoration:none;font-weight:650;transition:background-color .18s ease}
-.land-button:hover {background:#415e49}
-.land-outline {background:transparent;color:inherit!important;border:1px solid var(--line)}
-.land-outline:hover {background:#e0e7dc}
-.land-skip {position:absolute;top:8px;left:12px;z-index:2;background:var(--paper);padding:8px 12px;transform:translateY(-160%)}
-.land-skip:focus {transform:none}
-.land-hero {display:grid;grid-template-columns:.87fr 1.13fr;align-items:center;padding-block:70px 86px;gap:clamp(20px,4vw,66px)}
-.land-label {font-size:.74rem;letter-spacing:.12em;text-transform:uppercase;font-weight:750}
-.landing h1,.landing h2 {font-family:Georgia,'Songti SC',serif;font-weight:400;letter-spacing:-.05em;line-height:1.04;margin:0}
-.landing h1 {font-size:clamp(3rem,6.4vw,6.8rem);margin-block:18px 20px}
-.landing h2 {font-size:clamp(2.2rem,4.5vw,4.6rem)}
-.landing p {max-width:49ch}
-.land-hero-copy > p:not(.land-label),.land-section p {font-size:clamp(1rem,1.35vw,1.2rem);margin-block:22px}
-.land-hero-art {margin:0;background:#29352c;min-width:0;overflow:hidden}
-.land-hero-art img {display:block;width:100%;height:auto;aspect-ratio:6/5;object-fit:cover}
-.land-section {padding-block:clamp(56px,8vw,118px);border-top:1px solid var(--line)}
-.land-split {display:grid;grid-template-columns:1fr 1fr;gap:clamp(24px,7vw,100px);align-items:center}
-.land-rules {background:#dfe6da}
-.land-plan {padding:24px;text-align:center;border:1px solid var(--line);font-size:.9rem;font-weight:650}
-.land-plan div {padding:12px}
-.land-plan-center {background:#263d31;color:white;margin-block:7px}
-.land-plan-keys {display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.land-plan-keys span {border-top:1px solid var(--line);padding-top:10px}
-.landing dl,.land-proof ul {margin:0;padding:0}
-.landing dl div,.land-proof li {border-bottom:1px solid var(--line);padding:14px 0;display:flex;justify-content:space-between;gap:12px}
-.landing dd {margin:0;text-align:right;font-weight:650}
-.land-proof {--line:#607466;background:#263d31;color:#f5f2e9}
-.land-proof li {list-style:none}
-.land-proof li a {width:100%;display:flex;justify-content:space-between;gap:10px}
-.land-proof code {white-space:nowrap}
-.land-footer {border-top:1px solid var(--line);border-bottom:0}
-@media(prefers-reduced-motion:no-preference) {
-  .land-hero-copy {animation:land-in .45s ease both}
-  .land-hero-art {animation:land-in .55s .08s ease both}
-  @keyframes land-in {from {opacity:0;transform:translateY(9px)}}
+body { margin: 0 }
+.landing { --night:#07132f; --blue:#1649ee; --ice:#e7efff; --cyan:#6ae5ff; --ink:#101f46; --line:#aebee0; background:#f6f8ff; color:var(--ink); font:16px/1.55 "Segoe UI",system-ui,sans-serif }
+.landing * { box-sizing:border-box }
+.landing a { color:inherit; text-underline-offset:.24em }
+.landing :focus-visible { outline:3px solid #298cf1; outline-offset:5px }
+.land-wrap { width:min(calc(100% - 72px),1200px); margin-inline:auto }
+.land-header,.land-footer,.land-header nav,.land-brand { display:flex; align-items:center; gap:18px }
+.land-header,.land-footer { min-height:76px; justify-content:space-between }
+.land-brand { gap:8px; text-decoration:none; font-weight:800 }
+.landing button { font:inherit; cursor:pointer; color:inherit; touch-action:manipulation }
+.land-header button { background:none; border:0; min-height:44px }
+.land-button { display:inline-flex; align-items:center; min-height:46px; padding:10px 20px; border-radius:6px; background:var(--blue); color:white!important; text-decoration:none; font-weight:700; transition:transform .18s ease }
+.land-button:hover { transform:translateY(-3px) }
+.land-button:active { transform:translateY(1px) }
+.land-skip { position:absolute; inset:8px auto auto 8px; z-index:3; background:white; padding:8px 12px; transform:translateY(-160%) }
+.land-skip:focus { transform:none }
+.land-hero { width:100%; background:var(--night); color:white; position:relative; isolation:isolate; text-align:center; min-height:clamp(660px,62vw,860px); padding:clamp(54px,7vw,102px) 18px 170px; overflow:hidden }
+.land-hero-art { position:absolute; z-index:-1; inset:0; margin:0; mask-image:linear-gradient(transparent 10%,#000 54%) }
+.land-hero-art img { width:100%; height:100%; display:block; object-fit:cover; object-position:center 65% }
+.land-hero-copy { position:relative }
+.land-hero .land-button { background:#bdf3ff; color:var(--night)!important }
+.landing h1,.landing h2 { margin:0; font-weight:780; letter-spacing:-.067em; line-height:1.01; text-wrap:balance }
+.landing h1 { font-size:clamp(3.2rem,9vw,8.6rem) }
+.landing h1 em { font-style:normal }
+.landing h2 { font-size:clamp(2.45rem,6vw,5.8rem) }
+.landing[lang="zh-Hans"] h1,html[lang="zh-Hans"] .landing h1,html[lang="zh-Hans"] .landing h2 { letter-spacing:-.035em }
+.landing p { max-width:55ch; font-size:clamp(1rem,1.5vw,1.2rem) }
+.land-hero p,.land-relationship p { margin-inline:auto }
+.land-hero .land-label { font-size:.85rem; color:#b9d1ff }
+.land-hero-copy > p:not(.land-label) { margin-block:24px }
+.land-section { padding-block:clamp(64px,9vw,135px); scroll-margin-top:24px }
+.land-relationship { text-align:center }
+.land-plan { margin:40px auto 0; width:min(100%,850px); background:var(--ice); border:1px solid #c8d6f4; border-radius:24px; padding:32px clamp(14px,5vw,74px) 18px; display:grid; justify-items:center; gap:26px }
+.land-plan-owner,.land-plan-center,.land-plan button { padding:12px 16px; border-radius:8px; background:white; border:1px solid #b1c3ea; font-weight:700 }
+.land-plan-center { position:relative; background:var(--night); color:white; display:flex; align-items:center; gap:12px }
+.land-plan-center img { filter:brightness(0) invert(1) }
+.land-plan-center::before { content:''; position:absolute; width:2px; height:26px; bottom:100%; left:50%; background:var(--blue) }
+.land-plan-keys { display:grid; grid-template-columns:1fr 1fr; gap:clamp(10px,5vw,70px); width:100% }
+.land-plan button { position:relative; min-height:48px; transition:transform .2s ease }
+.land-plan button::before { content:''; position:absolute; bottom:100%; left:50%; width:2px; height:26px; background:#9aadd4; transform-origin:top }
+.land-plan button[aria-pressed=true] { background:var(--blue); color:white }
+.land-plan button[aria-pressed=true]::before { background:var(--blue); animation:signal .38s ease-out }
+.land-plan button:hover { transform:translateY(-2px) }
+.land-path-note { margin:0!important; min-height:3em }
+.land-rules { background:var(--blue); color:white; --line:#84a3fc }
+.land-showcase > div:first-child { max-width:690px }
+.land-wallet { width:min(100%,850px); margin:30px 0 0 auto; border:1px solid #6a91ff; background:var(--night); border-radius:14px; overflow:hidden; box-shadow:0 24px 52px #091e7c65 }
+.land-wallet header { padding:12px 20px; font-weight:700 }
+.land-wallet header span { float:right; color:#a9c4ff }
+.land-wallet img { width:100%; height:auto; display:block; background:var(--ice); color:var(--ink) }
+.land-wallet dl { padding-inline:22px }
+.land-control { background:var(--night); color:#fff; --line:#6580a9 }
+.land-control .land-section { display:grid; grid-template-columns:1fr 1.2fr; align-items:center; gap:30px }
+.land-control-art { width:100%; height:auto; border-radius:8px; background:#142b58 }
+.land-control dl { grid-column:1/-1; display:grid; grid-template-columns:repeat(3,1fr); gap:20px }
+.landing dl,.land-ledger ul { margin:0 }
+.landing dl div { display:flex; justify-content:space-between; gap:12px; padding:14px 0; border-bottom:1px solid var(--line) }
+.landing dd { margin:0; font-weight:700; font-variant-numeric:tabular-nums }
+.land-control dl div { flex-direction:column; border-top:1px solid var(--line); border-bottom:0 }
+.land-control dd { font-size:clamp(1.4rem,4vw,3.2rem); color:var(--cyan) }
+.land-ledger ul { padding:0; list-style:none; border-top:1px solid var(--line); margin-top:24px }
+.land-ledger li a { display:flex; justify-content:space-between; gap:12px; padding:13px 0; border-bottom:1px solid var(--line) }
+.land-ledger code { white-space:nowrap }
+.land-end { border-top:1px solid var(--line); text-align:center }
+.land-end p { margin:24px auto }
+.land-footer { border-top:1px solid var(--line) }
+@keyframes signal { from { transform:scaleY(.08) } }
+@supports(animation-timeline:view()) {
+ @media(prefers-reduced-motion:no-preference) {
+  .land-control-art,.land-wallet { animation:rise linear both; animation-timeline:view(); animation-range:entry 0% cover 32% }
+  @keyframes rise { from { transform:translateY(28px) } }
+ }
 }
-@media(max-width:760px) {
-  .land-wrap {width:calc(100% - 40px)}
-  .land-hero,.land-split {grid-template-columns:1fr}
-  .land-hero {padding-block:40px 48px;gap:30px}
-  .land-hero-art img {aspect-ratio:3/2}
-  .land-header nav {gap:6px;font-size:.85rem}
-  .land-outline {padding-inline:9px}
-  .land-nav-proof {display:none}
+@media(prefers-reduced-motion:reduce) {
+ .landing *, .landing *::before { animation:none!important; transition:none!important }
+ .landing button:hover,.landing a:hover { transform:none }
+}
+@media(max-width:700px) {
+ .land-wrap { width:calc(100% - 32px) }
+ .land-hero { width:100%; min-height:630px }
+ .land-header,.land-header nav { gap:6px }
+ .land-header .land-button { padding-inline:8px; font-size:.83rem }
+ .land-nav-proof { display:none }
+ .land-control .land-section { grid-template-columns:1fr }
+ .land-control dl { gap:8px }
+ .land-plan-center img { width:36px;height:36px }
+}
+.land-control-art {
+ border-radius:0;
+ mask-image:linear-gradient(90deg,transparent 0%,#000 16%,#000 91%,transparent),linear-gradient(transparent,#000 12%,#000 85%,transparent);
+ mask-composite:intersect;
+}
+.land-plan-keys { position:relative }
+.land-plan-keys::before {
+ content:"";
+ position:absolute;
+ inset:-14px calc(25% - 18px) auto;
+ height:1px;
+ background:#879dca;
+}
+.land-plan-keys button::before { height:14px }
+.land-plan-center::after {
+ content:"";
+ position:absolute;
+ top:100%;
+ left:50%;
+ width:1px;
+ height:12px;
+ background:var(--blue);
 }

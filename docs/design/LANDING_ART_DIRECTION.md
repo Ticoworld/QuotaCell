@@ -1,7 +1,7 @@
-# QuotaCell landing art direction
+# QuotaCell visual system
 
-The courtyard gives the product a physical analogy. Two lit passages lead into one bounded space. Use warm concrete, dark green steel and amber edge light. Use paper #f5f2e9 and ink #25382c for reading, pale sage for rules and deep green for evidence. Switch surfaces at full-width section boundaries.
+Midnight #07132f frames the protected Cell and owner controls. Electric blue #1649ee marks actions and the wallet showcase. Ice #e7efff supports diagrams, while cyan #6ae5ff marks live visual paths and capacity figures. Segoe UI uses a 51–138 px display scale and 16–19 px body copy. The provisional logo is reused.
 
-Use Georgia or Songti for 48–109 px headings, 35–74 px section titles and system sans for the interface. Align copy and evidence to a 1280 px grid. Use hairline dividers, square corners and the existing QuotaCell mark. Keep arrows functional. Stack the editorial grid below 760 px and keep the courtyard visible on mobile. Keep focus outlines visible. Entrances run once and respect reduced motion.
+The page moves from a full-bleed Cell field to a centered branching diagram, an offset wallet showcase, a midnight recovery composition and a full-width chain ledger. Compared with the courtyard version, only recovery uses a conventional split. The relationship view is keyboard operable. Scroll-linked assets translate by at most 28 px where supported. Reduced motion disables decorative movement.
 
-Mercury uses a quiet editorial hierarchy around financial tasks. Linear embeds product context alongside product claims. Stripe puts actionable product language before expanding into detail. The first rendered pass showed that repeated split sections flatten the pace. The rules and evidence use separate surfaces and the closeout needs a more distinct visual treatment in the next pass.
+Phantom and Rainbow informed the emphasis on wallet tasks and product surfaces. Base informed the decisive use of saturated blue. The Anthropic frontend-design guidance informed the distinct section compositions, and Vercel Web Interface Guidelines informed semantic controls, focus, image dimensions and reduced motion.

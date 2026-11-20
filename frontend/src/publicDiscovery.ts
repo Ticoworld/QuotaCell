@@ -157,7 +157,7 @@ export async function discoverPublicPocket(pocketId: string, rpc: Rpc = httpRpc,
 }
 
 async function discover(publicKey: string | undefined, targetPocket: string | undefined, rpc: Rpc): Promise<Discovery[]> {
-  if ((await rpc<string>('get_block_hash', ['0x0'])).toLowerCase() !== GENESIS) throw new Error('Public RPC is not the verified Pudge testnet.');
+  if ((await rpc<string | null>('get_block_hash', ['0x0']))?.toLowerCase() !== GENESIS) throw new Error('Public RPC is not the verified Pudge testnet.');
   const [tip, indexed] = await Promise.all([rpc<any>('get_tip_header'), rpc<any>('get_indexer_tip')]);
   if (!tip || !indexed || !/^0x[0-9a-f]{64}$/i.test(tip.hash) || !/^0x[0-9a-f]{64}$/i.test(indexed.block_hash)) throw new Error('Invalid node or indexer tip.');
   const nodeHeight = BigInt(tip.number), indexerHeight = BigInt(indexed.block_number);
