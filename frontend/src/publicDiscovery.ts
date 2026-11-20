@@ -2,6 +2,9 @@ import * as c from '@ckb-ccc/core';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 
 const RPC_URL = 'https://testnet.ckb.dev/';
+// Read-only discovery can retry a second publicly documented Pudge provider.
+// Signing and transaction submission remain pinned to the primary endpoint.
+const DISCOVERY_BACKUP_RPC_URL = 'https://testnet.ckbapp.dev/';
 const GENESIS = '0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606';
 const POLICY_CODE = '0xd03e5921d5499f74ee734d48e51915a0b996840de1bcfc6a6703007ad810714e';
 const POLICY_LOCK = '0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1';
@@ -65,13 +68,13 @@ export function httpRpc<T>(method: string, params: unknown[] = [], purpose: 'saf
   return task;
 }
 
-async function requestRpc<T>(method: string, params: unknown[], purpose: string): Promise<T> {
+async function requestRpc<T>(method: string, params: unknown[], purpose: string, url = RPC_URL): Promise<T> {
   const start = performance.now();
   const request = JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method, params });
   let responseBytes = 0;
   let outcome = 'transport';
   try {
-    const response = await fetch(RPC_URL, {
+    const response = await fetch(url, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: request, signal: AbortSignal.timeout(15000), cache: 'no-store',
     });
@@ -141,15 +144,38 @@ function candidateRole(cell: any, actor?: string): { role: 'owner' | 'alice' | '
   throw new Error('Malformed QCN4/QCT4 state.');
 }
 
+const discoveryBackupRpc: Rpc = <T>(method: string, params: unknown[] = []) =>
+  requestRpc<T>(method, params, 'discovery-backup', DISCOVERY_BACKUP_RPC_URL);
+
+function isTransientDiscoveryError(error: unknown): boolean {
+  const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return /Public CKB read failed \((?:408|429|5\d\d)\)|Failed to fetch|fetch failed|Load failed|NetworkError|TimeoutError|AbortError|timed out|indexer is too far behind|Invalid node or indexer tip/i.test(detail);
+}
+
+async function discoverWithFallback(publicKey: string | undefined, targetPocket: string | undefined, rpc: Rpc): Promise<Discovery[]> {
+  try { return await discover(publicKey, targetPocket, rpc); }
+  catch (primaryError) {
+    // Do not hide a malformed Cell, noncanonical chain, or other safety failure.
+    // Injected RPCs used by tests also remain single-provider and deterministic.
+    if (rpc !== httpRpc || !isTransientDiscoveryError(primaryError)) throw primaryError;
+    try { return await discover(publicKey, targetPocket, discoveryBackupRpc); }
+    catch (backupError) {
+      const first = primaryError instanceof Error ? primaryError.message : String(primaryError);
+      const second = backupError instanceof Error ? backupError.message : String(backupError);
+      throw new Error(`Pudge discovery failed on both public testnet RPC endpoints. Primary: ${first}; backup: ${second}`, { cause: backupError });
+    }
+  }
+}
+
 export async function discoverPublicPockets(publicKey: string, rpc: Rpc = httpRpc): Promise<Discovery[]> {
   if (!/^0x0[23][0-9a-f]{64}$/i.test(publicKey)) throw new Error('Invalid compressed public key.');
   secp256k1.Point.fromBytes(c.bytesFrom(publicKey));
-  return discover(publicKey, undefined, rpc);
+  return discoverWithFallback(publicKey, undefined, rpc);
 }
 
 export async function discoverPublicPocket(pocketId: string, rpc: Rpc = httpRpc, actor?: string): Promise<Discovery> {
   if (!/^0x[0-9a-f]{64}$/i.test(pocketId)) throw new Error('Invalid Pocket ID.');
-  const found = await discover(actor, pocketId.toLowerCase(), rpc);
+  const found = await discoverWithFallback(actor, pocketId.toLowerCase(), rpc);
   const exact = found.find((item) => item.pocket.toLowerCase() === pocketId.toLowerCase());
   if (!exact) throw new Error('Pocket was not found on Pudge.');
   if (found.length !== 1) throw new Error('Ambiguous live Pocket.');
@@ -208,8 +234,13 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
   // A single verified Type ID cell is sufficient for a targeted open. A list
   // or empty result requires a complete enumeration of a stable live index.
   if (!targetPocket || candidates.length !== 1 || cursor !== undefined) {
-    const finalIndex = await rpc<{ block_hash: string }>('get_indexer_tip');
-    if (finalIndex?.block_hash !== indexed.block_hash) throw new Error('Pudge indexer changed during discovery.');
+    const finalIndex = await rpc<{ block_number: string; block_hash: string }>('get_indexer_tip');
+    if (!finalIndex?.block_number || !/^0x[0-9a-f]{64}$/i.test(finalIndex.block_hash) ||
+      BigInt(finalIndex.block_number) < indexerHeight) throw new Error('Pudge indexer regressed during discovery.');
+    // New blocks are normal. Enumeration is restricted to the original indexed
+    // block range, so advancing the tip is not itself an inconsistency.
+    const finalCanonical = await rpc<string | null>('get_block_hash', [finalIndex.block_number]);
+    if (finalCanonical?.toLowerCase() !== finalIndex.block_hash.toLowerCase()) throw new Error('Pudge indexer tip is not canonical after discovery.');
   }
   const finalTips = await Promise.all([rpc<string>('get_block_hash', [indexed.block_number]), rpc<string>('get_block_hash', [tip.number])]);
   if (finalTips[0].toLowerCase() !== indexed.block_hash.toLowerCase() || finalTips[1].toLowerCase() !== tip.hash.toLowerCase()) throw new Error('Pudge chain changed during discovery.');
