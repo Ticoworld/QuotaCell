@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { Landing } from './Landing';
 
 const root = document.getElementById('root')!;
-if (location.pathname === '/' && !location.search) {
+if ((location.pathname === '/' && !location.search) || location.pathname === '/overview') {
   createRoot(root).render(<Landing/>);
 } else {
   document.title = 'QuotaCell Wallet';

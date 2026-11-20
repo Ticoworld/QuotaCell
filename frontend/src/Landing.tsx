@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import './landing.css';
+import { SigningStage, SpendingDemo, RecoveryStage } from './LandingExperience';
 
 const pocketId = '0xfd76ec009d7ceeaf4ad1f49806dccb673cbc5530b07f270c28395112a7320898';
 const creationHash = 'c034f9650ddbbd1c3a9d747ad1bff116c7c9e4dc3e8f4ac4f3d99dc2db175877';
@@ -24,7 +25,7 @@ export function Landing() {
     try { localStorage.setItem('quotacell:locale', zh ? 'zh-Hans' : 'en'); }
     catch { /* Language remains available in this session. */ }
   }, [zh]);
-  const [delegate, setDelegate] = useState(1);
+  const interactive = location.pathname !== "/overview";
   const app = t('Open wallet', '打开钱包');
   return <div className="landing">
     <a className="land-skip" href="#content">{t('Skip to content', '跳至内容')}</a>
@@ -53,25 +54,19 @@ export function Landing() {
           <p>{t('The owner funds the Pocket and manages who can spend. Two delegates make approved payments from their own wallets.', '所有者为资金口袋充值并管理支出权限。两位授权人使用各自的钱包进行获准付款。')}</p>
           <a href={`/app?pocket=${pocketId}`}>{t('View the historical Pocket ↗', '查看已验证的资金口袋 ↗')}</a>
         </div>
-        <div className="land-plan" data-delegate={delegate}>
-          <div className="land-circuit" aria-hidden="true"><i/><i/><i/></div>
-          <div className="land-plan-owner">{t('Owner wallet', '所有者钱包')}</div>
-          <div className="land-plan-center"><img src="/quotacell.svg" width="48" height="48" alt=""/>{t('Shared Pocket', '共享资金口袋')}</div>
-          <div className="land-plan-keys" role="group" aria-label={t('Explore signing paths', '查看签名路径')}>
-            {[1, 2].map(number => <button key={number} aria-pressed={delegate === number} onClick={() => setDelegate(number)}>{t(`Delegate ${number} wallet`, `授权人 ${number} 的钱包`)}</button>)}
-          </div>
-          <p className="land-path-note" aria-live="polite">{t(`Delegate ${delegate} signs with their own wallet. The Pocket applies the owner's rules.`, `授权人 ${delegate} 使用自己的钱包签名。资金口袋执行所有者设定的规则。`)}</p>
-        </div>
+        {interactive ? <SigningStage t={t}/> : <p>{t("Owner wallet → shared Pocket ← two independent delegate wallets", "所有者钱包 → 共享资金口袋 ← 两个独立授权人钱包")}</p>}
       </section>
       <section className="land-rules">
         <div className="land-wrap land-section land-showcase">
           <div><h2>{t('Set the rules before anyone pays.', '付款前先设定规则。')}</h2><p>{t('Set a shared spending limit and a separate limit for each delegate. Choose approved recipients when you create the Pocket.', '设定共享支出限额和每位授权人的单独限额。创建资金口袋时选择获准收款人。')}</p></div>
-          <div className="land-wallet"><div className="land-wallet-frame"><header>QuotaCell <span>{t("Wallet preview", "钱包预览")}</span></header><img src={zh ? "/wallet-zh.webp" : "/wallet.webp"} width={zh ? 320 : 1000} height={zh ? 570 : 524} loading="lazy" alt={t("QuotaCell wallet interface", "QuotaCell 钱包界面")}/></div><dl className="land-policy"><div><dt>{t('Delegate wallets', '授权人钱包')}</dt><dd>{t('Two, fixed at creation', '创建时固定两位')}</dd></div><div><dt>{t('Approved recipients', '获准收款人')}</dt><dd>{t('Fixed at creation', '创建时固定')}</dd></div><div><dt>{t('Ordinary payment minimum', '普通付款最低金额')}</dt><dd>61 CKB</dd></div></dl></div>
+          {interactive && <SpendingDemo t={t}/>}
+          <details className="experience-preview" open={!interactive}><summary>{t("See the wallet interface", "查看钱包界面")}</summary><div className="land-wallet"><div className="land-wallet-frame"><header>QuotaCell <span>{t("Wallet preview", "钱包预览")}</span></header><img src={zh ? "/wallet-zh.webp" : "/wallet.webp"} width={zh ? 320 : 1000} height={zh ? 570 : 524} loading="lazy" alt={t("QuotaCell wallet interface", "QuotaCell 钱包界面")}/></div><dl className="land-policy"><div><dt>{t('Delegate wallets', '授权人钱包')}</dt><dd>{t('Two, fixed at creation', '创建时固定两位')}</dd></div><div><dt>{t('Approved recipients', '获准收款人')}</dt><dd>{t('Fixed at creation', '创建时固定')}</dd></div><div><dt>{t('Ordinary payment minimum', '普通付款最低金额')}</dt><dd>61 CKB</dd></div></dl></div></details>
         </div>
       </section>
       </div>
       <section className="land-control"><div className="land-wrap land-section">
         <div><h2>{t('Take back access at any time.', '随时收回支出权限。')}</h2><p>{t('The owner can revoke or restore a delegate’s access. Closing the Pocket ends delegate spending and returns supported Pocket funds to the owner.', '所有者可以撤销或恢复授权人的权限。关闭资金口袋后，授权人无法继续支出，受支持的口袋资金将退回所有者。')}</p></div>
+        {interactive && <RecoveryStage t={t}/>}
         <img className="land-control-art" src="/control.webp" width="1536" height="1024" loading="lazy" alt=""/><dl><div><dt>{t('Active policy capacity', '启用时的规则容量')}</dt><dd>600 CKB</dd></div><div><dt>{t('Policy capacity released at closure', '关闭时释放的规则容量')}</dt><dd>466 CKB</dd></div><div><dt>{t('Permanently retained capacity', '永久保留的容量')}</dt><dd>134 CKB</dd></div></dl></div>
       </section>
       <section id="proof" className="land-proof">
@@ -86,6 +81,6 @@ export function Landing() {
         <a className="land-button" href="/app">{t("Launch testnet wallet", "打开测试网钱包")} ↗</a>
       </section>
     </main>
-    <footer className="land-wrap land-footer"><span>QuotaCell · Pudge</span><a href="https://github.com/Ticoworld/QuotaCell">GitHub ↗</a></footer>
+    <footer className="land-wrap land-footer"><span>QuotaCell · Pudge</span><a href={interactive ? "/overview" : "/"}>{interactive ? t("Static overview", "静态概览") : t("Interactive tour", "互动体验")}</a><a href="https://github.com/Ticoworld/QuotaCell">GitHub ↗</a></footer>
   </div>;
 }

@@ -176,3 +176,59 @@ body { margin: 0 }
   .land-wallet .land-policy { margin:-10px 12px 0 }
   .land-wallet-frame img { max-height:245px }
 }
+.experience-signing,.experience-demo,.experience-recovery {
+  min-width:0; border:1px solid #45699c; border-radius:18px;
+  background:#091733; color:#eef6ff; padding:clamp(16px,3vw,32px);
+}
+.experience-network { position:relative; isolation:isolate; text-align:center }
+.experience-network img { position:absolute; inset:0; margin:auto; width:52%; height:100%; object-fit:contain; opacity:.65; z-index:-1; mask-image:radial-gradient(#000 38%,transparent 73%) }
+.experience-network svg,.experience-recovery svg { display:block; width:100%; height:auto }
+.experience-owner,.experience-core { position:absolute; left:50%; transform:translateX(-50%); width:max-content; max-width:99%; padding:2px 8px; background:#091733; border-radius:6px }
+.experience-owner { top:0; font-size:.82rem; color:#bfd6fa }
+.experience-core { top:28%; color:#daf8ff }
+.experience-trace,.experience-signal { fill:none; stroke:#5676a4; stroke-width:2; vector-effect:non-scaling-stroke }
+.experience-trace.is-live,.experience-recovery[data-step="0"] .recovery-access,.experience-recovery[data-step="2"] .recovery-return { stroke:#77dcff }
+.experience-recovery[data-step="1"] .recovery-access,.experience-recovery[data-step="2"] .recovery-access { stroke-dasharray:4 7; opacity:.5 }
+.experience-signal { stroke:#d5fbff; stroke-width:4; stroke-linecap:round; stroke-dasharray:13 100; stroke-dashoffset:13; opacity:0; filter:drop-shadow(0 0 5px #55d9ff) }
+.experience-delegates,.experience-recovery-labels { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px }
+.experience-actions { display:flex; flex-wrap:wrap; gap:9px }
+.experience-delegates button,.experience-actions button,.experience-demo select { border:1px solid #6586bb; border-radius:8px; min-height:44px; padding:8px 12px; background:#142b55; color:#edf5ff }
+.experience-delegates button[aria-pressed=true] { border-color:#83e7ff; background:#234b8f }
+.experience-delegates small { display:block; color:#d4e7fe }
+.experience-actions .experience-primary { background:#bdf3ff; border-color:#bdf3ff; color:#07132f; font-weight:750 }
+.experience-actions button:disabled { opacity:.62; cursor:default }
+.landing .experience-status { min-height:2.8em; margin:14px 0 0; color:#d5e5ff; font-size:.91rem }
+.experience-demo { display:grid; grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr); gap:clamp(16px,4vw,52px); margin-top:32px; background:linear-gradient(135deg,#0b1939,#132e60) }
+.experience-demo-meter { align-self:center }
+.experience-demo-meter .experience-value { font-weight:780; font-size:clamp(3.6rem,9vw,8rem); line-height:.95; margin:12px 0; letter-spacing:-.06em; color:#bdf3ff; font-variant-numeric:tabular-nums }
+.experience-value small { font-size:.24em; letter-spacing:0 }
+.experience-demo progress { width:100%; height:12px; accent-color:#70ddff; margin-top:10px }
+.experience-demo-actions label { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin-bottom:12px }
+.experience-demo-actions > p { font-size:.93rem }
+.experience-preview { margin-top:20px }
+.experience-preview summary { cursor:pointer; padding:8px 0; width:fit-content }
+.experience-recovery { grid-row:2; grid-column:1/-1 }
+.experience-recovery-labels { grid-template-columns:repeat(3,minmax(0,1fr)); text-align:center; font-size:.87rem; padding-bottom:18px }
+.experience-recovery-labels strong { display:block; font-size:clamp(.95rem,2vw,1.45rem); color:#9deeff }
+.land-receipt-header { background:#0c1b3e url('/receipt.webp') right 43% / auto 220% no-repeat; text-shadow:0 1px 5px #081121 }
+.land-ledger li a { position:relative; padding-left:18px }
+.land-ledger li a::before { content:""; position:absolute; left:1px; width:7px; height:7px; border:1px solid #1649ee; border-radius:50%; background:#d7e7ff }
+.land-ledger li a:hover::before,.land-ledger li a:focus-visible::before { background:#1649ee }
+@media(prefers-reduced-motion:no-preference) {
+  .experience-signal { animation:experience-travel .95s ease-out both }
+  .experience-payment { animation:experience-arrive .28s ease-out both }
+  @keyframes experience-travel {
+    0% { stroke-dashoffset:13; opacity:0 }
+    14%,80% { opacity:1 }
+    100% { stroke-dashoffset:-100; opacity:0 }
+  }
+  @keyframes experience-arrive { from { opacity:.45 } }
+}
+@media(max-width:680px) {
+  .experience-demo { grid-template-columns:1fr }
+  .experience-recovery { grid-row:auto }
+  .land-footer { flex-wrap:wrap; gap:8px 16px }
+}
+.experience-signal { stroke-dasharray:13 200 }
+.experience-recovery svg { max-height:124px }
+html[lang="zh-Hans"] .land-wallet-frame img { object-position:center }
