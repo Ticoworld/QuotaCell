@@ -1,0 +1,35 @@
+name: QuotaCell live-site screenshot capture
+on:
+  push:
+    branches:
+      - artifacts/quotacell-public-beta-screenshots-20261120
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install browser capture dependency
+        run: |
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund playwright@1.56.1
+        working-directory: scripts
+      - name: Capture published QuotaCell screens, no wallet
+        run: node capture-announcement.mjs
+        working-directory: scripts
+      - name: Upload announcement screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quotacell-live-beta-screenshots
+          path: captures/
+          if-no-files-found: warn
+          retention-days: 30
