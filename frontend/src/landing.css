@@ -6,6 +6,7 @@ body { margin: 0 }
 .land-wrap { width:min(calc(100% - 72px),1200px); margin-inline:auto }
 .land-header,.land-footer,.land-header nav,.land-brand { display:flex; align-items:center; gap:18px }
 .land-header,.land-footer { min-height:76px; justify-content:space-between }
+.land-header { padding-inline:clamp(16px,2vw,32px) }
 .land-brand { gap:8px; text-decoration:none; font-weight:800 }
 .landing button { font:inherit; cursor:pointer; color:inherit; touch-action:manipulation }
 .land-header button { background:none; border:0; min-height:44px }
@@ -17,7 +18,15 @@ body { margin: 0 }
 .land-hero { width:100%; background:var(--night); color:white; position:relative; isolation:isolate; text-align:center; min-height:clamp(660px,62vw,860px); padding:clamp(54px,7vw,102px) 18px 170px; overflow:hidden }
 .land-hero-art { position:absolute; z-index:-1; inset:0; margin:0; mask-image:linear-gradient(transparent 10%,#000 54%) }
 .land-hero-art img { width:100%; height:100%; display:block; object-fit:cover; object-position:center 65% }
-.land-hero-copy { position:relative }
+.land-hero::before {
+  content:"";
+  position:absolute;
+  inset:0;
+  z-index:0;
+  pointer-events:none;
+  background:linear-gradient(180deg,#07132fa6 0%,#07132fc2 53%,#0b215b70 77%,#07132f52 100%);
+}
+.land-hero-copy { position:relative; z-index:1 }
 .land-hero .land-button { background:#bdf3ff; color:var(--night)!important }
 .landing h1,.landing h2 { margin:0; font-weight:780; letter-spacing:-.067em; line-height:1.01; text-wrap:balance }
 .landing h1 { font-size:clamp(3.2rem,9vw,8.6rem) }
@@ -296,4 +305,227 @@ html[lang="zh-Hans"] .land-wallet-frame img { object-position:center }
   .land-wallet-rules dl { grid-template-columns:1fr }
   .land-wallet-rules dl div { grid-template-columns:1fr 1fr; align-items:baseline }
   .land-wallet-rules dd { text-align:right }
+}
+
+.land-brand-logo { display:block; width:clamp(96px,14vw,148px); height:36px; object-fit:contain; object-position:left }
+.land-ledger { align-items:start }
+.land-ledger ol { padding-inline:22px }
+.land-ledger li a::before { z-index:1 }
+.land-ledger li:not(:last-child) a::after { content:""; position:absolute; left:4px; top:50%; height:100%; width:1px; background:#b8cbee }
+.land-close-panel { display:grid; justify-items:center; gap:18px }
+.land-end .land-close-panel p { margin:0 auto }
+.land-footer .land-brand-logo { width:114px }
+
+.landing .land-brand-logo { width:34px; height:34px }
+.land-audiences { background:#eaf1ff; border-block:1px solid #d7e4fb }
+.land-audiences h2 { font-size:clamp(2.35rem,5vw,4.5rem) }
+.land-audience-layout { display:grid; grid-template-columns:minmax(0, .8fr) minmax(0,1.2fr); gap:clamp(20px,4vw,52px); margin-top:34px }
+.land-audience-options { display:grid; align-content:start; gap:9px }
+.land-audience-options button {
+  display:grid; gap:3px; padding:17px 22px; text-align:left; border-radius:9px;
+  border:1px solid #c9daf7; background:#ffffffd9; transition:background-color .2s,color .2s;
+}
+.land-audience-options button:hover { background:#dbe8ff }
+.land-audience-options button[aria-pressed="true"] { background:#15378e; color:white; border-color:#15378e; box-shadow:inset 4px 0 #82caff }
+.land-audience-options small { font-size:.85rem }
+.land-audience-example {
+  position:relative; isolation:isolate; overflow:hidden; min-height:310px;
+  padding:clamp(24px,5vw,54px); border:1px solid #c9daf7; border-radius:20px; background:white;
+}
+.land-audience-example::before {
+  content:""; position:absolute; z-index:-1; top:-92px; right:-64px; width:260px; height:240px;
+  border-radius:50%; background:#a7d8ff; filter:blur(60px); opacity:.58; pointer-events:none;
+}
+.land-audience-copy { animation:land-audience-enter .24s ease-out both }
+.land-audience-copy h3 { margin:0; font-size:clamp(1.65rem,3vw,2.65rem); line-height:1.08; letter-spacing:-.04em }
+.land-audience-copy p { font-size:1rem; color:#3f5275 }
+.land-audience-copy ul { padding-inline-start:20px; margin-bottom:22px }
+.land-audience-copy a { color:#16409c; font-weight:700 }
+.land-audiences .land-audience-note { max-width:none; font-size:.83rem; color:#465978; margin-bottom:0 }
+@keyframes land-audience-enter { from { opacity:0; transform:translateY(5px) } to { opacity:1; transform:none } }
+.land-end .land-close-panel {
+  position:relative; isolation:isolate; overflow:hidden; display:grid;
+  grid-template-columns:minmax(0, .78fr) minmax(0,1.22fr); align-items:center;
+  gap:clamp(24px,5vw,58px); padding:clamp(28px,6vw,74px);
+  border:1px solid #6c91ce68; border-radius:24px; background:#0d2456ad;
+  text-align:left; backdrop-filter:blur(18px);
+}
+.land-close-content { display:grid; justify-items:start; gap:20px }
+.land-close-content h2 { font-size:clamp(2.4rem,5vw,4.65rem) }
+.land-end .land-close-content p { color:#dbe8ff; margin:0 }
+@media (max-width:700px) {
+  .land-audience-layout,.land-end .land-close-panel { grid-template-columns:1fr }
+  .land-header .land-brand { gap:5px }
+  .land-header .land-brand-logo { width:25px; height:25px }
+}
+@media (prefers-reduced-motion:reduce) {
+  .land-audience-copy { animation:none }
+  .land-audience-options button { transition:none }
+}
+
+.land-audiences { background:#f6f9ff }
+.land-audience-options button { grid-template-columns:42px 1fr; align-items:center; gap:13px; min-height:82px }
+.land-audience-options button strong,.land-audience-options button small { display:block }
+.land-audience-icon { display:grid; place-items:center; height:42px; border-radius:10px; background:#e8efff; color:#15378e; font-size:1.35rem }
+.land-audience-example { min-height:0; border-radius:4px 24px 24px 24px; box-shadow:0 16px 50px #1937740c }
+.land-audience-flow { display:grid; gap:0; list-style:none; padding:0; margin:26px 0 }
+.land-audience-flow li { position:relative; padding:9px 12px 9px 32px; border-bottom:1px solid #dae5f6; font-size:.92rem; font-weight:650 }
+.land-audience-flow li::before { content:""; position:absolute; inset:16px auto auto 6px; width:8px; height:8px; border:2px solid #2e5ed1; border-radius:50% }
+.land-audience-flow li:last-child { border-bottom:0 }
+.land-end .land-close-panel { grid-template-columns:1fr; overflow:visible; background:linear-gradient(120deg,#102651,#1c4191); text-align:center }
+.land-close-content { grid-area:1 / 1; justify-items:center; position:relative; z-index:1 }
+.land-close-content h2 { max-width:14ch }
+@media (max-width:700px) {
+  .land-end .land-close-panel { padding-bottom:60px }
+}
+
+/* The two plates use separate transforms and visible edge faces. */
+.land-close-art {
+  position:absolute;
+  inset:auto 5% -30px auto;
+  width:clamp(82px,17vw,220px);
+  aspect-ratio:1.25;
+  perspective:680px;
+  pointer-events:none;
+}
+.land-close-art::before,.land-close-art::after,.land-close-art img {
+  position:absolute;
+  width:70%;
+  aspect-ratio:1;
+  border-radius:24%;
+}
+.land-close-art::before,.land-close-art::after {
+  content:"";
+  border:1px solid #a5ccffad;
+}
+.land-close-art::after {
+  inset:0 0 auto auto;
+  background:linear-gradient(145deg,#52678a,#15243e 64%);
+  box-shadow:2px 3px #101b32,5px 7px #0c162a,8px 11px #091325,16px 25px 32px #030a21a0;
+  transform:rotateX(25deg) rotateY(30deg) rotateZ(21deg);
+}
+.land-close-art::before,.land-close-art img {
+  inset:14% auto auto 0;
+  transform:rotateX(22deg) rotateY(-24deg) rotateZ(-19deg);
+  z-index:1;
+}
+.land-close-art::before {
+  background:linear-gradient(145deg,#91c7ff,#376de8 43%,#173b98 82%);
+  box-shadow:2px 3px #2857be,4px 6px #214aa7,7px 10px #193885,10px 14px #132e74,16px 28px 36px #030a21b0;
+}
+.land-close-art img {
+  height:auto;
+  padding:17%;
+  filter:brightness(0) invert(1) drop-shadow(2px 3px 2px #112b6660);
+}
+.land-end .land-close-panel {
+  background:radial-gradient(ellipse at 80% 82%,#244da0,transparent 48%),linear-gradient(140deg,#0a1530,#142d62);
+  padding-bottom:clamp(66px,8vw,116px);
+}
+.landing :is(.pocket-product-header,.land-audiences,.land-ledger,.land-close-content) h2 {
+  font-family:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+  font-size:clamp(2.1rem,4.4vw,4.1rem);
+  letter-spacing:-.052em;
+  line-height:1.06;
+}
+.land-audience-flow {
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;
+  counter-reset:audience-step;
+}
+.land-audience-flow li {
+  counter-increment:audience-step;
+  min-height:88px;
+  padding:12px;
+  border:1px solid #d8e4fa;
+  border-radius:8px;
+  background:#f4f8ff;
+}
+.land-audience-flow li:last-child { border-bottom:1px solid #d8e4fa }
+.land-audience-flow li::before {
+  content:counter(audience-step,decimal-leading-zero);
+  position:static;
+  display:block;
+  width:auto;
+  height:auto;
+  border:0;
+  color:#305cb5;
+  font:700 .75rem/1.6 ui-monospace,monospace;
+}
+@media (max-width:580px) {
+  .land-audience-flow { grid-template-columns:1fr }
+  .land-audience-flow li { padding:9px 12px; min-height:0; display:flex; align-items:baseline; gap:10px }
+  .land-close-art { inset:auto 9% -32px auto }
+}
+
+.land-audience-opening {
+  position:relative;
+  isolation:isolate;
+  overflow:hidden;
+  display:grid;
+  align-items:center;
+  min-height:clamp(250px,30vw,410px);
+  background:radial-gradient(ellipse at 78% 64%,#426fdf,transparent 65%),linear-gradient(114deg,#0a1942 9%,#153a91 67%,#2b59ca);
+  color:white;
+}
+.land-audience-opening::after {
+  content:"";
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+  background:linear-gradient(90deg,#0b1943a6,transparent 70%),linear-gradient(0deg,#142f7a80,transparent 50%);
+}
+.land-audience-opening .land-wrap { position:relative; z-index:1; padding-block:48px }
+.landing .land-audience-opening h2 { max-width:10ch; font-size:clamp(2.6rem,6vw,5rem); text-wrap:initial }
+.land-audience-emblem {
+  position:absolute;
+  inset-inline-end:clamp(-160px,-9vw,-88px);
+  top:48%;
+  width:clamp(330px,53vw,790px);
+  aspect-ratio:425 / 390;
+  transform:translateY(-50%) perspective(950px) rotateY(-24deg) rotateX(13deg) rotateZ(-17deg);
+  filter:drop-shadow(16px 22px 20px #081944a6);
+}
+.land-audience-emblem span,.land-audience-emblem::before {
+  position:absolute;
+  inset:0;
+  mask:url("../../assets/brand/quotacell-logo-blue.svg") center / contain no-repeat;
+}
+.land-audience-emblem::before {
+  content:"";
+  transform:translate(4%,5%);
+  background:linear-gradient(150deg,#6594ff,#193782 72%);
+}
+.land-audience-emblem span { background:linear-gradient(149deg,#cfe5ff 5%,#6797ff 39%,#3c66d3 70%,#345abc) }
+.land-audience-body { padding-block:clamp(30px,5vw,62px) clamp(62px,8vw,104px) }
+.land-audience-body .land-audience-layout { margin-top:0 }
+@media (max-width:700px) {
+  .land-audience-opening { min-height:240px }
+  .land-audience-emblem { inset-inline-end:-128px; opacity:.76 }
+  .land-audience-opening::after { background:linear-gradient(90deg,#0b1943e0,transparent 95%) }
+}
+
+.land-audience-opening p { max-width:28ch; color:#e1ebff; margin-bottom:0 }
+.land-audience-body .land-audience-layout { margin-top:32px }
+.land-header .land-outline { background:transparent; border:1px solid #9eb6ee; color:#15378e!important }
+.land-header .land-outline:hover { background:#e8efff }
+.land-proof { background:linear-gradient(180deg,#f6f9ff,#dae8fb) }
+.land-proof-intro { display:grid; grid-template-columns:1.1fr 1fr; align-items:end; gap:32px; margin-bottom:34px }
+.landing .land-proof-intro h2 { font-size:clamp(2.1rem,4.7vw,4.1rem); max-width:15ch }
+.land-proof-intro p { margin:0; color:#405575 }
+.land-proof-stages {
+  display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px;
+  list-style:none; margin:0; padding:0; overflow:hidden;
+  border:1px solid #a8c1e9; border-radius:18px; background:#a8c1e9;
+}
+.land-proof-stages > li { display:grid; align-content:start; gap:6px; padding:clamp(18px,3vw,36px); background:#f8fbff }
+.land-proof-stages h3 { font-size:1rem; color:#244a9f; margin:0 0 10px }
+.land-proof-stages strong { font-size:clamp(1.6rem,3vw,2.5rem); line-height:1.1; font-variant-numeric:tabular-nums }
+.land-proof-stages span { color:#405575 }
+.land-proof-stages ul { list-style:none; margin:12px 0 0; padding:0; display:grid; gap:10px }
+.land-proof-stages a,.land-proof-record { color:#1743a0; font-size:.9rem; font-weight:650 }
+.land-proof-record { display:inline-block; margin-top:22px }
+@media (max-width:700px) {
+  .land-proof-intro,.land-proof-stages { grid-template-columns:1fr }
+  .land-audience-opening p { max-width:24ch }
 }

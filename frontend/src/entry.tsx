@@ -6,9 +6,13 @@ if ((location.pathname === '/' && !location.search) || location.pathname === '/o
   createRoot(root).render(<Landing/>);
 } else {
   document.title = 'QuotaCell Wallet';
-  root.textContent = 'Loading QuotaCell wallet…';
+  const message = document.getElementById('startup-message')!;
+  const retry = document.getElementById('startup-retry') as HTMLButtonElement;
+  message.textContent = 'Opening your wallet…';
   void import('./main').catch(() => {
-    root.textContent = 'The wallet could not load. Refresh the page to try again.';
-    root.setAttribute('role', 'alert');
+    message.textContent = 'The wallet could not load.';
+    root.querySelector('.startup-loading')?.classList.add('startup-failed');
+    retry.hidden = false;
+    retry.onclick = () => location.reload();
   });
 }
