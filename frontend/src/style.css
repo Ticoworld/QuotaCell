@@ -54,7 +54,7 @@
 @layer components {
   .topbar { @apply flex h-[68px] w-full items-center justify-between gap-[18px] border-b border-line bg-white/95; padding-inline: max(26px, calc((100vw - 1160px) / 2)); }
   .brand { display: inline-flex; flex: none; align-items: center; gap: 10px; color: var(--navy); text-decoration: none; font-size: 19px; font-weight: 750; letter-spacing: -.045em; }
-  .brand svg { width: 27px; height: 27px; fill: none; stroke: var(--blue); stroke-width: 1.65; stroke-linejoin: round; stroke-linecap: round; }
+  .brand img { width: 27px; height: auto; }
   .topbar-controls { @apply flex min-w-0 items-center justify-end gap-3.5; }
   .network-state { display: flex; align-items: center; gap: 8px; color: #324158; white-space: nowrap; font-size: 12px; }
   .network-compact { display: none; }
@@ -402,7 +402,7 @@
   @media (max-width: 520px) {
     .topbar { padding: 0 12px; }
     .brand { gap: 7px; font-size: 16px; }
-    .brand svg { width: 24px; height: 24px; }
+    .brand img { width: 24px; }
     .topbar-controls { gap: 5px; }
     .network-state { max-width: none; gap: 5px; font-size: 10px; }
     .network-state .network-full { display: none; }
