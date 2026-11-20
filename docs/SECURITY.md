@@ -1,6 +1,22 @@
 # Security model and limitations
 
-This is an unaudited experiment. Do not use it to secure real assets.
+## Current public Pudge beta: native QCN4/QCT4 (November 2026)
+
+**Experimental and unaudited. Pudge testnet only. Do not use QuotaCell to secure real assets.**
+
+QuotaCell's current public beta is a **native CKB spending policy**, not the historical synthetic xUDT prototype described below. An owner creates a Pocket with **two fixed, independently keyed delegates** and approved recipients fixed at creation. The contract enforces a shared **gross lifetime** spending allowance, personal limits, and per-payment ceilings; adding funds does not restore used allowance. The owner can change allowances without resetting spent counters, revoke or restore delegate authority, close the Pocket, and recover supported protected funds. A third delegate, post-creation identity/recipient rotation, and automatic keeper refills are not implemented in QCN4.
+
+**Capacity and payment limits for the documented public profile:** the active QCN4 policy Cell held **600 CKB**. Closure released **466 CKB** of that policy capacity before the close transaction fee and left **134 CKB occupied and locked** in the QCT4 terminal Cell. The 134 CKB terminal is not spendable by the owner. Ordinary delegate payments require at least **61 CKB** under the current supported payment structure. Fund capacity and recoverable balance are separate from policy capacity.
+
+**Public evidence:** the [November 15 WO18 closeout record](../examples/local-chain/WO18_PUBLIC_CLOSEOUT_20261115.md) verifies **nine committed, canonical Pudge transactions**, including creation, protected funding, one 61 CKB payment by each delegate, both revocations, closure, a separate 73 CKB late deposit to the closed Pocket, and recovery of that deposit. The record distinguishes capacity accounting from protected fund recovery. The chain audit used one configured public RPC endpoint; it was not an independent security audit. A compatible Pudge wallet, including UTXO Global, has been used for the public testnet lifecycle.
+
+**Known limitations:** two delegate slots and approved recipient identities are fixed at creation; the owner key is required for owner recovery and loss of that key may strand funds. Multi-fund consolidation, unsupported or malformed deposits, independent recovery, reorganization resilience, descriptor-free cross-device recovery, and adversarial public extra-deposit scenarios are not fully qualified. Uncertain broadcasts require reconciliation of the original signed transaction and chain state before any replacement is considered. Public RPC/indexer availability is variable. No mainnet or treasury-safety claim is made.
+
+See the [current public beta guide](PUBLIC_BETA.md), the [deployment references](../evidence/wo15/pudge-deployment.json), and the [public transaction audit](../examples/local-chain/WO18_PUBLIC_CLOSEOUT_20261115.md) for current evidence. Older statements below apply only to the **October 2026 synthetic xUDT prototype** and must not be used to describe native QCN4 behavior.
+
+---
+
+## Historical security assessment: October 2026 synthetic xUDT profile
 
 **October 30 evidence update:** [owner-control node records](../evidence/owner-control-2026-10-30/README.md)
 now demonstrate revocation, latest-state Q17 rejection, close/recovery and one
