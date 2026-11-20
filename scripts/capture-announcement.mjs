@@ -60,9 +60,13 @@ try {
     const response = await publicApp.goto(site + '/app?pocket=' + pocket, { waitUntil: 'domcontentloaded', timeout: 60000 });
     if (!response || !response.ok() || new URL(publicApp.url()).origin !== site) throw new Error('Public Pocket route did not return the live site');
     await publicApp.locator('main.app-page').waitFor({ state: 'visible', timeout: 90000 });
-    await publicApp.waitForTimeout(800);
+    // The history is verified asynchronously. Never publish a screenshot
+    // showing a loading placeholder as completed public proof.
+    await publicApp.locator('text=/Loading committed transactions from Pudge/i').waitFor({ state: 'hidden', timeout: 65000 });
+    await publicApp.waitForTimeout(350);
     const body = await publicApp.locator('main.app-page').innerText();
     if (!/Closed|Active|Protected balance|Policy terminal capacity/i.test(body)) throw new Error('Public Pocket did not present a verified state');
+    if (/Loading committed transactions from Pudge|Could not load transaction history/i.test(body)) throw new Error('Public Pocket history did not finish verification');
     await record(publicApp, '05-live-public-pocket.png', null, 'Public Pudge Pocket state in live app, without a connected wallet');
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
