@@ -12,7 +12,7 @@ export function AudienceSection({ t, pocketId }: { t: Translate; pocketId: strin
       people: t('Founders and small CKB teams', '创始人和小型 CKB 团队'),
       title: t('Give contributors a budget of their own.', '为贡献者分配各自的预算。'),
       example: t('A small project sets aside test CKB for two contributors to pay approved recipients. The owner sets a shared budget and a separate cap for each wallet.', '小型项目可为两位贡献者预留测试 CKB，供他们向获准收款人付款。所有者设定共享预算及每个钱包的独立限额。'),
-      action: t('Open the testnet wallet', '打开测试网钱包'),
+      action: t('Launch testnet app', '打开测试网应用'),
       href: '/app',
     },
     {

@@ -6,7 +6,7 @@ body { margin: 0 }
 .land-wrap { width:min(calc(100% - 72px),1200px); margin-inline:auto }
 .land-header,.land-footer,.land-header nav,.land-brand { display:flex; align-items:center; gap:18px }
 .land-header,.land-footer { min-height:76px; justify-content:space-between }
-.land-header { padding-inline:clamp(16px,2vw,32px) }
+.land-header { padding-inline:clamp(16px,2vw,32px); background:var(--night); color:#f3f7ff; border-bottom:1px solid #28416d }
 .land-brand { gap:8px; text-decoration:none; font-weight:800 }
 .landing button { font:inherit; cursor:pointer; color:inherit; touch-action:manipulation }
 .land-header button { background:none; border:0; min-height:44px }
@@ -507,8 +507,8 @@ html[lang="zh-Hans"] .land-wallet-frame img { object-position:center }
 
 .land-audience-opening p { max-width:28ch; color:#e1ebff; margin-bottom:0 }
 .land-audience-body .land-audience-layout { margin-top:32px }
-.land-header .land-outline { background:transparent; border:1px solid #9eb6ee; color:#15378e!important }
-.land-header .land-outline:hover { background:#e8efff }
+.land-header .land-outline { background:#bdf3ff; border:1px solid #bdf3ff; color:#07132f!important }
+.land-header .land-outline:hover { background:#e4faff }
 .land-proof { background:linear-gradient(180deg,#f6f9ff,#dae8fb) }
 .land-proof-intro { display:grid; grid-template-columns:1.1fr 1fr; align-items:end; gap:32px; margin-bottom:34px }
 .landing .land-proof-intro h2 { font-size:clamp(2.1rem,4.7vw,4.1rem); max-width:15ch }

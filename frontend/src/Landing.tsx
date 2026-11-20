@@ -28,7 +28,7 @@ export function Landing() {
     catch { /* Language remains available in this session. */ }
   }, [zh]);
   const interactive = location.pathname !== "/overview";
-  const app = t('Open wallet', '打开钱包');
+  const app = t('Launch app', '打开应用');
   return <div className="landing">
     <a className="land-skip" href="#content">{t('Skip to content', '跳至内容')}</a>
     <header className="land-header">
@@ -69,7 +69,7 @@ export function Landing() {
               <div><dt>{t('Approved recipients', '获准收款人')}</dt><dd>{t('Fixed at creation', '创建时固定')}</dd></div>
               <div><dt>{t('Minimum payment', '最低付款金额')}</dt><dd>61 CKB</dd></div>
             </dl>
-            <a className="land-wallet-link" href="/app">{t('Open the wallet', '打开钱包')} <span aria-hidden="true">↗</span></a>
+            <a className="land-wallet-link" href="/app">{t('Launch app', '打开应用')} <span aria-hidden="true">↗</span></a>
           </div>
         </div>
       </section>
@@ -114,7 +114,7 @@ export function Landing() {
       <section className="land-section land-end"><div className="land-wrap land-close-panel"><div className="land-close-art" aria-hidden="true"><img src={brandLogo} alt=""/></div><div className="land-close-content">
         <h2>{t('Open your first Pocket', '开启你的第一个资金口袋')}</h2>
         <p>{t('Use a compatible CKB wallet with Pudge test CKB. Public RPC response times vary. QuotaCell has no independent security audit and is available for testnet use only.', '请使用兼容的 CKB 钱包与 Pudge 测试币。公共 RPC 响应时间可能波动。QuotaCell 尚未接受独立安全审计，仅供测试网使用。')}</p>
-        <a className="land-button" href="/app">{t("Launch testnet wallet", "打开测试网钱包")} ↗</a>
+        <a className="land-button" href="/app">{t("Launch testnet app", "打开测试网应用")} ↗</a>
         </div></div>
       </section>
     </main>
