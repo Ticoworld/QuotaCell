@@ -1,3 +1,4 @@
+import { JsonRpcTransformers } from '@ckb-ccc/core/advanced';
 import * as c from '@ckb-ccc/core';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 
@@ -220,8 +221,9 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
       const role = indexedRole;
       const transaction = await rpc<any>('get_transaction', [point.tx_hash]);
       if (transaction?.tx_status?.status !== 'committed' || !transaction.tx_status.block_hash) throw new Error('Indexed policy transaction is not committed.');
+      if (!transaction.transaction || JsonRpcTransformers.transactionTo(transaction.transaction).hash() !== point.tx_hash) throw new Error('Policy transaction hash mismatch.');
       const header = await rpc<any>('get_header', [transaction.tx_status.block_hash]);
-      if (!header || header.number !== item.block_number || (await rpc<string>('get_block_hash', [header.number])).toLowerCase() !== header.hash.toLowerCase()) throw new Error('Indexed policy transaction is not canonical.');
+      if (!header || header.hash !== transaction.tx_status.block_hash || header.number !== item.block_number || (await rpc<string>('get_block_hash', [header.number])).toLowerCase() !== header.hash.toLowerCase()) throw new Error('Indexed policy transaction is not canonical.');
       const outputIndex = Number(BigInt(point.index));
       if (!equal(normalizeOutput(transaction.transaction.outputs[outputIndex]), normalizeOutput(live.cell.output)) || transaction.transaction.outputs_data[outputIndex] !== live.cell.data.content) throw new Error('Canonical policy transaction output mismatch.');
       candidates.push({ pocket: pocketId, role: role.role || 'public', closed: role.closed, capacity: live.cell.output.capacity, summary: role.summary, policyScript: policy, outPoint: point, indexedTip: indexed, cell: live.cell });

@@ -131,13 +131,19 @@ async function plainCells(lock: c.Script, max: number) {
   return result.objects as { out_point: Point }[];
 }
 
+export class FundCheckpointError extends Error {
+  constructor(readonly reason: 'advanced' | 'lag' | 'canonical') {
+    super(reason);
+  }
+}
+
 async function discoverFunds(pocket: string) {
   const script = { code_hash: fundCode, hash_type: 'data1', args: pocket };
   const indexed = await httpRpc<{ block_number: string; block_hash: string }>('get_indexer_tip');
   const tip = await httpRpc<{ number: string }>('get_tip_header');
-  requireCondition(indexed && tip && BigInt(tip.number) >= BigInt(indexed.block_number) &&
-    BigInt(tip.number) - BigInt(indexed.block_number) <= 64n &&
-    await httpRpc('get_block_hash', [indexed.block_number]) === indexed.block_hash, 'Protected fund index is unavailable or stale');
+  if (!indexed || !tip || BigInt(tip.number) < BigInt(indexed.block_number) ||
+      BigInt(tip.number) - BigInt(indexed.block_number) > 64n) throw new FundCheckpointError('lag');
+  if (await httpRpc('get_block_hash', [indexed.block_number]) !== indexed.block_hash) throw new FundCheckpointError('canonical');
   const ordinary: { out_point: Point; output: unknown; output_data: string }[] = [];
   const cursors = new Set<string>();
   const unsupportedFunds: NonNullable<PocketState['unsupportedFunds']> = [];
@@ -168,8 +174,14 @@ async function discoverFunds(pocket: string) {
         return cell;
       }));
       const finalTip = await httpRpc<{ block_number: string; block_hash: string }>('get_indexer_tip');
-      requireCondition(finalTip?.block_hash === indexed.block_hash && await httpRpc('get_block_hash', [indexed.block_number]) === indexed.block_hash,
-        'Protected fund index changed. Refresh to retry');
+      if (await httpRpc('get_block_hash', [indexed.block_number]) !== indexed.block_hash) throw new FundCheckpointError('canonical');
+      if (!finalTip || BigInt(finalTip.block_number) < BigInt(indexed.block_number)) throw new FundCheckpointError('lag');
+      if (BigInt(finalTip.block_number) > BigInt(indexed.block_number)) {
+        if (await httpRpc('get_block_hash', [finalTip.block_number]) !== finalTip.block_hash) throw new FundCheckpointError('canonical');
+        // A live index query does not pin a historical UTXO set.
+        throw new FundCheckpointError('advanced');
+      }
+      if (finalTip.block_hash !== indexed.block_hash) throw new FundCheckpointError('canonical');
       requireCondition(funds.every(cell => !cell.cell.output.type && cell.cell.data.content === '0x' &&
         cell.cell.output.lock.code_hash === fundCode && cell.cell.output.lock.hash_type === 'data1' &&
         cell.cell.output.lock.args === pocket), 'Protected fund identity changed');
@@ -188,11 +200,11 @@ export class PocketIndexSyncError extends Error {
 
 const historicalChecks = new Map<string, { height: string; hash: string; spent: Set<string>; entries: Map<string, string> }>();
 
-async function snapshot(pocket: string) {
-  const [policy, funds] = await Promise.all([
-    discoverPublicPocket(pocket),
-    discoverFunds(pocket),
-  ]);
+async function snapshot(pocket: string, verifiedPolicy?: Promise<Awaited<ReturnType<typeof discoverPublicPocket>>>, reading = false) {
+  const fundRead = reading ? retryFunds(pocket) : discoverFunds(pocket);
+  void fundRead.catch(() => {});
+  const policy = await (verifiedPolicy ?? discoverPublicPocket(pocket));
+  const funds = await fundRead;
   const policyHeight = BigInt(policy.indexedTip.block_number);
   const fundHeight = BigInt(funds.fundTip.block_number);
   const journal = entries(pocket);
@@ -250,7 +262,17 @@ async function snapshot(pocket: string) {
   return { policy, ...funds };
 }
 
-export async function browserState(pocket?: string, actor?: string): Promise<PocketState> {
+async function retryFunds(pocket: string) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await discoverFunds(pocket); }
+    catch (error) {
+      if (attempt >= 2 || !(error instanceof FundCheckpointError) || error.reason !== 'advanced') throw error;
+      await new Promise(resolve => setTimeout(resolve, 350 * (attempt + 1)));
+    }
+  }
+}
+
+export async function browserState(pocket?: string, actor?: string, onPolicy?: (state: PocketState) => void): Promise<PocketState> {
   const base = { networkMode: 'pudge-browser', genesis: deployment.genesis, multiPocket: true };
   if (!pocket) {
     if (!actor) return { ...base, empty: true };
@@ -261,13 +283,33 @@ export async function browserState(pocket?: string, actor?: string): Promise<Poc
       amount: '0', recipient: '', created: pending.created, operation: 'genesis',
     }] : [], discovery: discovered.flatMap(({ role, pocket, closed }) => role === 'public' ? [] : [{ role, pocket, closed, verifiedAt: Date.now() }]) };
   }
-  const { policy, funds, unsupportedFunds } = await locked(pocket, () => snapshot(pocket));
+  const verified = onPolicy ? discoverPublicPocket(pocket).then(policy => {
+    onPolicy({
+      ...base, ...policy.summary, pocket, closed: policy.closed,
+      historicalTermsUnavailable: policy.closed, policyCapacity: BigInt(policy.capacity).toString(),
+      historyPolicy: { script: policy.policyScript, txHash: policy.outPoint.tx_hash },
+      indexedTip: policy.indexedTip,
+    });
+    return policy;
+  }) : undefined;
+  // Attach rejection handling before the per-Pocket lock becomes available.
+  if (verified) void verified.catch(() => {});
+  const { policy, funds, unsupportedFunds, fundTip } = await locked(pocket, () => snapshot(pocket, verified, Boolean(onPolicy)));
+  if (verified) {
+    const [anchor, current] = await Promise.all([
+      httpRpc('get_block_hash', [policy.indexedTip.block_number]),
+      httpRpc<{ status: string }>('get_live_cell', [policy.outPoint, false]),
+    ]);
+    if (anchor !== policy.indexedTip.block_hash) throw new FundCheckpointError('canonical');
+    requireCondition(current?.status === 'live', 'Policy changed during fund verification');
+  }
   const journal = entries(pocket);
   return {
     ...base, ...policy.summary, ...(policy.closed && actor && (await discoverPublicPocket(pocket, undefined, actor)).role === 'owner' ? { owner: actor } : {}), historyPolicy: { script: policy.policyScript, txHash: policy.outPoint.tx_hash }, pocket, closed: policy.closed, indexedTip: policy.indexedTip,
-    unsupportedFunds, policyCapacity: BigInt(policy.capacity).toString(), hasFund: Boolean(funds.length),
+    unsupportedFunds, fundTip, historicalTermsUnavailable: policy.closed, policyCapacity: BigInt(policy.capacity).toString(), hasFund: Boolean(funds.length),
     fundShannons: funds.reduce((total, cell) => total + BigInt(cell.cell.output.capacity), 0n).toString(),
     fundOccupiedShannons: funds.length ? '7300000000' : '0',
+    fundCellCount: funds.length,
     unresolved: journal.some(reservesInputs),
     depositMayPrepare: journal.filter(reservesInputs).every(depositCanOverlap),
     history: journal.filter(entry => ['uncertain', 'conflict'].includes(entry.state)).map(entry => ({
