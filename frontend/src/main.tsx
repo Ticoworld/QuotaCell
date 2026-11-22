@@ -246,9 +246,9 @@ function App() {
     let timer: number;
     let failures = 0;
     const update = async (quiet: boolean) => {
-      const result = await refresh(quiet);
+      const result = quiet && document.visibilityState === 'hidden' ? null : await refresh(quiet);
       if (!active) return;
-      failures = result ? 0 : failures + 1;
+      failures = result || document.visibilityState === 'hidden' ? 0 : failures + 1;
       const delay = failures && browserMode
         ? Math.min(2000 * 2 ** Math.min(failures - 1, 4), 30000) + Math.random() * 500
         : 60000;

@@ -1,6 +1,6 @@
 import { hexFrom, Script, WitnessArgs, bytesFrom, hashCkb } from '@ckb-ccc/core';
 import { JsonRpcTransformers as format } from '@ckb-ccc/core/advanced';
-import { httpRpc as requestRpc } from './publicDiscovery';
+import { httpRpc as requestRpc, rememberDisplayEvidence } from './publicDiscovery';
 import type { HistoryItem } from './domain';
 
 type HistoryRpc = <T>(method: string, params: unknown[]) => Promise<T>;
@@ -120,6 +120,7 @@ export async function loadPocketHistory(policyScript: RawScript, fund: Script, t
     }
     const verified = await header;
     if (BigInt(verified.number) !== BigInt(hit.block_number) || BigInt(verified.number) >= BigInt(end) || BigInt(verified.number) < BigInt(start)) throw new Error('Unexpected Pocket transaction block');
+    rememberDisplayEvidence(hit.tx_hash, { transaction: response.transaction, tx_status: { ...status, status: 'committed' } }, verified, signal);
     committed.set(hit.tx_hash, { tx: response.transaction, header: verified, index: hit.tx_index });
   }
   for (let index = 0; index < hits.length; index += 4) {

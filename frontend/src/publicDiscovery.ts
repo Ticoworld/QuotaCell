@@ -43,6 +43,20 @@ function argsFor(publicKey: string) { return c.hashCkb(c.bytesFrom(publicKey)).s
 const policyScripts = new Map<string, Script>();
 const rpcReads = new Map<string, Promise<unknown>>();
 let rpcActive = 0;
+type TransactionEvidence = {
+  transaction: Parameters<typeof JsonRpcTransformers.transactionTo>[0];
+  tx_status: { status: 'committed'; block_hash: string; tx_index?: string };
+};
+type EvidenceHeader = { hash: string; number: string; timestamp: string };
+// This cache belongs to the primary Pudge endpoint only.
+const displayEvidence = new Map<string, { transaction: TransactionEvidence; header: EvidenceHeader }>();
+
+export function rememberDisplayEvidence(hash: string, transaction: TransactionEvidence, header: EvidenceHeader, signal?: AbortSignal) {
+  if (!signal || signal.aborted) return;
+  if (displayEvidence.size >= 128) displayEvidence.delete(displayEvidence.keys().next().value!);
+  displayEvidence.set(hash, { transaction, header });
+}
+
 const scopedReads = new WeakMap<AbortSignal, Map<string, Promise<unknown>>>();
 const rpcQueue: (() => void)[] = [];
 const historyQueue: (() => void)[] = [];
@@ -50,6 +64,16 @@ const safetyQueue: (() => void)[] = [];
 
 export function httpRpc<T>(method: string, params: unknown[] = [], purpose: 'safety' | 'financial' | 'history' = 'financial', signal?: AbortSignal): Promise<T> {
   if (signal?.aborted) return Promise.reject(signal.reason);
+  if (signal && method === 'get_transaction' && params.length === 1) {
+    const proof = displayEvidence.get(String(params[0]));
+    // Consumers still check the canonical height, expected block and current liveness.
+    if (proof) return Promise.resolve(proof.transaction as T);
+  }
+  if (signal && method === 'get_header' && params.length === 1) {
+    for (const proof of displayEvidence.values()) {
+      if (proof.header.hash === params[0]) return Promise.resolve(proof.header as T);
+    }
+  }
   const reads = signal ? scopedReads.get(signal) ?? new Map<string, Promise<unknown>>() : rpcReads;
   if (signal) scopedReads.set(signal, reads);
   const read = method.startsWith('get_');
@@ -105,6 +129,11 @@ async function requestRpc<T>(method: string, params: unknown[], purpose: string,
       throw new Error(body.error.message || 'Public CKB read failed.');
     }
     if (!body || !Object.hasOwn(body, 'result')) throw new Error('Invalid public CKB response.');
+    if (method === 'get_block_hash' && url === RPC_URL) {
+      for (const [hash, proof] of displayEvidence) {
+        if (proof.header.number === params[0] && proof.header.hash !== body.result) displayEvidence.delete(hash);
+      }
+    }
     outcome = 'ok';
     return body.result as T;
   } catch (error) {
@@ -248,6 +277,7 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
       if (!header || header.hash !== transaction.tx_status.block_hash || header.number !== item.block_number || (await rpc<string>('get_block_hash', [header.number])).toLowerCase() !== header.hash.toLowerCase()) throw new Error('Indexed policy transaction is not canonical.');
       const outputIndex = Number(BigInt(point.index));
       if (!equal(normalizeOutput(transaction.transaction.outputs[outputIndex]), normalizeOutput(live.cell.output)) || transaction.transaction.outputs_data[outputIndex] !== live.cell.data.content) throw new Error('Canonical policy transaction output mismatch.');
+      if (defaultRpc) rememberDisplayEvidence(point.tx_hash, transaction, header, signal);
       candidates.push({ pocket: pocketId, role: role.role || 'public', closed: role.closed, capacity: live.cell.output.capacity, summary: role.summary, policyScript: policy, outPoint: point, indexedTip: indexed, cell: live.cell });
     }
     if (result.objects.length < PAGE_SIZE) { finished = true; break; }
