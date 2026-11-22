@@ -88,7 +88,7 @@ function localizedConnectionError(error: unknown, t: (key: string) => string): s
 
 function App() {
   const { t, i18n } = useTranslation();
-  const [state, setState] = useState<PocketState | null>(null);
+  const [loadedState, setState] = useState<PocketState | null>(null);
   const verifiedLists = useRef(new Map<string, PocketState>());
   const lastGoodState = useRef<PocketState | null>(null);
   const refreshInFlight = useRef<Promise<PocketState | null> | null>(null);
@@ -102,9 +102,9 @@ function App() {
   const stateActorRef = useRef<string | null>(null);
   const [identity, setIdentity] = useState<WalletIdentity | null>(null);
   const readController = useRef<AbortController>();
-  const refreshScope = useRef({ actor: identity?.publicKey ?? null, generation: 0 });
+  const refreshScope = useRef({ actor: identity?.publicKey.toLowerCase() ?? null, generation: 0 });
   useLayoutEffect(() => {
-    refreshScope.current = { actor: identity?.publicKey ?? null, generation: refreshScope.current.generation + 1 };
+    refreshScope.current = { actor: identity?.publicKey.toLowerCase() ?? null, generation: refreshScope.current.generation + 1 };
     return () => readController.current?.abort();
   }, [identity?.publicKey]);
 
@@ -124,6 +124,9 @@ function App() {
   const [showCreation, setShowCreation] = useState(false);
   const [showPocketList, setShowPocketList] = useState(false);
   const [selectedPocketId, setSelectedPocketId] = useState(() => new URLSearchParams(window.location.search).get('pocket') || '');
+  const state = stateActor === (identity?.publicKey.toLowerCase() ?? null) &&
+    (!browserMode || (loadedState?.pocket?.toLowerCase() ?? '') === selectedPocketId.toLowerCase())
+    ? loadedState : null;
   const [selectedPocketLoading, setSelectedPocketLoading] = useState(false);
   const [selectedPocketError, setSelectedPocketError] = useState(false);
   const [activeDraftId, setActiveDraftId] = useState('');
@@ -141,7 +144,7 @@ function App() {
   const [retryDialogOpen, setRetryDialogOpen] = useState(false);
 
   const refresh = useCallback(async (quiet = false) => {
-    const actor = identity?.publicKey ?? null;
+    const actor = identity?.publicKey.toLowerCase() ?? null;
     const route = location.search;
     const scope = refreshScope.current;
     const current = () => refreshScope.current === scope && scope.actor === actor && location.search === route;
@@ -152,19 +155,21 @@ function App() {
     readController.current?.abort();
     const controller = new AbortController();
     readController.current = controller;
-    const pocket = new URLSearchParams(route).get('pocket');
-    if (browserMode && pocket) setFundRead({ pocket: pocket.toLowerCase(), status: 'verifying' });
+    const routePocket = new URLSearchParams(route).get('pocket')?.toLowerCase();
+    const matchingLastGood = () => routePocket && stateActorRef.current === actor &&
+      lastGoodState.current?.pocket?.toLowerCase() === routePocket ? lastGoodState.current : null;
+    if (browserMode && routePocket) setFundRead({ pocket: routePocket, status: 'verifying' });
     const task = (async (): Promise<PocketState | null> => {
       try {
         let next: PocketState;
-        const routePocket = new URLSearchParams(window.location.search).get('pocket')?.toLowerCase();
         lastProgressivePocket.current = undefined;
         let publishedPolicy = false;
         const publishPolicy = browserMode && routePocket ? (policy: PocketState) => {
           if (!current()) return;
           publishedPolicy = true;
           lastProgressivePocket.current = routePocket;
-          const previous = lastGoodState.current?.pocket === routePocket ? lastGoodState.current : undefined;
+          const previous = matchingLastGood();
+          setStateActor(actor);
           setState({ ...policy, fundShannons: previous?.fundShannons, fundTip: previous?.fundTip, fundCellCount: previous?.fundCellCount });
           setFundRead({ pocket: routePocket, status: 'verifying' });
           setSelectedPocketLoading(false);
@@ -200,7 +205,7 @@ function App() {
           return null;
         }
         const selectionMatches = !actor || !routePocket || (!next.empty && !next.connectRequired && next.pocket?.toLowerCase() === routePocket);
-        if (!selectionMatches && lastGoodState.current?.pocket?.toLowerCase() === routePocket && stateActorRef.current === actor?.toLowerCase()) {
+        if (!selectionMatches && matchingLastGood()) {
           setStateStale(true);
           return null;
         }
@@ -208,7 +213,7 @@ function App() {
         if (routePocket && next.fundTip) setFundRead({ pocket: routePocket, status: 'verified' });
         lastGoodState.current = next;
         setState(next);
-        stateActorRef.current = actor?.toLowerCase() ?? null;
+        stateActorRef.current = actor;
         setStateActor(stateActorRef.current);
         setStateStale(false);
         setWaitingForIndex(false);
@@ -219,14 +224,13 @@ function App() {
         setWaitingForIndex(cause instanceof PocketIndexSyncError);
         const message = cause instanceof Error ? cause.message : String(cause);
         setLoadError(message);
-        if (actor && stateActorRef.current !== actor.toLowerCase()) {
+        if (matchingLastGood()) {
+          setStateStale(true);
+          if (browserMode && routePocket) setFundRead({ pocket: routePocket, status: 'unavailable', reason: message });
+        } else {
           setState(null);
-          stateActorRef.current = null;
-          setStateActor(null);
-          setLoadError(message);
-        } else if (lastGoodState.current && stateActorRef.current === actor?.toLowerCase() &&
-          lastGoodState.current.pocket === new URLSearchParams(route).get('pocket')) setStateStale(true);
-        else { setState(null); setLoadError(message); }
+          setStateStale(false);
+        }
         return null;
       } finally {
         if (refreshInFlightActor.current === refreshKey) {
