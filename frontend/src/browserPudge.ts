@@ -200,11 +200,13 @@ export class PocketIndexSyncError extends Error {
 
 const historicalChecks = new Map<string, { height: string; hash: string; spent: Set<string>; entries: Map<string, string> }>();
 
-async function snapshot(pocket: string, verifiedPolicy?: Promise<Awaited<ReturnType<typeof discoverPublicPocket>>>, reading = false, rpc = httpRpc) {
-  const fundRead = reading ? retryFunds(pocket, rpc) : discoverFunds(pocket);
+async function snapshot(pocket: string, verifiedPolicy?: Promise<Awaited<ReturnType<typeof discoverPublicPocket>>>, reading = false, rpc = httpRpc, signal?: AbortSignal) {
+  const fundRead = reading ? retryFunds(pocket, rpc, signal) : discoverFunds(pocket);
   void fundRead.catch(() => {});
-  const policy = await (verifiedPolicy ?? discoverPublicPocket(pocket));
+  const policy = await (verifiedPolicy ?? discoverPublicPocket(pocket, (method, params) => rpc(method, params), undefined, signal));
+  if (policy.backup) throw new Error('Primary Pudge RPC unavailable for fund verification');
   const funds = await fundRead;
+  signal?.throwIfAborted();
   const policyHeight = BigInt(policy.indexedTip.block_number);
   const fundHeight = BigInt(funds.fundTip.block_number);
   const journal = entries(pocket);
@@ -214,7 +216,7 @@ async function snapshot(pocket: string, verifiedPolicy?: Promise<Awaited<ReturnT
   const checkpoint = policyHeight <= fundHeight ? policy.indexedTip : funds.fundTip;
   const prior = historicalChecks.get(pocket);
   const validPrior = prior && BigInt(prior.height) <= BigInt(checkpoint.block_number) &&
-    await httpRpc('get_block_hash', [prior.height]) === prior.hash ? prior : undefined;
+    await rpc('get_block_hash', [prior.height]) === prior.hash ? prior : undefined;
   const spent = new Set(validPrior?.spent);
   const priorVerifiedEntries = validPrior?.entries ?? new Map<string, string>();
   const verifiedEntries = new Map<string, string>();
@@ -226,8 +228,8 @@ async function snapshot(pocket: string, verifiedPolicy?: Promise<Awaited<ReturnT
     if (!entry.committedHeight || !entry.committedBlock ||
         (!(validPrior && BigInt(entry.committedHeight) <= BigInt(validPrior.height) &&
           priorVerifiedEntries.get(entry.hash) === entry.committedBlock) &&
-          await httpRpc('get_block_hash', [entry.committedHeight]) !== entry.committedBlock)) {
-      const { anchor } = await canonical({ tx_hash: entry.hash, index: '0x0' });
+          await rpc('get_block_hash', [entry.committedHeight]) !== entry.committedBlock)) {
+      const { anchor } = await canonical({ tx_hash: entry.hash, index: '0x0' }, rpc);
       entry.committedHeight = anchor.height;
       entry.committedBlock = anchor.hash;
       backfilled = true;
@@ -243,9 +245,9 @@ async function snapshot(pocket: string, verifiedPolicy?: Promise<Awaited<ReturnT
       const outputKey = entry.hash + ':' + index;
       if ((!protectedFund && !pocketPolicy) || indexedPoints.has(outputKey) || spent.has(outputKey)) return;
       const point = { tx_hash: entry.hash, index: hex(index) };
-      const result = await httpRpc<{ status: string }>('get_live_cell', [point, false]);
+      const result = await rpc<{ status: string }>('get_live_cell', [point, false]);
       if (result?.status === 'dead' || result?.status === 'unknown') {
-        const spender = await canonicalSpender(point, entry.committedHeight!, rpcFormat.cellOutputFrom(output));
+        const spender = await canonicalSpender(point, entry.committedHeight!, rpcFormat.cellOutputFrom(output), undefined, rpc);
         if (spender && BigInt(spender.height) <= BigInt(checkpoint.block_number)) {
           spent.add(outputKey);
           return;
@@ -254,16 +256,18 @@ async function snapshot(pocket: string, verifiedPolicy?: Promise<Awaited<ReturnT
       throw new PocketIndexSyncError();
     }));
   }));
-  if (await httpRpc('get_block_hash', [checkpoint.block_number]) !== checkpoint.block_hash) {
+  if (await rpc('get_block_hash', [checkpoint.block_number]) !== checkpoint.block_hash) {
     throw new PocketIndexSyncError();
   }
+  signal?.throwIfAborted();
   historicalChecks.set(pocket, { height: checkpoint.block_number, hash: checkpoint.block_hash, spent, entries: verifiedEntries });
   if (backfilled) save(pocket, journal);
   return { policy, ...funds };
 }
 
-async function retryFunds(pocket: string, rpc = httpRpc) {
+async function retryFunds(pocket: string, rpc = httpRpc, signal?: AbortSignal) {
   for (let attempt = 0; ; attempt++) {
+    signal?.throwIfAborted();
     try { return await discoverFunds(pocket, rpc); }
     catch (error) {
       if (attempt >= 2 || !(error instanceof FundCheckpointError) || error.reason !== 'advanced') throw error;
@@ -277,7 +281,8 @@ export async function browserState(pocket?: string, actor?: string, onPolicy?: (
   if (!pocket) {
     if (!actor) return { ...base, empty: true };
     const pending = creationEntries(actor).find(entry => entry.state === 'uncertain' && entry.payment.publicKey === actor.toLowerCase());
-    const discovered = await discoverPublicPockets(actor);
+    const discovered = await discoverPublicPockets(actor, undefined, signal);
+    signal?.throwIfAborted();
     return { ...base, empty: true, unresolved: Boolean(pending), history: pending ? [{
       id: pending.payment.id, tx_hash: pending.hash, state: 'uncertain', actor: pending.payment.publicKey,
       amount: '0', recipient: '', created: pending.created, operation: 'genesis',
@@ -285,17 +290,18 @@ export async function browserState(pocket?: string, actor?: string, onPolicy?: (
   }
   const rpc: typeof httpRpc = (method, params, purpose) => httpRpc(method, params, purpose, signal);
   const verified = onPolicy ? discoverPublicPocket(pocket, undefined, undefined, signal).then(policy => {
+    signal?.throwIfAborted();
     onPolicy({
       ...base, ...policy.summary, pocket, closed: policy.closed,
       historicalTermsUnavailable: policy.closed, policyCapacity: BigInt(policy.capacity).toString(),
-      historyPolicy: { script: policy.policyScript, txHash: policy.outPoint.tx_hash },
+      historyPolicy: policy.backup ? undefined : { script: policy.policyScript, txHash: policy.outPoint.tx_hash },
       indexedTip: policy.indexedTip,
     });
     return policy;
   }) : undefined;
   // Attach rejection handling before the per-Pocket lock becomes available.
   if (verified) void verified.catch(() => {});
-  const { policy, funds, unsupportedFunds, fundTip } = await locked(pocket, () => (signal?.throwIfAborted(), snapshot(pocket, verified, Boolean(onPolicy), rpc)));
+  const { policy, funds, unsupportedFunds, fundTip } = await locked(pocket, () => (signal?.throwIfAborted(), snapshot(pocket, verified, Boolean(onPolicy), rpc, signal)));
   if (verified) {
     const [anchor, current] = await Promise.all([
       rpc('get_block_hash', [policy.indexedTip.block_number]),
@@ -304,9 +310,11 @@ export async function browserState(pocket?: string, actor?: string, onPolicy?: (
     if (anchor !== policy.indexedTip.block_hash) throw new FundCheckpointError('canonical');
     requireCondition(current?.status === 'live', 'Policy changed during fund verification');
   }
+  const closedOwner = policy.closed && actor && (await discoverPublicPocket(pocket, (method, params) => rpc(method, params), actor, signal)).role === 'owner';
+  signal?.throwIfAborted();
   const journal = entries(pocket);
   return {
-    ...base, ...policy.summary, ...(policy.closed && actor && (await discoverPublicPocket(pocket, undefined, actor)).role === 'owner' ? { owner: actor } : {}), historyPolicy: { script: policy.policyScript, txHash: policy.outPoint.tx_hash }, pocket, closed: policy.closed, indexedTip: policy.indexedTip,
+    ...base, ...policy.summary, ...(closedOwner ? { owner: actor } : {}), historyPolicy: { script: policy.policyScript, txHash: policy.outPoint.tx_hash }, pocket, closed: policy.closed, indexedTip: policy.indexedTip,
     unsupportedFunds, fundTip, historicalTermsUnavailable: policy.closed, policyCapacity: BigInt(policy.capacity).toString(), hasFund: Boolean(funds.length),
     fundShannons: funds.reduce((total, cell) => total + BigInt(cell.cell.output.capacity), 0n).toString(),
     fundOccupiedShannons: funds.length ? '7300000000' : '0',
@@ -549,7 +557,7 @@ async function hasCanonicalConflict(entry: Entry) {
 }
 
 async function canonicalSpender(
-  point: Point, height: string, output: ReturnType<typeof rpcFormat.cellOutputFrom>, exclude?: string,
+  point: Point, height: string, output: ReturnType<typeof rpcFormat.cellOutputFrom>, exclude?: string, rpc = httpRpc,
 ) {
     const query = {
       script: output.type || output.lock,
@@ -559,13 +567,13 @@ async function canonicalSpender(
     };
     let cursor: string | undefined;
     for (let page = 0; page < 8; page++) {
-      const result = await httpRpc<{ objects: { io_type: string; tx_hash: string }[]; last_cursor: string }>(
+      const result = await rpc<{ objects: { io_type: string; tx_hash: string }[]; last_cursor: string }>(
         'get_transactions', cursor ? [query, 'desc', '0x40', cursor] : [query, 'desc', '0x40'], 'safety',
       );
       requireCondition(Array.isArray(result?.objects), 'Invalid conflict indexer response');
       const candidates = new Set(result.objects.filter(hit => hit.io_type === 'input' && hit.tx_hash !== exclude).map(hit => hit.tx_hash));
       for (const hash of candidates) {
-        const { transaction, anchor } = await canonical({ tx_hash: hash, index: '0x0' });
+        const { transaction, anchor } = await canonical({ tx_hash: hash, index: '0x0' }, rpc);
         if (transaction.inputs.some((input: { previous_output: Point }) =>
           input.previous_output.tx_hash === point.tx_hash && BigInt(input.previous_output.index) === BigInt(point.index))) return anchor;
       }

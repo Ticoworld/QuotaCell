@@ -115,3 +115,41 @@ await assert.rejects(discoverPublicPocket(activePocketId, async (method, params)
   const result = await activeRpc(method, params);
   return method === 'get_header' ? { ...result, hash: advancedIndex.block_hash } : result;
 }), /not canonical/);
+
+for (const fault of ['transport', 'timeout', 'abort', 'malformed', 'noncanonical', 'backup-disagrees']) {
+  const controller = new AbortController();
+  const calls = [];
+  try {
+    globalThis.fetch = async (url, options) => {
+      const primary = String(url).includes('testnet.ckb.dev');
+      const { method, params, id } = JSON.parse(options.body);
+      calls.push({ primary, method, params });
+      if (primary && method === 'get_cells') {
+        if (fault === 'abort') {
+          controller.abort();
+          // Simulate a transport which still resolves after cancellation.
+        }
+        if (fault === 'transport' || fault === 'backup-disagrees') return new Response(null, { status: 503 });
+        if (fault === 'timeout') throw new DOMException('Timed out', 'TimeoutError');
+      }
+      let result = await activeRpc(method, params);
+      if (fault === 'malformed' && method === 'get_transaction') result.transaction = { ...transaction, version: '0x1' };
+      if (fault === 'noncanonical' && method === 'get_header') result = { ...result, hash: advancedIndex.block_hash };
+      if (!primary && fault === 'backup-disagrees' && method === 'get_block_hash' && params[0] !== '0x0') result = advancedIndex.block_hash;
+      return Response.json({ jsonrpc: '2.0', id, result });
+    };
+    const read = discoverPublicPocket(activePocketId, undefined, undefined, controller.signal);
+    if (fault === 'transport' || fault === 'timeout') {
+      assert.equal((await read).backup, true, fault);
+      const backupCalls = calls.filter(call => !call.primary);
+      assert.deepEqual(backupCalls[0].params, ['0x0']);
+      assert(backupCalls.some(call => call.method === 'get_transaction'));
+    } else {
+      await assert.rejects(read, fault === 'abort' ? { name: 'AbortError' } : /hash mismatch|not canonical/);
+      assert.equal(calls.some(call => !call.primary), fault === 'backup-disagrees', fault);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+console.log('Scoped discovery verifies backup evidence independently and rejects abandoned reads.');

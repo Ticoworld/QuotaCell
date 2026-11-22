@@ -81,6 +81,16 @@ const historyCache = new Map<string, { tip: Header; evidence: Map<string, Eviden
 export async function loadPocketHistory(policyScript: RawScript, fund: Script, tip: { block_number: string; block_hash: string }, policyHash: string, signal?: AbortSignal) {
   const httpRpc: HistoryRpc = (method, params) => requestRpc(method, params, 'history', signal);
   const policy = format.scriptTo(policyScript);
+  const checkIndex = async () => {
+    const indexed = await httpRpc<typeof tip>('get_indexer_tip', []);
+    if (!indexed || BigInt(indexed.block_number) < BigInt(tip.block_number)) {
+      throw new Error('Pudge history index has not reached the requested checkpoint');
+    }
+    if (BigInt(indexed.block_number) === BigInt(tip.block_number) && indexed.block_hash !== tip.block_hash) {
+      throw new Error('Pudge history index conflicts with the requested checkpoint');
+    }
+  };
+  await checkIndex();
   const end = number(BigInt(tip.block_number) + 1n);
   const key = policy.hash();
   const cached = historyCache.get(key);
@@ -136,6 +146,7 @@ export async function loadPocketHistory(policyScript: RawScript, fund: Script, t
     records.push({ id: hash, tx_hash: hash, state: 'committed', created: new Date(Number(BigInt(header.timestamp))).toISOString(),
       ...classify(tx, inputs[policyInput]?.data, policyIndex, policyInput, fundIn, fundOut) });
   }
+  await checkIndex();
   if (await httpRpc('get_block_hash', [tip.block_number]) !== tip.block_hash) throw new Error('Pudge reorganized during history lookup');
   signal?.throwIfAborted();
   if (prior && await httpRpc('get_block_hash', [prior.tip.number]) !== prior.tip.hash) throw new Error('Pudge history checkpoint changed');

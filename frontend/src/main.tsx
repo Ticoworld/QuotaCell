@@ -105,6 +105,7 @@ function App() {
   const refreshScope = useRef({ actor: identity?.publicKey ?? null, generation: 0 });
   useLayoutEffect(() => {
     refreshScope.current = { actor: identity?.publicKey ?? null, generation: refreshScope.current.generation + 1 };
+    return () => readController.current?.abort();
   }, [identity?.publicKey]);
 
   const [identityError, setIdentityError] = useState('');

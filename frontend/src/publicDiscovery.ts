@@ -18,7 +18,7 @@ type Rpc = <T>(method: string, params?: unknown[]) => Promise<T>;
 type Script = { code_hash: string; hash_type: string; args: string };
 type OutPoint = { tx_hash: string; index: string };
 type PublicPocketSummary = { owner: string; sharedLimit: string; sharedUsed: string; delegates: Array<{ role: 'alice' | 'ben'; publicKey: string; limit: string; used: string; perPayment: string; recipient: string; enabled: boolean }> };
-type Discovery = { pocket: string; role: 'owner' | 'alice' | 'ben' | 'public'; closed: boolean; capacity: string; summary: PublicPocketSummary | null; policyScript: Script; outPoint: OutPoint; indexedTip: { block_number: string; block_hash: string } };
+type Discovery = { backup?: true; pocket: string; role: 'owner' | 'alice' | 'ben' | 'public'; closed: boolean; capacity: string; summary: PublicPocketSummary | null; policyScript: Script; outPoint: OutPoint; indexedTip: { block_number: string; block_hash: string } };
 
 function equal(a: unknown, b: unknown) { return JSON.stringify(a) === JSON.stringify(b); }
 function normalizedScript(value: Script) { return { code_hash: value.code_hash.toLowerCase(), hash_type: value.hash_type, args: value.args.toLowerCase() }; }
@@ -160,22 +160,26 @@ function candidateRole(cell: any, actor?: string): { role: 'owner' | 'alice' | '
   throw new Error('Malformed QCN4/QCT4 state.');
 }
 
-const discoveryBackupRpc: Rpc = <T>(method: string, params: unknown[] = []) =>
-  requestRpc<T>(method, params, 'discovery-backup', DISCOVERY_BACKUP_RPC_URL);
-
 function isTransientDiscoveryError(error: unknown): boolean {
   const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  return /Public CKB read failed \((?:408|429|5\d\d)\)|Failed to fetch|fetch failed|Load failed|NetworkError|TimeoutError|AbortError|timed out|indexer is too far behind|Invalid node or indexer tip/i.test(detail);
+  return /Public CKB read failed \((?:408|429|5\d\d)\)|Failed to fetch|fetch failed|Load failed|NetworkError|TimeoutError|timed out|indexer is too far behind/i.test(detail);
 }
 
 async function discoverWithFallback(publicKey: string | undefined, targetPocket: string | undefined, rpc: Rpc, signal?: AbortSignal): Promise<Discovery[]> {
-  try { return await discover(publicKey, targetPocket, rpc); }
+  try { return await discover(publicKey, targetPocket, rpc, signal); }
   catch (primaryError) {
     // Do not hide a malformed Cell, noncanonical chain, or other safety failure.
     // Injected RPCs used by tests also remain single-provider and deterministic.
+    signal?.throwIfAborted();
     if (rpc !== httpRpc || !isTransientDiscoveryError(primaryError)) throw primaryError;
-    try { return await discover(publicKey, targetPocket, discoveryBackupRpc); }
+    const backup: Rpc = (method, params = []) =>
+      requestRpc(method, params, 'discovery-backup', DISCOVERY_BACKUP_RPC_URL, signal);
+    try {
+      const result = await discover(publicKey, targetPocket, backup, signal);
+      return result.map(item => ({ ...item, backup: true }));
+    }
     catch (backupError) {
+      signal?.throwIfAborted();
       const first = primaryError instanceof Error ? primaryError.message : String(primaryError);
       const second = backupError instanceof Error ? backupError.message : String(backupError);
       throw new Error(`Pudge discovery failed on both public testnet RPC endpoints. Primary: ${first}; backup: ${second}`, { cause: backupError });
@@ -183,15 +187,16 @@ async function discoverWithFallback(publicKey: string | undefined, targetPocket:
   }
 }
 
-export async function discoverPublicPockets(publicKey: string, rpc: Rpc = httpRpc): Promise<Discovery[]> {
+export async function discoverPublicPockets(publicKey: string, rpc: Rpc = httpRpc, signal?: AbortSignal): Promise<Discovery[]> {
   if (!/^0x0[23][0-9a-f]{64}$/i.test(publicKey)) throw new Error('Invalid compressed public key.');
   secp256k1.Point.fromBytes(c.bytesFrom(publicKey));
-  return discoverWithFallback(publicKey, undefined, rpc);
+  return discoverWithFallback(publicKey, undefined, rpc, signal);
 }
 
 export async function discoverPublicPocket(pocketId: string, rpc: Rpc = httpRpc, actor?: string, signal?: AbortSignal): Promise<Discovery> {
   if (!/^0x[0-9a-f]{64}$/i.test(pocketId)) throw new Error('Invalid Pocket ID.');
-  const found = await (signal ? discover(actor, pocketId.toLowerCase(), rpc, signal) : discoverWithFallback(actor, pocketId.toLowerCase(), rpc));
+  const found = await discoverWithFallback(actor, pocketId.toLowerCase(), rpc, signal);
+  signal?.throwIfAborted();
   const exact = found.find((item) => item.pocket.toLowerCase() === pocketId.toLowerCase());
   if (!exact) throw new Error('Pocket was not found on Pudge.');
   if (found.length !== 1) throw new Error('Ambiguous live Pocket.');
@@ -267,6 +272,7 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
     const live = await rpc<any>('get_live_cell', [candidate.outPoint, true]);
     if (live?.status !== 'live' || live.cell.data?.content !== candidate.cell.data.content || !equal(normalizeOutput(live.cell.output), normalizeOutput(candidate.cell.output))) throw new Error('Pocket changed during discovery.');
   }
+  signal?.throwIfAborted();
   if (defaultRpc) {
     for (const candidate of candidates) {
       if (policyScripts.size >= 128) policyScripts.delete(policyScripts.keys().next().value!);

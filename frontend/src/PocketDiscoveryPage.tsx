@@ -31,24 +31,24 @@ export function PocketDiscoveryPage() {
   }, []);
   useEffect(() => {
     if (!directId) return;
-    let canceled = false;
+    const controller = new AbortController();
     setBusy(true); setError('');
-    void discoverPublicPocket(directId).then((result) => { if (!canceled) { setPockets([result]); setSelected(result.pocket); } })
-      .catch((cause) => { if (!canceled) { setPockets([]); setError(publicError(cause, t)); } })
-      .finally(() => { if (!canceled) setBusy(false); });
-    return () => { canceled = true; };
+    void discoverPublicPocket(directId, undefined, undefined, controller.signal).then((result) => { if (!controller.signal.aborted) { setPockets([result]); setSelected(result.pocket); } })
+      .catch((cause) => { if (!controller.signal.aborted) { setPockets([]); setError(publicError(cause, t)); } })
+      .finally(() => { if (!controller.signal.aborted) setBusy(false); });
+    return () => controller.abort();
   }, [directId]);
   useEffect(() => {
-    if (!identity) return;
-    let canceled = false;
+    if (!identity || directId) return;
+    const controller = new AbortController();
     setBusy(true); setError('');
-    void discoverPublicPockets(identity.publicKey).then((result) => {
-      if (canceled) return;
+    void discoverPublicPockets(identity.publicKey, undefined, controller.signal).then((result) => {
+      if (controller.signal.aborted) return;
       setPockets(result);
       setSelected(result.length === 1 ? result[0].pocket : result[0]?.pocket || '');
-    }).catch((cause) => { if (!canceled) { setPockets([]); setError(cause instanceof Error ? cause.message : String(cause)); } }).finally(() => { if (!canceled) setBusy(false); });
-    return () => { canceled = true; };
-  }, [identity?.publicKey, scanSequence]);
+    }).catch((cause) => { if (!controller.signal.aborted) { setPockets([]); setError(cause instanceof Error ? cause.message : String(cause)); } }).finally(() => { if (!controller.signal.aborted) setBusy(false); });
+    return () => controller.abort();
+  }, [directId, identity?.publicKey, scanSequence]);
 
   useEffect(() => {
     if (!identity) return;
