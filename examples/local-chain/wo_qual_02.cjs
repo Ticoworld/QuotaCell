@@ -61,6 +61,7 @@ async function main() {
         status: 'committed', block_number: tip.number, block_hash: tip.hash, tx_index: hex(index),
       } });
     }
+    let paidCells;
     const cells = [policy, fund, ownerFee, cell(source, 1), cell(source, 2)];
     for (const obs of evidence.transactions) {
       const tx = rpc.transactionTo(obs.transaction);
@@ -72,15 +73,19 @@ async function main() {
       const cases = [
         [0, 'owner'], [1, 'alice'], [2, 'ben'],
         [1, 'policy-consumed'], [1, 'fund-consumed'], [1, 'fee-cell-missing'],
-        [1, 'revoked'], [1, 'unresolved'], [1, 'indexer-unavailable'], [1, 'canonical-unavailable'],
+        [1, 'route-changed'], [1, 'wallet-changed'], [1, 'counter-changed'], [1, 'revoked'], [1, 'unresolved'], [1, 'indexer-unavailable'], [1, 'canonical-unavailable'],
       ];
-      for (const [i, role] of cases) {
+      for (const [i, role] of cases.filter(([, name]) => !process.env.QUOTA_CASE || name === process.env.QUOTA_CASE)) {
         const negative = !['owner', 'alice', 'ben'].includes(role);
         let preparing = false;
+        const race = ['route-changed', 'wallet-changed'].includes(role);
+        let markPending, releasePreparation;
+        const pending = new Promise(resolve => { markPending = resolve; });
+        const resume = new Promise(resolve => { releasePreparation = resolve; });
         const context = await browser.newContext();
         let writes = 0;
         await context.addInitScript({ content:
-          `window.__testKey=${JSON.stringify(keys[i])};${bundle.outputFiles[0].text}
+          `window.__testKey=${JSON.stringify(keys[i])};window.__otherTestKey=${JSON.stringify(keys[2])};${bundle.outputFiles[0].text}
            window.__signCalls=0;window.utxoGlobal.ckbSigner.signTransaction=async()=>{window.__signCalls++;throw Error('Signing forbidden in fixture')};` });
         await context.route('**/*', async route => {
           const request = route.request();
@@ -89,9 +94,13 @@ async function main() {
           const { id, method, params } = request.postDataJSON();
           const [arg] = params;
           if (!method.startsWith('get_')) { writes++; return route.abort(); }
+          if (race && preparing && method === 'get_fee_rate_statistics') {
+            markPending();
+            await resume;
+          }
           const liveCells = preparing && role === 'revoked'
             ? [cell(revoked.transaction, 0), fund, cell(revoked.transaction, 1), ...cells.slice(3)]
-            : cells;
+            : preparing && role === 'counter-changed' ? paidCells : cells;
           let result;
           switch (method) {
             case 'get_tip_header': result = tip; break;
@@ -133,7 +142,7 @@ async function main() {
           const action = page.getByRole('button', { name: i ? 'Pay' : 'Add funds', exact: !i }).first();
           await action.click();
           const dialog = page.getByRole('dialog');
-          await dialog.getByLabel(i ? 'Payment amount (CKB)' : 'Amount to add (CKB)').fill(i ? '61' : '100');
+          await dialog.getByLabel(i ? 'Payment amount (CKB)' : 'Amount to add (CKB)').fill(i && role !== 'counter-changed' ? '61' : '100');
           if (role === 'unresolved') await page.evaluate(({ pocket, genesis }) => {
             localStorage.setItem('quotacell.browser.v1:' + genesis + ':' + pocket,
               JSON.stringify([{ state: 'signed', payment: { id: 'fixture' } }]));
@@ -141,10 +150,30 @@ async function main() {
           preparing = true;
           const prepareButton = dialog.getByRole('button', { name: i ? 'Review payment' : 'Prepare transaction' });
           await prepareButton.click();
+          if (race) {
+            await Promise.race([pending, page.waitForTimeout(10000).then(() => { throw Error('Preparation did not reach fee RPC'); })]);
+            await page.evaluate(test => {
+              if (test === 'route-changed') {
+                history.pushState(null, '', '/app');
+                dispatchEvent(new PopStateEvent('popstate'));
+              } else {
+                window.testWallet.switched = true;
+                dispatchEvent(new Event('focus'));
+              }
+            }, role);
+            releasePreparation();
+            await page.waitForFunction(pocket => Object.entries(localStorage)
+              .some(([key, value]) => key.endsWith(':' + pocket) && value.includes('"state":"prepared"')), created.pocket);
+            await page.waitForTimeout(200);
+            assert.equal(await page.locator('.transaction-review').count(), 0, role);
+            console.log('PASS rejection', role);
+            continue;
+          }
           if (negative) {
             await dialog.getByRole('alert').waitFor();
             assert.equal(await dialog.locator('.transaction-review').count(), 0);
             const message = await dialog.getByRole('alert').innerText();
+            if (role === 'counter-changed') assert.match(message, /allowance|limit/i);
             if (role === 'revoked') assert.match(message, /not the selected delegate/i);
             if (role === 'unresolved') assert.match(message, /checking Pudge automatically/i);
             console.log('PASS rejection', role, message);
@@ -171,12 +200,19 @@ async function main() {
             assert.equal(state.readBigUInt64LE(24), 61n * CKB);
             assert.equal(state.readBigUInt64LE(158 + 154 * (i - 1) + 122), 61n * CKB);
           } else assert.equal(tx.outputs[0].capacity, 100n * CKB);
+          if (role === 'alice') {
+            transactions.set(tx.hash(), { transaction: rpc.transactionFrom(tx), tx_status: {
+              status: 'committed', block_number: tip.number, block_hash: tip.hash, tx_index: '0x4',
+            } });
+            paidCells = [cell(tx, 0), cell(tx, 1), ownerFee, cell(tx, 3), cells[4], ...cells.slice(5)];
+          }
           await page.screenshot({ path: path.join(output, role + '.png') });
           console.log('PASS', role, tx.hash());
         } catch (error) {
           console.error(role, await page.locator('body').innerText());
           throw error;
         } finally {
+          releasePreparation();
           assert.equal(await page.evaluate(() => window.__signCalls), 0);
           assert.equal(writes, 0);
           await context.close();

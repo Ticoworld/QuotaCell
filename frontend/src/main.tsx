@@ -535,11 +535,22 @@ function App() {
   const prepareOperation = async (body: Record<string, unknown>) => {
     if (!intent || !identity) throw new Error(t('connect'));
     if (intent.operation === 'deposit' ? depositBlocked : actionsBlocked) throw new Error(t('unresolvedBody'));
+    const route = location.href;
+    const scope = refreshScope.current;
+    const walletKey = identity.publicKey;
+    const current = () => location.href === route && refreshScope.current === scope;
     setWorking(true); setOperationError('');
     try {
       const request = intent.operation === 'pay' ? await preparePayment(body) : await prepareOwnerAction(body);
+      if (!current()) { setIntent(null); return; }
+      const signer = await wallet.identity();
+      if (!current() || signer.publicKey.toLowerCase() !== walletKey.toLowerCase()) {
+        setIntent(null);
+        return;
+      }
       setPrepared(request);
     } catch (cause) {
+      if (!current()) { setIntent(null); return; }
       const message = cause instanceof Error ? cause.message : String(cause);
       const localized = localizedError(message, t);
       setOperationError(cause instanceof ApiError && localized.startsWith(`${t('actionFailed')} `) ? t('preparationFailed') : localized);
