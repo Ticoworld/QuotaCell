@@ -289,9 +289,14 @@ async function unchangedPublicSnapshot(pocket: string, previous: PocketState, rp
   ]);
   if (!indexed || !node || canonical !== prior.block_hash ||
       !/^0x[0-9a-f]+$/.test(indexed.block_number) || !/^0x[0-9a-f]{64}$/.test(indexed.block_hash) ||
-      BigInt(indexed.block_number) < BigInt(prior.block_number) ||
-      node.number !== indexed.block_number || node.hash !== indexed.block_hash) return;
+      !/^0x[0-9a-f]+$/.test(node.number) || !/^0x[0-9a-f]{64}$/.test(node.hash) ||
+      BigInt(indexed.block_number) < BigInt(prior.block_number)) return;
+  const indexerLag = BigInt(node.number) - BigInt(indexed.block_number);
+  if (indexerLag < 0n || indexerLag > 64n || (indexerLag === 0n && node.hash !== indexed.block_hash)) return;
+  // The canonical hash above revalidates the historical indexed observation.
+  // A newer node tip cannot advance that observation's verification height.
   if (indexed.block_number === prior.block_number) return indexed.block_hash === prior.block_hash ? previous : undefined;
+  if (indexerLag !== 0n) return;
   const range = [hex(BigInt(prior.block_number) + 1n), hex(BigInt(indexed.block_number) + 1n)];
   const activity = await Promise.all([
     { script: previous.historyPolicy!.script, script_type: 'type' },
