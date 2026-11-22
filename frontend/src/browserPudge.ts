@@ -304,7 +304,8 @@ async function unchangedPublicSnapshot(pocket: string, previous: PocketState, rp
   ].map(query => rpc<{ objects: unknown[]; last_cursor: string }>('get_transactions', [
     { ...query, script_search_mode: 'exact', filter: { block_range: range } }, 'asc', '0x1',
   ])));
-  // Only a complete empty range permits reuse. Any event requires fresh enumeration.
+  // The trusted Pudge indexer supplies range completeness. Its empty-page cursor
+  // is a response consistency check. Any event requires fresh enumeration.
   if (!activity.every(result => Array.isArray(result?.objects) && !result.objects.length && result.last_cursor === '0x')) return;
   const [closing, closingNode, openingHash, closingHash] = await Promise.all([
     rpc<DisplayCheckpoint>('get_indexer_tip'),
