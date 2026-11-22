@@ -1,3 +1,4 @@
+import { PublicPolicyRules } from './PublicPolicyRules';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { WalletIdentity } from './domain';
@@ -30,24 +31,24 @@ export function PocketDiscoveryPage() {
   }, []);
   useEffect(() => {
     if (!directId) return;
-    let canceled = false;
+    const controller = new AbortController();
     setBusy(true); setError('');
-    void discoverPublicPocket(directId).then((result) => { if (!canceled) { setPockets([result]); setSelected(result.pocket); } })
-      .catch((cause) => { if (!canceled) { setPockets([]); setError(publicError(cause, t)); } })
-      .finally(() => { if (!canceled) setBusy(false); });
-    return () => { canceled = true; };
+    void discoverPublicPocket(directId, undefined, undefined, controller.signal).then((result) => { if (!controller.signal.aborted) { setPockets([result]); setSelected(result.pocket); } })
+      .catch((cause) => { if (!controller.signal.aborted) { setPockets([]); setError(publicError(cause, t)); } })
+      .finally(() => { if (!controller.signal.aborted) setBusy(false); });
+    return () => controller.abort();
   }, [directId]);
   useEffect(() => {
-    if (!identity) return;
-    let canceled = false;
+    if (!identity || directId) return;
+    const controller = new AbortController();
     setBusy(true); setError('');
-    void discoverPublicPockets(identity.publicKey).then((result) => {
-      if (canceled) return;
+    void discoverPublicPockets(identity.publicKey, undefined, controller.signal).then((result) => {
+      if (controller.signal.aborted) return;
       setPockets(result);
       setSelected(result.length === 1 ? result[0].pocket : result[0]?.pocket || '');
-    }).catch((cause) => { if (!canceled) { setPockets([]); setError(cause instanceof Error ? cause.message : String(cause)); } }).finally(() => { if (!canceled) setBusy(false); });
-    return () => { canceled = true; };
-  }, [identity?.publicKey, scanSequence]);
+    }).catch((cause) => { if (!controller.signal.aborted) { setPockets([]); setError(cause instanceof Error ? cause.message : String(cause)); } }).finally(() => { if (!controller.signal.aborted) setBusy(false); });
+    return () => controller.abort();
+  }, [directId, identity?.publicKey, scanSequence]);
 
   useEffect(() => {
     if (!identity) return;
@@ -89,7 +90,7 @@ export function PocketDiscoveryPage() {
         {error && <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm leading-5 text-red-800" role="alert">{error}</p>}
         {chosen && !busy && <div className="grid gap-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><strong className="text-lg font-semibold text-navy">{chosen.closed ? t('closedPocket') : t('activePocket')}</strong><code className="mt-1 block break-all text-xs text-slate-600" dir="ltr">{chosen.pocket}</code></div><a className="secondary-button" href={`https://pudge.explorer.nervos.org/transaction/${chosen.outPoint.tx_hash}`} target="_blank" rel="noreferrer">{t('verifyOnChain')}</a></div>
           <div className="grid gap-3 sm:grid-cols-2"><article className="border border-line p-4"><span className="text-xs font-semibold text-slate-600">{chosen.closed ? t('terminalCapacity') : t('policyCapacity')}</span><strong className="mt-2 block text-2xl font-bold text-navy">{formatCkb(BigInt(chosen.capacity))} CKB</strong><p className="mt-1 text-xs leading-5 text-slate-600">{chosen.closed ? t('terminalCapacityHint') : t('policyCapacityDisclosure')}</p></article>{chosen.summary && <article className="border border-line p-4"><span className="text-xs font-semibold text-slate-600">{t('sharedAllowance')}</span><strong className="mt-2 block text-2xl font-bold text-navy">{formatCkb(BigInt(chosen.summary.sharedLimit) - BigInt(chosen.summary.sharedUsed))} CKB</strong><p className="mt-1 text-xs text-slate-600">{t('sharedUsedOf', { used: formatCkb(chosen.summary.sharedUsed), total: formatCkb(chosen.summary.sharedLimit) })}</p></article>}</div>
-          {chosen.closed ? <p className="m-0 text-sm leading-6 text-slate-700">{t('terminalHistoryUnavailable')}</p> : chosen.summary && <div className="divide-y divide-slate-200 border-y border-slate-200">{chosen.summary.delegates.map((delegate) => <div className="grid gap-1 py-3" key={delegate.role}><strong className="text-sm text-navy">{roleLabel(delegate.role)} · {delegate.enabled ? t('active') : t('revoked')}</strong><span className="text-xs text-slate-600">{t('remaining')}: {formatCkb(BigInt(delegate.limit) - BigInt(delegate.used))} / {formatCkb(delegate.limit)} CKB · {t('maxPayment')}: {formatCkb(delegate.perPayment)} CKB</span><code className="break-all text-xs text-slate-600" dir="ltr">{delegate.recipient}</code></div>)}</div>}
+          {chosen.closed ? <p className="m-0 text-sm leading-6 text-slate-700">{t('terminalHistoryUnavailable')}</p> : chosen.summary && <PublicPolicyRules owner={chosen.summary.owner} delegates={chosen.summary.delegates}/>}
           <small className="text-xs text-slate-500">{t('publicVerificationTip')}: {BigInt(chosen.indexedTip.block_number).toString()}</small>{!identity && <button className="secondary-button w-fit" type="button" disabled={busy} onClick={() => void connect()}>{t('connectForActions')}</button>}
         </div>}
       </section>}

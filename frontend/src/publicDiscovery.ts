@@ -1,3 +1,4 @@
+import { JsonRpcTransformers } from '@ckb-ccc/core/advanced';
 import * as c from '@ckb-ccc/core';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 
@@ -17,7 +18,7 @@ type Rpc = <T>(method: string, params?: unknown[]) => Promise<T>;
 type Script = { code_hash: string; hash_type: string; args: string };
 type OutPoint = { tx_hash: string; index: string };
 type PublicPocketSummary = { owner: string; sharedLimit: string; sharedUsed: string; delegates: Array<{ role: 'alice' | 'ben'; publicKey: string; limit: string; used: string; perPayment: string; recipient: string; enabled: boolean }> };
-type Discovery = { pocket: string; role: 'owner' | 'alice' | 'ben' | 'public'; closed: boolean; capacity: string; summary: PublicPocketSummary | null; policyScript: Script; outPoint: OutPoint; indexedTip: { block_number: string; block_hash: string } };
+type Discovery = { backup?: true; pocket: string; role: 'owner' | 'alice' | 'ben' | 'public'; closed: boolean; capacity: string; summary: PublicPocketSummary | null; policyScript: Script; outPoint: OutPoint; indexedTip: { block_number: string; block_hash: string } };
 
 function equal(a: unknown, b: unknown) { return JSON.stringify(a) === JSON.stringify(b); }
 function normalizedScript(value: Script) { return { code_hash: value.code_hash.toLowerCase(), hash_type: value.hash_type, args: value.args.toLowerCase() }; }
@@ -42,33 +43,72 @@ function argsFor(publicKey: string) { return c.hashCkb(c.bytesFrom(publicKey)).s
 const policyScripts = new Map<string, Script>();
 const rpcReads = new Map<string, Promise<unknown>>();
 let rpcActive = 0;
+type TransactionEvidence = {
+  transaction: Parameters<typeof JsonRpcTransformers.transactionTo>[0];
+  tx_status: { status: 'committed'; block_hash: string; tx_index?: string };
+};
+type EvidenceHeader = { hash: string; number: string; timestamp: string };
+// This cache belongs to the primary Pudge endpoint only.
+const displayEvidence = new Map<string, { transaction: TransactionEvidence; header: EvidenceHeader }>();
+
+export function rememberDisplayEvidence(hash: string, transaction: TransactionEvidence, header: EvidenceHeader, signal?: AbortSignal) {
+  if (!signal || signal.aborted) return;
+  if (displayEvidence.size >= 128) displayEvidence.delete(displayEvidence.keys().next().value!);
+  displayEvidence.set(hash, { transaction, header });
+}
+
+const scopedReads = new WeakMap<AbortSignal, Map<string, Promise<unknown>>>();
 const rpcQueue: (() => void)[] = [];
 const historyQueue: (() => void)[] = [];
 const safetyQueue: (() => void)[] = [];
 
-export function httpRpc<T>(method: string, params: unknown[] = [], purpose: 'safety' | 'financial' | 'history' = 'financial'): Promise<T> {
+export function httpRpc<T>(method: string, params: unknown[] = [], purpose: 'safety' | 'financial' | 'history' = 'financial', signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  if (signal && method === 'get_transaction' && params.length === 1) {
+    const proof = displayEvidence.get(String(params[0]));
+    // Consumers still check the canonical height, expected block and current liveness.
+    if (proof) return Promise.resolve(proof.transaction as T);
+  }
+  if (signal && method === 'get_header' && params.length === 1) {
+    for (const proof of displayEvidence.values()) {
+      if (proof.header.hash === params[0]) return Promise.resolve(proof.header as T);
+    }
+  }
+  const reads = signal ? scopedReads.get(signal) ?? new Map<string, Promise<unknown>>() : rpcReads;
+  if (signal) scopedReads.set(signal, reads);
   const read = method.startsWith('get_');
   const key = JSON.stringify([method, params]);
-  const current = read && rpcReads.get(key);
+  const current = read && reads.get(key);
   if (current) return current as Promise<T>;
   const queue = purpose === 'history' ? historyQueue : purpose === 'safety' ? safetyQueue : rpcQueue;
   const task = (async () => {
-    if (rpcActive >= 6) await new Promise<void>(resolve => queue.push(resolve));
+    const queued = performance.now();
+    if (rpcActive >= 6) await new Promise<void>((resolve, reject) => {
+      const admit = () => { signal?.removeEventListener('abort', cancel); resolve(); };
+      const cancel = () => {
+        const index = queue.indexOf(admit);
+        if (index >= 0) queue.splice(index, 1);
+        reject(signal?.reason);
+      };
+      queue.push(admit);
+      signal?.addEventListener('abort', cancel, { once: true });
+    });
     else rpcActive++;
     const start = performance.now();
-    try { return await requestRpc<T>(method, params, purpose); }
+    performance.measure('quotacell.queue.' + method, { start: queued, end: start });
+    try { signal?.throwIfAborted(); return await requestRpc<T>(method, params, purpose, RPC_URL, signal); }
     finally {
       performance.measure('quotacell.rpc.' + method, { start, end: performance.now() });
       const next = safetyQueue.shift() ?? rpcQueue.shift() ?? historyQueue.shift();
       if (next) next();
       else rpcActive--;
     }
-  })().finally(() => { if (read) rpcReads.delete(key); });
-  if (read) rpcReads.set(key, task);
+  })().finally(() => { if (read) reads.delete(key); });
+  if (read) reads.set(key, task);
   return task;
 }
 
-async function requestRpc<T>(method: string, params: unknown[], purpose: string, url = RPC_URL): Promise<T> {
+async function requestRpc<T>(method: string, params: unknown[], purpose: string, url = RPC_URL, signal?: AbortSignal): Promise<T> {
   const start = performance.now();
   const request = JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method, params });
   let responseBytes = 0;
@@ -76,7 +116,7 @@ async function requestRpc<T>(method: string, params: unknown[], purpose: string,
   try {
     const response = await fetch(url, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: request, signal: AbortSignal.timeout(15000), cache: 'no-store',
+      body: request, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000), cache: 'no-store',
     });
     outcome = String(response.status);
     if (!response.ok) throw new Error(`Public CKB read failed (${response.status}).`);
@@ -89,6 +129,11 @@ async function requestRpc<T>(method: string, params: unknown[], purpose: string,
       throw new Error(body.error.message || 'Public CKB read failed.');
     }
     if (!body || !Object.hasOwn(body, 'result')) throw new Error('Invalid public CKB response.');
+    if (method === 'get_block_hash' && url === RPC_URL) {
+      for (const [hash, proof] of displayEvidence) {
+        if (proof.header.number === params[0] && proof.header.hash !== body.result) displayEvidence.delete(hash);
+      }
+    }
     outcome = 'ok';
     return body.result as T;
   } catch (error) {
@@ -144,22 +189,26 @@ function candidateRole(cell: any, actor?: string): { role: 'owner' | 'alice' | '
   throw new Error('Malformed QCN4/QCT4 state.');
 }
 
-const discoveryBackupRpc: Rpc = <T>(method: string, params: unknown[] = []) =>
-  requestRpc<T>(method, params, 'discovery-backup', DISCOVERY_BACKUP_RPC_URL);
-
 function isTransientDiscoveryError(error: unknown): boolean {
   const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  return /Public CKB read failed \((?:408|429|5\d\d)\)|Failed to fetch|fetch failed|Load failed|NetworkError|TimeoutError|AbortError|timed out|indexer is too far behind|Invalid node or indexer tip/i.test(detail);
+  return /Public CKB read failed \((?:408|429|5\d\d)\)|Failed to fetch|fetch failed|Load failed|NetworkError|TimeoutError|timed out|indexer is too far behind/i.test(detail);
 }
 
-async function discoverWithFallback(publicKey: string | undefined, targetPocket: string | undefined, rpc: Rpc): Promise<Discovery[]> {
-  try { return await discover(publicKey, targetPocket, rpc); }
+async function discoverWithFallback(publicKey: string | undefined, targetPocket: string | undefined, rpc: Rpc, signal?: AbortSignal): Promise<Discovery[]> {
+  try { return await discover(publicKey, targetPocket, rpc, signal); }
   catch (primaryError) {
     // Do not hide a malformed Cell, noncanonical chain, or other safety failure.
     // Injected RPCs used by tests also remain single-provider and deterministic.
+    signal?.throwIfAborted();
     if (rpc !== httpRpc || !isTransientDiscoveryError(primaryError)) throw primaryError;
-    try { return await discover(publicKey, targetPocket, discoveryBackupRpc); }
+    const backup: Rpc = (method, params = []) =>
+      requestRpc(method, params, 'discovery-backup', DISCOVERY_BACKUP_RPC_URL, signal);
+    try {
+      const result = await discover(publicKey, targetPocket, backup, signal);
+      return result.map(item => ({ ...item, backup: true }));
+    }
     catch (backupError) {
+      signal?.throwIfAborted();
       const first = primaryError instanceof Error ? primaryError.message : String(primaryError);
       const second = backupError instanceof Error ? backupError.message : String(backupError);
       throw new Error(`Pudge discovery failed on both public testnet RPC endpoints. Primary: ${first}; backup: ${second}`, { cause: backupError });
@@ -167,30 +216,33 @@ async function discoverWithFallback(publicKey: string | undefined, targetPocket:
   }
 }
 
-export async function discoverPublicPockets(publicKey: string, rpc: Rpc = httpRpc): Promise<Discovery[]> {
+export async function discoverPublicPockets(publicKey: string, rpc: Rpc = httpRpc, signal?: AbortSignal): Promise<Discovery[]> {
   if (!/^0x0[23][0-9a-f]{64}$/i.test(publicKey)) throw new Error('Invalid compressed public key.');
   secp256k1.Point.fromBytes(c.bytesFrom(publicKey));
-  return discoverWithFallback(publicKey, undefined, rpc);
+  return discoverWithFallback(publicKey, undefined, rpc, signal);
 }
 
-export async function discoverPublicPocket(pocketId: string, rpc: Rpc = httpRpc, actor?: string): Promise<Discovery> {
+export async function discoverPublicPocket(pocketId: string, rpc: Rpc = httpRpc, actor?: string, signal?: AbortSignal): Promise<Discovery> {
   if (!/^0x[0-9a-f]{64}$/i.test(pocketId)) throw new Error('Invalid Pocket ID.');
-  const found = await discoverWithFallback(actor, pocketId.toLowerCase(), rpc);
+  const found = await discoverWithFallback(actor, pocketId.toLowerCase(), rpc, signal);
+  signal?.throwIfAborted();
   const exact = found.find((item) => item.pocket.toLowerCase() === pocketId.toLowerCase());
   if (!exact) throw new Error('Pocket was not found on Pudge.');
   if (found.length !== 1) throw new Error('Ambiguous live Pocket.');
   return exact;
 }
 
-async function discover(publicKey: string | undefined, targetPocket: string | undefined, rpc: Rpc): Promise<Discovery[]> {
+async function discover(publicKey: string | undefined, targetPocket: string | undefined, rpc: Rpc, signal?: AbortSignal): Promise<Discovery[]> {
+  const defaultRpc = rpc === httpRpc;
+  if (defaultRpc && signal) rpc = <T>(method: string, params?: unknown[]) => httpRpc<T>(method, params, 'financial', signal);
   if ((await rpc<string | null>('get_block_hash', ['0x0']))?.toLowerCase() !== GENESIS) throw new Error('Public RPC is not the verified Pudge testnet.');
   const [tip, indexed] = await Promise.all([rpc<any>('get_tip_header'), rpc<any>('get_indexer_tip')]);
   if (!tip || !indexed || !/^0x[0-9a-f]{64}$/i.test(tip.hash) || !/^0x[0-9a-f]{64}$/i.test(indexed.block_hash)) throw new Error('Invalid node or indexer tip.');
   const nodeHeight = BigInt(tip.number), indexerHeight = BigInt(indexed.block_number);
   if (indexerHeight > nodeHeight || nodeHeight - indexerHeight > MAX_INDEXER_LAG) throw new Error('Pudge indexer is too far behind the node.');
-  const canonicalTips = await Promise.all([rpc<string>('get_block_hash', [indexed.block_number]), rpc<string>('get_block_hash', [tip.number])]);
-  if (canonicalTips[0].toLowerCase() !== indexed.block_hash.toLowerCase() || canonicalTips[1].toLowerCase() !== tip.hash.toLowerCase()) throw new Error('Node or indexer tip is not canonical.');
-  const knownScript = rpc === httpRpc && targetPocket ? policyScripts.get(targetPocket) : undefined;
+  const canonicalTips = await Promise.all([rpc<string | null>('get_block_hash', [indexed.block_number]), rpc<string | null>('get_block_hash', [tip.number])]);
+  if (canonicalTips[0]?.toLowerCase() !== indexed.block_hash.toLowerCase() || canonicalTips[1]?.toLowerCase() !== tip.hash.toLowerCase()) throw new Error('Node or indexer tip is not canonical.');
+  const knownScript = defaultRpc && targetPocket ? policyScripts.get(targetPocket) : undefined;
   const key = { filter: { block_range: ['0x0', '0x' + (indexerHeight + 1n).toString(16)] }, script: knownScript || { code_hash: POLICY_CODE, hash_type: 'data2', args: '0x' }, script_type: 'type', script_search_mode: knownScript ? 'exact' : 'prefix', with_data: true };
   const candidates: Array<Discovery & { cell: any }> = [];
   const seen = new Set<string>();
@@ -220,10 +272,12 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
       const role = indexedRole;
       const transaction = await rpc<any>('get_transaction', [point.tx_hash]);
       if (transaction?.tx_status?.status !== 'committed' || !transaction.tx_status.block_hash) throw new Error('Indexed policy transaction is not committed.');
+      if (!transaction.transaction || JsonRpcTransformers.transactionTo(transaction.transaction).hash() !== point.tx_hash) throw new Error('Policy transaction hash mismatch.');
       const header = await rpc<any>('get_header', [transaction.tx_status.block_hash]);
-      if (!header || header.number !== item.block_number || (await rpc<string>('get_block_hash', [header.number])).toLowerCase() !== header.hash.toLowerCase()) throw new Error('Indexed policy transaction is not canonical.');
+      if (!header || header.hash !== transaction.tx_status.block_hash || header.number !== item.block_number || (await rpc<string | null>('get_block_hash', [header.number]))?.toLowerCase() !== header.hash.toLowerCase()) throw new Error('Indexed policy transaction is not canonical.');
       const outputIndex = Number(BigInt(point.index));
       if (!equal(normalizeOutput(transaction.transaction.outputs[outputIndex]), normalizeOutput(live.cell.output)) || transaction.transaction.outputs_data[outputIndex] !== live.cell.data.content) throw new Error('Canonical policy transaction output mismatch.');
+      if (defaultRpc) rememberDisplayEvidence(point.tx_hash, transaction, header, signal);
       candidates.push({ pocket: pocketId, role: role.role || 'public', closed: role.closed, capacity: live.cell.output.capacity, summary: role.summary, policyScript: policy, outPoint: point, indexedTip: indexed, cell: live.cell });
     }
     if (result.objects.length < PAGE_SIZE) { finished = true; break; }
@@ -242,13 +296,14 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
     const finalCanonical = await rpc<string | null>('get_block_hash', [finalIndex.block_number]);
     if (finalCanonical?.toLowerCase() !== finalIndex.block_hash.toLowerCase()) throw new Error('Pudge indexer tip is not canonical after discovery.');
   }
-  const finalTips = await Promise.all([rpc<string>('get_block_hash', [indexed.block_number]), rpc<string>('get_block_hash', [tip.number])]);
-  if (finalTips[0].toLowerCase() !== indexed.block_hash.toLowerCase() || finalTips[1].toLowerCase() !== tip.hash.toLowerCase()) throw new Error('Pudge chain changed during discovery.');
+  const finalTips = await Promise.all([rpc<string | null>('get_block_hash', [indexed.block_number]), rpc<string | null>('get_block_hash', [tip.number])]);
+  if (finalTips[0]?.toLowerCase() !== indexed.block_hash.toLowerCase() || finalTips[1]?.toLowerCase() !== tip.hash.toLowerCase()) throw new Error('Pudge chain changed during discovery.');
   for (const candidate of candidates) {
     const live = await rpc<any>('get_live_cell', [candidate.outPoint, true]);
     if (live?.status !== 'live' || live.cell.data?.content !== candidate.cell.data.content || !equal(normalizeOutput(live.cell.output), normalizeOutput(candidate.cell.output))) throw new Error('Pocket changed during discovery.');
   }
-  if (rpc === httpRpc) {
+  signal?.throwIfAborted();
+  if (defaultRpc) {
     for (const candidate of candidates) {
       if (policyScripts.size >= 128) policyScripts.delete(policyScripts.keys().next().value!);
       policyScripts.set(candidate.pocket, candidate.policyScript);

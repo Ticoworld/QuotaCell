@@ -2,6 +2,17 @@
 import * as c from '@ckb-ccc/core';
 
 const CKB = 100000000n;
+export const MIN_PAYMENT = 61n * CKB;
+export const PROTECTED_CHANGE = 73n * CKB;
+export const MAX_FUND_INPUTS = 64;
+
+export function paymentUpperBound(capacity: bigint, count: number, enabled: boolean,
+  shared: bigint, personal: bigint, ceiling: bigint) {
+  if (!enabled || count < 1 || count > MAX_FUND_INPUTS) return 0n;
+  const bound = [capacity - PROTECTED_CHANGE, shared, personal, ceiling]
+    .reduce((minimum, value) => value < minimum ? value : minimum);
+  return bound >= MIN_PAYMENT ? bound : 0n;
+}
 const K = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 const F = '0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a';
 const A = '0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1';
@@ -52,7 +63,7 @@ export function buildPayment({policy, actor, funds, deps, delegate, amount, fee}
   check(isEmpty(actor) && script(actor.cell.output.lock).eq(actorLock), 'actor input mismatch');
   const recipient = c.Script.fromBytes(state.subarray(offset+33, offset+106));
   check(recipient.codeHash === K && recipient.hashType === 'type' && rawBytes(recipient.args).length === 20, 'invalid recipient');
-  check(funds.length > 0 && funds.length <= 64, 'invalid fund count');
+  check(funds.length > 0 && funds.length <= MAX_FUND_INPUTS, 'invalid fund count');
   const fundLock = c.Script.from({codeHash:F,hashType:'data1',args:policyType.hash()});
   let available = 0n;
   const points = new Set<string>();
@@ -63,8 +74,8 @@ export function buildPayment({policy, actor, funds, deps, delegate, amount, fee}
   for (const cell of funds) {check(isEmpty(cell) && script(cell.cell.output.lock).eq(fundLock), 'fund identity mismatch');available += BigInt(cell.cell.output.capacity);}
   const shared=read128(state,8),used=read128(state,24),limit=read128(state,offset+106),spent=read128(state,offset+122),per=read128(state,offset+138);
   check(read128(state,280)+read128(state,434)===used && used<=shared && spent<=limit && limit<=shared && per>0n && per<=limit, 'invalid counters');
-  check(amount>=61n*CKB && amount<=per && spent+amount<=limit && used+amount<=shared, 'payment exceeds limits or output minimum');
-  check(available-amount>=73n*CKB, 'insufficient protected change');
+  check(amount>=MIN_PAYMENT && amount<=per && spent+amount<=limit && used+amount<=shared, 'payment exceeds limits or output minimum');
+  check(available-amount>=PROTECTED_CHANGE, 'insufficient protected change');
   const actorCapacity=BigInt(actor.cell.output.capacity);
   check(fee>=0n && fee<=1000000n && actorCapacity-fee>=61n*CKB, 'fee input too small or fee too large');
   write128(state,24,used+amount);write128(state,offset+122,spent+amount);

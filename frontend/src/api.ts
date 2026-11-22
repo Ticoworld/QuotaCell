@@ -57,8 +57,8 @@ async function request<T>(url: string, body?: unknown, timeoutMs = 20_000, timeo
   return data as T;
 }
 
-export const getPocketState = (publicKey?: string) => {
-  if (browserMode) return browserState(selectedBrowserPocket(), publicKey);
+export const getPocketState = (publicKey?: string, onPolicy?: (state: PocketState) => void, signal?: AbortSignal) => {
+  if (browserMode) return browserState(selectedBrowserPocket(), publicKey, onPolicy, signal);
   const params = new URLSearchParams(window.location.search);
   if (publicKey && !params.has('pocket')) return getActorPockets(publicKey);
   if (publicKey) params.set('actor', publicKey);

@@ -1,3 +1,4 @@
+import { PublicPolicyRules } from './PublicPolicyRules';
 import brandLogo from '../../assets/brand/quotacell-logo-blue.svg';
 import { PocketIndexSyncError, browserMode, creationScope, isCreationScope, demoPocket, browserHistory, readPendingCreation, requireBrowserPocket, readBrowserIntent, validateBeforeSigning, persistBrowserSignature, cancelBrowserIntent } from './browserPudge';
 import { publicDiscoveryNetwork } from './publicDiscovery';
@@ -87,20 +88,24 @@ function localizedConnectionError(error: unknown, t: (key: string) => string): s
 
 function App() {
   const { t, i18n } = useTranslation();
-  const [state, setState] = useState<PocketState | null>(null);
+  const [loadedState, setState] = useState<PocketState | null>(null);
   const verifiedLists = useRef(new Map<string, PocketState>());
   const lastGoodState = useRef<PocketState | null>(null);
   const refreshInFlight = useRef<Promise<PocketState | null> | null>(null);
   const refreshInFlightActor = useRef<string | null>(null);
+  const lastProgressivePocket = useRef<string>();
+  const [fundRead, setFundRead] = useState<{ pocket: string; status: 'verifying' | 'verified' | 'unavailable' | 'canonical'; reason?: string }>();
   const [stateStale, setStateStale] = useState(false);
   const [waitingForIndex, setWaitingForIndex] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [stateActor, setStateActor] = useState<string | null>(null);
   const stateActorRef = useRef<string | null>(null);
   const [identity, setIdentity] = useState<WalletIdentity | null>(null);
-  const refreshScope = useRef({ actor: identity?.publicKey ?? null, generation: 0 });
+  const readController = useRef<AbortController>();
+  const refreshScope = useRef({ actor: identity?.publicKey.toLowerCase() ?? null, generation: 0 });
   useLayoutEffect(() => {
-    refreshScope.current = { actor: identity?.publicKey ?? null, generation: refreshScope.current.generation + 1 };
+    refreshScope.current = { actor: identity?.publicKey.toLowerCase() ?? null, generation: refreshScope.current.generation + 1 };
+    return () => readController.current?.abort();
   }, [identity?.publicKey]);
 
   const [identityError, setIdentityError] = useState('');
@@ -119,6 +124,9 @@ function App() {
   const [showCreation, setShowCreation] = useState(false);
   const [showPocketList, setShowPocketList] = useState(false);
   const [selectedPocketId, setSelectedPocketId] = useState(() => new URLSearchParams(window.location.search).get('pocket') || '');
+  const state = stateActor === (identity?.publicKey.toLowerCase() ?? null) &&
+    (!browserMode || (loadedState?.pocket?.toLowerCase() ?? '') === selectedPocketId.toLowerCase())
+    ? loadedState : null;
   const [selectedPocketLoading, setSelectedPocketLoading] = useState(false);
   const [selectedPocketError, setSelectedPocketError] = useState(false);
   const [activeDraftId, setActiveDraftId] = useState('');
@@ -136,7 +144,7 @@ function App() {
   const [retryDialogOpen, setRetryDialogOpen] = useState(false);
 
   const refresh = useCallback(async (quiet = false) => {
-    const actor = identity?.publicKey ?? null;
+    const actor = identity?.publicKey.toLowerCase() ?? null;
     const route = location.search;
     const scope = refreshScope.current;
     const current = () => refreshScope.current === scope && scope.actor === actor && location.search === route;
@@ -144,15 +152,42 @@ function App() {
     const refreshKey = JSON.stringify([scope.generation, actor, route]);
     if (refreshInFlightActor.current === refreshKey && refreshInFlight.current) return refreshInFlight.current;
     if (!quiet) setRefreshing(true);
+    readController.current?.abort();
+    const controller = new AbortController();
+    readController.current = controller;
+    const routePocket = new URLSearchParams(route).get('pocket')?.toLowerCase();
+    const matchingLastGood = () => routePocket && stateActorRef.current === actor &&
+      lastGoodState.current?.pocket?.toLowerCase() === routePocket ? lastGoodState.current : null;
+    if (browserMode && routePocket) setFundRead({ pocket: routePocket, status: 'verifying' });
     const task = (async (): Promise<PocketState | null> => {
       try {
         let next: PocketState;
-        const routePocket = new URLSearchParams(window.location.search).get('pocket')?.toLowerCase();
+        lastProgressivePocket.current = undefined;
+        let publishedPolicy = false;
+        const publishPolicy = browserMode && routePocket ? (policy: PocketState) => {
+          if (!current()) return;
+          publishedPolicy = true;
+          lastProgressivePocket.current = routePocket;
+          const previous = matchingLastGood();
+          setStateActor(actor);
+          setState({ ...policy, fundShannons: previous?.fundShannons, fundTip: previous?.fundTip, fundCellCount: previous?.fundCellCount });
+          setFundRead({ pocket: routePocket, status: 'verifying' });
+          setSelectedPocketLoading(false);
+          setSelectedPocketError(false);
+          setLoadError('');
+        } : undefined;
         for (let attempt = 0; ; attempt++) {
           if (!current()) return null;
           try {
-            next = await getPocketState(actor ?? undefined);
+            next = await getPocketState(actor ?? undefined, publishPolicy, controller.signal);
           } catch (cause) {
+            if (publishedPolicy && routePocket && current()) {
+              const reason = cause instanceof Error ? cause.message : String(cause);
+              const conflict = /canonical|synchronization|policy changed/i.test(reason);
+              if (conflict) setStateStale(true);
+              setFundRead({ pocket: routePocket, status: conflict ? 'canonical' : 'unavailable', reason });
+              return null;
+            }
             if (attempt >= 2 || (!browserMode && (!(cause instanceof ApiError) || !cause.retryable || cause.timedOut))) throw cause;
             await new Promise((resolve) => window.setTimeout(resolve, 700 * (attempt + 1)));
             continue;
@@ -170,14 +205,15 @@ function App() {
           return null;
         }
         const selectionMatches = !actor || !routePocket || (!next.empty && !next.connectRequired && next.pocket?.toLowerCase() === routePocket);
-        if (!selectionMatches && lastGoodState.current?.pocket?.toLowerCase() === routePocket && stateActorRef.current === actor?.toLowerCase()) {
+        if (!selectionMatches && matchingLastGood()) {
           setStateStale(true);
           return null;
         }
         if (actor && next.discovery) verifiedLists.current.set(actor.toLowerCase(), next);
+        if (routePocket && next.fundTip) setFundRead({ pocket: routePocket, status: 'verified' });
         lastGoodState.current = next;
         setState(next);
-        stateActorRef.current = actor?.toLowerCase() ?? null;
+        stateActorRef.current = actor;
         setStateActor(stateActorRef.current);
         setStateStale(false);
         setWaitingForIndex(false);
@@ -188,14 +224,13 @@ function App() {
         setWaitingForIndex(cause instanceof PocketIndexSyncError);
         const message = cause instanceof Error ? cause.message : String(cause);
         setLoadError(message);
-        if (actor && stateActorRef.current !== actor.toLowerCase()) {
+        if (matchingLastGood()) {
+          setStateStale(true);
+          if (browserMode && routePocket) setFundRead({ pocket: routePocket, status: 'unavailable', reason: message });
+        } else {
           setState(null);
-          stateActorRef.current = null;
-          setStateActor(null);
-          setLoadError(message);
-        } else if (lastGoodState.current && stateActorRef.current === actor?.toLowerCase() &&
-          lastGoodState.current.pocket === new URLSearchParams(route).get('pocket')) setStateStale(true);
-        else { setState(null); setLoadError(message); }
+          setStateStale(false);
+        }
         return null;
       } finally {
         if (refreshInFlightActor.current === refreshKey) {
@@ -215,13 +250,13 @@ function App() {
     let timer: number;
     let failures = 0;
     const update = async (quiet: boolean) => {
-      const result = await refresh(quiet);
+      const result = quiet && document.visibilityState === 'hidden' ? null : await refresh(quiet);
       if (!active) return;
-      failures = result ? 0 : failures + 1;
+      failures = result || document.visibilityState === 'hidden' ? 0 : failures + 1;
       const delay = failures && browserMode
         ? Math.min(2000 * 2 ** Math.min(failures - 1, 4), 30000) + Math.random() * 500
         : 60000;
-      timer = window.setTimeout(() => void update(true), delay);
+      timer = window.setTimeout(() => void update(true), lastProgressivePocket.current ? 60000 : delay);
     };
     void update(false);
     return () => { active = false; window.clearTimeout(timer); };
@@ -248,6 +283,7 @@ function App() {
       const result = await refresh();
       const routePocket = new URLSearchParams(window.location.search).get('pocket');
       if (!current() || routePocket?.toLowerCase() !== pocket.toLowerCase()) return;
+      if (!result && browserMode && lastProgressivePocket.current === pocket) return;
       if (!result || result.connectRequired || result.pocket?.toLowerCase() !== pocket.toLowerCase()) {
         const hasLastGood = stateActorRef.current === (identity?.publicKey.toLowerCase() ?? null) && lastGoodState.current?.pocket?.toLowerCase() === pocket.toLowerCase();
         setStateStale(hasLastGood);
@@ -399,20 +435,22 @@ function App() {
   useEffect(() => {
     if (!browserMode || !state || !historyPocket || !historyPolicy) return;
     let active = true;
+    const controller = new AbortController();
+    let attempts = 0;
     let retry: ReturnType<typeof setTimeout>;
     const query = async () => {
       try {
-        const rows = await browserHistory(state);
+        const rows = await browserHistory(state, controller.signal);
         if (active) setChainHistory({ pocket: historyPocket, rows });
       } catch {
         if (active) {
           setChainHistory(current => ({ pocket: historyPocket, rows: current?.pocket === historyPocket ? current.rows : undefined, failed: true }));
-          retry = setTimeout(query, 10000);
+          if (++attempts < 3) retry = setTimeout(query, 10000 * attempts);
         }
       }
     };
     void query();
-    return () => { active = false; clearTimeout(retry); };
+    return () => { active = false; controller.abort(); clearTimeout(retry); };
   }, [historyPocket, historyPolicy, historyTip]);
   const currentHistory = chainHistory?.pocket === historyPocket ? chainHistory : undefined;
   const confirmed = currentHistory?.rows || [];
@@ -438,8 +476,9 @@ function App() {
     ['uncertain', 'pending', 'proposed', 'submitted'].includes(transactionNotice.state) ||
     (transactionNotice.state === 'committed' && !noticeRecorded)
   ));
-  const actionsBlocked = Boolean(stateStale || state?.unresolved || clientTransactionUnresolved);
-  const depositBlocked = Boolean(stateStale || clientTransactionUnresolved || state?.unresolved && !state.depositMayPrepare);
+  const fundsPending = browserMode && Boolean(state?.pocket) && (fundRead?.pocket !== state?.pocket || fundRead?.status !== 'verified');
+  const actionsBlocked = Boolean(fundsPending || stateStale || state?.unresolved || clientTransactionUnresolved);
+  const depositBlocked = Boolean(fundsPending || stateStale || clientTransactionUnresolved || state?.unresolved && !state.depositMayPrepare);
 
   const labelFor = (publicKey: string | undefined, fallback: string) => metadata[publicKey || '']?.name?.trim() || fallback;
   const descriptionFor = (publicKey: string | undefined) => metadata[publicKey || '']?.description?.trim() || '';
@@ -500,11 +539,36 @@ function App() {
   const prepareOperation = async (body: Record<string, unknown>) => {
     if (!intent || !identity) throw new Error(t('connect'));
     if (intent.operation === 'deposit' ? depositBlocked : actionsBlocked) throw new Error(t('unresolvedBody'));
+    const route = location.href;
+    const scope = refreshScope.current;
+    const walletKey = identity.publicKey;
+    const current = () => location.href === route && refreshScope.current === scope;
+    const pocket = new URL(route).searchParams.get('pocket')?.toLowerCase();
+    let request: PreparedTransaction | undefined;
+    const discardAbandoned = async () => {
+      const journal = request?.journalScope ?? pocket;
+      if (browserMode && request && journal) {
+        await cancelBrowserIntent(journal, request.id, true);
+        if (readSavedPaymentIntent()?.id === request.id) {
+          clearPaymentIntent();
+          setResumePayment(null);
+        }
+      }
+      setIntent(null);
+    };
     setWorking(true); setOperationError('');
     try {
-      const request = intent.operation === 'pay' ? await preparePayment(body) : await prepareOwnerAction(body);
+      request = intent.operation === 'pay' ? await preparePayment(body) : await prepareOwnerAction(body);
+      if (!current()) { await discardAbandoned(); return; }
+      const signer = await wallet.identity();
+      if (!current() || signer.publicKey.toLowerCase() !== walletKey.toLowerCase()) {
+        await discardAbandoned();
+        return;
+      }
       setPrepared(request);
     } catch (cause) {
+      if (!current()) { await discardAbandoned(); return; }
+      if (request) await discardAbandoned();
       const message = cause instanceof Error ? cause.message : String(cause);
       const localized = localizedError(message, t);
       setOperationError(cause instanceof ApiError && localized.startsWith(`${t('actionFailed')} `) ? t('preparationFailed') : localized);
@@ -782,7 +846,7 @@ function App() {
   }, [identity?.publicKey, state?.pocket, state?.unresolved, draftIndexKey]);
 
   const signPrepared = async (request: PreparedTransaction) => {
-    if (stateStale) { setOperationError(t('stateRefreshPaused')); return; }
+    if (stateStale || fundsPending) { setOperationError(t('stateRefreshPaused')); return; }
     if (pudgePrepareOnly) { setOperationError(t('prepareOnlyNotice')); return; }
     setWorking(true); setOperationError('');
     try {
@@ -1035,7 +1099,7 @@ function App() {
       </> : showPocketList || state?.discovery || (state?.empty && identity) || identityDiscoveryLoading ? <PocketPicker pockets={showPocketList ? pocketChoices : state?.discovery || []} verified={!pocketListLoading && !pocketListError && (showPocketList || Boolean(state?.discovery))} genesis={state?.genesis} drafts={savedDrafts} ownerCanCreate={!browserMode && Boolean(identity)} locale={i18n.language} loading={showPocketList ? pocketListLoading : identityDiscoveryLoading} error={pocketListError} t={(key) => t(key)} onOpen={(pocket) => void openSelectedPocket(pocket)} onCreate={startNewDraft} onResume={resumeDraft} onDiscard={discardDraft}/>
       : state?.empty ? <main className="empty-pocket-page mx-auto flex min-h-[min(66vh,620px)] w-[min(100%-2rem,64rem)] flex-col items-start justify-center py-10"><div className="empty-cell-mark mb-5 grid size-14 place-items-center rounded-xl border border-blue-100 bg-blue-wash text-blue"><CellMark/></div><h1 className="mb-2 max-w-2xl text-3xl font-bold leading-tight text-navy sm:text-4xl">{t('emptyTitle')}</h1><p className="mb-5 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">{t('emptyBody')}</p><button className="primary-button" type="button" disabled={!identity} onClick={startNewDraft}>{t('createPocket')} <span aria-hidden="true">→</span></button></main>
       : state && !state.empty ? <main id="home" className="app-page mx-auto w-[min(100%-2rem,64rem)] py-6 sm:py-8">
-        <div className="pocket-heading mb-5 flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><h1 className="m-0 text-2xl font-bold text-navy sm:text-[28px]">{state.pocket ? t('activePocket') : t('brand')}</h1><p className="mt-1 text-xs text-slate-600 sm:text-sm">{identity ? displayIdentityRole : t('connectToSeeActions')}</p></div><div className="flex max-w-full flex-wrap items-center justify-end gap-2"><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('myPockets')}</button><button className="secondary-button" type="button" onClick={() => void copyPocketId()}>{t('sharePocketLink')}</button><span className={closed ? 'state-mark state-closed' : 'state-mark'}>{closed ? t('closedStatus') : t('active')}</span></div></div>
+        <div className="pocket-heading mb-5 flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><h1 className="m-0 text-2xl font-bold text-navy sm:text-[28px]">{state.pocket ? t('activePocket') : t('brand')}</h1><p className="mt-1 text-xs text-slate-600 sm:text-sm">{identity ? displayIdentityRole : t('publicReadOnlyResult')}</p></div><div className="flex max-w-full flex-wrap items-center justify-end gap-2"><button className="secondary-button" type="button" onClick={() => void openPocketList()}>{t('myPockets')}</button><button className="secondary-button" type="button" onClick={() => void copyPocketId()}>{t('sharePocketLink')}</button><span className={closed ? 'state-mark state-closed' : 'state-mark'}>{closed ? t('closedStatus') : t('active')}</span></div></div>
 
         {state.historicalTermsUnavailable && <p className="mb-5 border-l-2 border-amber-500 pl-3 text-sm leading-6 text-amber-900" role="status">{t('terminalHistoryUnavailable')}</p>}
 
@@ -1044,10 +1108,21 @@ function App() {
         {state.unresolved && (!browserMode || !transactionNotice) && <section className="unresolved-banner mb-4 flex flex-col items-start justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center" role="alert"><div><strong className="text-sm font-semibold text-amber-950">{t('unresolvedTitle')}</strong><p className="mt-1 text-xs leading-5 text-amber-900">{t('unresolvedBody')}</p></div><button type="button" className="secondary-button shrink-0" disabled={reconcileBusy || pudgeReadOnly} onClick={() => void runReconcile()}>{reconcileBusy ? t('preparing') : t('reconcile')}</button></section>}
 
         <section className="metrics mb-7 grid grid-cols-1 gap-3 md:grid-cols-2" aria-label={t('activePocket')}>
-          <article className="metric min-w-0 rounded-lg border border-line bg-white p-4 sm:p-5"><span className="text-xs font-semibold text-slate-600">{t(stateStale ? 'lastVerifiedBalance' : 'protectedBalance')}</span><strong className="metric-value my-2 block break-words text-3xl font-bold leading-tight tabular-nums text-navy sm:text-4xl">{formatCkb(funds)} <i className="text-base font-medium not-italic text-slate-500">CKB</i></strong><p className="mb-2 text-xs text-slate-600">{t('availableSpend')}: <b className="font-semibold text-slate-800">{stateStale ? t('awaitingVerification') : `${formatCkb(available)} CKB`}</b></p><div className="capacity-bar h-1.5 overflow-hidden rounded-full bg-slate-100" aria-hidden="true"><span className="block h-full rounded-full bg-blue-bright" style={{ width: `${funds > 0n ? Number(available * 10000n / funds > 10000n ? 10000n : available * 10000n / funds) / 100 : 0}%` }}/></div><small className="mt-2 block text-[11px] leading-4 text-slate-500">{t('occupiedDisclosure')}</small></article>
+          <article className="metric min-w-0 rounded-lg border border-line bg-white p-4 sm:p-5">
+            <h2>{t(fundsPending && state.fundTip || stateStale ? 'lastVerifiedBalance' : 'protectedBalance')}</h2>
+            {state.fundShannons !== undefined && <strong className="metric-value my-2 block text-3xl text-navy">{formatCkb(funds)} CKB</strong>}
+            {fundsPending && <p role="status">{t(fundRead?.status === 'canonical' ? 'publicStaleState' : fundRead?.status === 'unavailable' ? 'publicRpcUnavailable' : 'awaitingVerification')}{fundRead?.reason && <small className="block">{fundRead.reason}</small>}</p>}
+            {state.fundTip && <small>{t('publicVerificationTip')} {BigInt(state.fundTip.block_number).toString()}</small>}
+            {!fundsPending && !stateStale && <>
+              <p>{t('availableSpend')} {formatCkb(available)} CKB</p>
+              {state.fundCellCount !== undefined && <p>{t('fundCapacityDetails', { occupied: formatCkb(BigInt(state.fundCellCount) * 7300000000n), change: formatCkb(occupied) })}</p>}
+              <small>{t('occupiedDisclosure')}</small>
+            </>}
+          </article>
           <article className="metric allowance-metric min-w-0 rounded-lg border border-line bg-white p-4 sm:p-5"><span className="text-xs font-semibold text-slate-600">{closed ? t('terminalCapacity') : t('sharedAllowance')}</span><strong className="metric-value my-2 block break-words text-3xl font-bold leading-tight tabular-nums text-navy sm:text-4xl">{closed ? <>{formatCkb(state.policyCapacity || '0')} <i className="text-base font-medium not-italic text-slate-500">CKB</i></> : <>{formatCkb(sharedRemaining)} <i className="text-base font-medium not-italic text-slate-500">CKB</i></>}</strong><p className="mb-2 text-xs text-slate-600">{closed ? t('terminalCapacityHint') : t('sharedUsedOf', { used: formatCkb(sharedUsed), total: formatCkb(sharedLimit) })}</p>{!closed && <div className="capacity-bar allowance-bar h-1.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-label={t('sharedAllowance')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent(sharedUsed.toString(), sharedLimit.toString())}><span className="block h-full rounded-full bg-blue" style={{ width: `${progressPercent(sharedUsed.toString(), sharedLimit.toString())}%` }}/></div>}{!closed && <small className="mt-2 block text-[11px] leading-4 text-slate-500">{t('allowanceExplanation')}</small>}</article>
         </section>
 
+        {browserMode && !closed && role !== 'owner' && <PublicPolicyRules owner={state.owner} delegates={delegates} liquidity={!fundsPending && !stateStale && state.fundCellCount !== undefined ? { capacity: funds, count: state.fundCellCount, shared: sharedRemaining } : undefined}/>}
         {!identity && <section className="connect-prompt mb-6 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div><h2 className="mb-1 text-base font-semibold text-navy">{t('connectToContinue')}</h2><p className="m-0 max-w-xl text-xs leading-5 text-slate-600">{t(browserMode ? 'browserDisclosure' : 'localDisclosure')}</p></div><button className="primary-button w-full sm:w-auto" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')} <span aria-hidden="true">→</span></button></section>}
         {identity && role === 'unrecognized' && <p className="role-message" role="status">{t('unknownRole')}</p>}
 
@@ -1075,7 +1150,7 @@ function App() {
           })}</div>
         </section>}
 
-        {identity && role === 'unrecognized' && <section className="public-permissions"><h2>{t('delegatePermissions')}</h2><div className="permission-list">{delegates.map((delegate, index) => <div className="public-permission-row" key={delegate.role}><strong>{labelFor(delegate.publicKey, index === 0 ? t('delegateOne') : t('delegateTwo'))}</strong><span>{formatCkb(BigInt(delegate.limit) > BigInt(delegate.used) ? BigInt(delegate.limit) - BigInt(delegate.used) : 0n)} / {formatCkb(delegate.limit)} CKB</span><span>{delegate.enabled ? t('active') : t('revoked')}</span></div>)}</div></section>}
+        {!browserMode && identity && role === 'unrecognized' && <section className="public-permissions"><h2>{t('delegatePermissions')}</h2><div className="permission-list">{delegates.map((delegate, index) => <div className="public-permission-row" key={delegate.role}><strong>{labelFor(delegate.publicKey, index === 0 ? t('delegateOne') : t('delegateTwo'))}</strong><span>{formatCkb(BigInt(delegate.limit) > BigInt(delegate.used) ? BigInt(delegate.limit) - BigInt(delegate.used) : 0n)} / {formatCkb(delegate.limit)} CKB</span><span>{delegate.enabled ? t('active') : t('revoked')}</span></div>)}</div></section>}
 
         {closed && <section className="closed-summary"><div className="closed-icon" aria-hidden="true">✓</div><div><h2>{t('closedTitle')}</h2><p>{t('closedBody')}</p>{history.filter((item) => item.operation === 'close' && item.state === 'committed').slice(-1).map((item) => <p key={item.id}>{t('recoveredAmount')}: <strong>{formatCkb(item.amount)} CKB</strong></p>)}{state.hasFund && <p>{t('lateFunds')}</p>}</div></section>}
 

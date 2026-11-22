@@ -31,6 +31,8 @@ export type UnsupportedFund = {
 };
 
 export type PocketState = {
+  fundTip?: { block_number: string; block_hash: string };
+  fundCellCount?: number;
   empty?: boolean;
   connectRequired?: boolean;
   discovery?: { pocket: string; role: 'owner' | 'alice' | 'ben'; closed: boolean; verifiedAt?: number }[];
