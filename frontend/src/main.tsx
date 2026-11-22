@@ -101,6 +101,7 @@ function App() {
   const [stateActor, setStateActor] = useState<string | null>(null);
   const stateActorRef = useRef<string | null>(null);
   const [identity, setIdentity] = useState<WalletIdentity | null>(null);
+  const readController = useRef<AbortController>();
   const refreshScope = useRef({ actor: identity?.publicKey ?? null, generation: 0 });
   useLayoutEffect(() => {
     refreshScope.current = { actor: identity?.publicKey ?? null, generation: refreshScope.current.generation + 1 };
@@ -147,6 +148,11 @@ function App() {
     const refreshKey = JSON.stringify([scope.generation, actor, route]);
     if (refreshInFlightActor.current === refreshKey && refreshInFlight.current) return refreshInFlight.current;
     if (!quiet) setRefreshing(true);
+    readController.current?.abort();
+    const controller = new AbortController();
+    readController.current = controller;
+    const pocket = new URLSearchParams(route).get('pocket');
+    if (browserMode && pocket) setFundRead({ pocket: pocket.toLowerCase(), status: 'verifying' });
     const task = (async (): Promise<PocketState | null> => {
       try {
         let next: PocketState;
@@ -167,7 +173,7 @@ function App() {
         for (let attempt = 0; ; attempt++) {
           if (!current()) return null;
           try {
-            next = await getPocketState(actor ?? undefined, publishPolicy);
+            next = await getPocketState(actor ?? undefined, publishPolicy, controller.signal);
           } catch (cause) {
             if (publishedPolicy && routePocket && current()) {
               const reason = cause instanceof Error ? cause.message : String(cause);
@@ -245,7 +251,7 @@ function App() {
       const delay = failures && browserMode
         ? Math.min(2000 * 2 ** Math.min(failures - 1, 4), 30000) + Math.random() * 500
         : 60000;
-      timer = window.setTimeout(() => void update(true), delay);
+      timer = window.setTimeout(() => void update(true), lastProgressivePocket.current ? 60000 : delay);
     };
     void update(false);
     return () => { active = false; window.clearTimeout(timer); };
@@ -424,20 +430,22 @@ function App() {
   useEffect(() => {
     if (!browserMode || !state || !historyPocket || !historyPolicy) return;
     let active = true;
+    const controller = new AbortController();
+    let attempts = 0;
     let retry: ReturnType<typeof setTimeout>;
     const query = async () => {
       try {
-        const rows = await browserHistory(state);
+        const rows = await browserHistory(state, controller.signal);
         if (active) setChainHistory({ pocket: historyPocket, rows });
       } catch {
         if (active) {
           setChainHistory(current => ({ pocket: historyPocket, rows: current?.pocket === historyPocket ? current.rows : undefined, failed: true }));
-          retry = setTimeout(query, 10000);
+          if (++attempts < 3) retry = setTimeout(query, 10000 * attempts);
         }
       }
     };
     void query();
-    return () => { active = false; clearTimeout(retry); };
+    return () => { active = false; controller.abort(); clearTimeout(retry); };
   }, [historyPocket, historyPolicy, historyTip]);
   const currentHistory = chainHistory?.pocket === historyPocket ? chainHistory : undefined;
   const confirmed = currentHistory?.rows || [];
@@ -1084,6 +1092,7 @@ function App() {
           <article className="metric allowance-metric min-w-0 rounded-lg border border-line bg-white p-4 sm:p-5"><span className="text-xs font-semibold text-slate-600">{closed ? t('terminalCapacity') : t('sharedAllowance')}</span><strong className="metric-value my-2 block break-words text-3xl font-bold leading-tight tabular-nums text-navy sm:text-4xl">{closed ? <>{formatCkb(state.policyCapacity || '0')} <i className="text-base font-medium not-italic text-slate-500">CKB</i></> : <>{formatCkb(sharedRemaining)} <i className="text-base font-medium not-italic text-slate-500">CKB</i></>}</strong><p className="mb-2 text-xs text-slate-600">{closed ? t('terminalCapacityHint') : t('sharedUsedOf', { used: formatCkb(sharedUsed), total: formatCkb(sharedLimit) })}</p>{!closed && <div className="capacity-bar allowance-bar h-1.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-label={t('sharedAllowance')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent(sharedUsed.toString(), sharedLimit.toString())}><span className="block h-full rounded-full bg-blue" style={{ width: `${progressPercent(sharedUsed.toString(), sharedLimit.toString())}%` }}/></div>}{!closed && <small className="mt-2 block text-[11px] leading-4 text-slate-500">{t('allowanceExplanation')}</small>}</article>
         </section>
 
+        {browserMode && !closed && role !== 'owner' && <PublicPolicyRules owner={state.owner} delegates={delegates} liquidity={!fundsPending && !stateStale && state.fundCellCount !== undefined ? { capacity: funds, count: state.fundCellCount, shared: sharedRemaining } : undefined}/>}
         {!identity && <section className="connect-prompt mb-6 flex flex-col items-start justify-between gap-4 rounded-lg border border-line bg-white p-4 sm:flex-row sm:items-center sm:p-5"><div><h2 className="mb-1 text-base font-semibold text-navy">{t('connectToContinue')}</h2><p className="m-0 max-w-xl text-xs leading-5 text-slate-600">{t(browserMode ? 'browserDisclosure' : 'localDisclosure')}</p></div><button className="primary-button w-full sm:w-auto" onClick={() => void connectWallet()} disabled={walletBusy}>{walletBusy ? t('connectingWallet') : t('disconnected')} <span aria-hidden="true">→</span></button></section>}
         {identity && role === 'unrecognized' && <p className="role-message" role="status">{t('unknownRole')}</p>}
 
@@ -1111,7 +1120,6 @@ function App() {
           })}</div>
         </section>}
 
-        {browserMode && !closed && <PublicPolicyRules owner={state.owner} delegates={delegates}/>}
         {!browserMode && identity && role === 'unrecognized' && <section className="public-permissions"><h2>{t('delegatePermissions')}</h2><div className="permission-list">{delegates.map((delegate, index) => <div className="public-permission-row" key={delegate.role}><strong>{labelFor(delegate.publicKey, index === 0 ? t('delegateOne') : t('delegateTwo'))}</strong><span>{formatCkb(BigInt(delegate.limit) > BigInt(delegate.used) ? BigInt(delegate.limit) - BigInt(delegate.used) : 0n)} / {formatCkb(delegate.limit)} CKB</span><span>{delegate.enabled ? t('active') : t('revoked')}</span></div>)}</div></section>}
 
         {closed && <section className="closed-summary"><div className="closed-icon" aria-hidden="true">✓</div><div><h2>{t('closedTitle')}</h2><p>{t('closedBody')}</p>{history.filter((item) => item.operation === 'close' && item.state === 'committed').slice(-1).map((item) => <p key={item.id}>{t('recoveredAmount')}: <strong>{formatCkb(item.amount)} CKB</strong></p>)}{state.hasFund && <p>{t('lateFunds')}</p>}</div></section>}

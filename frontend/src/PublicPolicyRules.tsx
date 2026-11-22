@@ -1,9 +1,10 @@
+import { paymentUpperBound } from './pocketPayment';
 import { Address, Script } from '@ckb-ccc/core';
 import { useTranslation } from 'react-i18next';
 import { formatCkb } from './amount';
 import type { PocketState } from './domain';
 
-export function PublicPolicyRules({ owner, delegates }: Pick<PocketState, 'owner' | 'delegates'>) {
+export function PublicPolicyRules({ owner, delegates, liquidity }: Pick<PocketState, 'owner' | 'delegates'> & { liquidity?: { capacity: bigint; count: number; shared: bigint } }) {
   const { t } = useTranslation();
   if (!owner || !delegates?.length) return null;
   return <section className="public-permissions my-5">
@@ -20,8 +21,12 @@ export function PublicPolicyRules({ owner, delegates }: Pick<PocketState, 'owner
         <code className="break-all" dir="ltr">{delegate.publicKey}</code>
         <span>{t('sharedUsedOf', { used: formatCkb(delegate.used), total: formatCkb(delegate.limit) })}</span>
         <span>{t('remaining')} {formatCkb(remaining > 0n ? remaining : 0n)} CKB · {t('maxPayment')} {formatCkb(delegate.perPayment)} CKB</span>
+        {liquidity && <span>{t('publicPaymentBound')} {formatCkb(paymentUpperBound(
+          liquidity.capacity, liquidity.count, delegate.enabled, liquidity.shared, remaining, BigInt(delegate.perPayment),
+        ))} CKB</span>}
         <span>{t('recipient')} <code className="break-all" dir="ltr">{address}</code></span>
       </div>;
     })}
+    {liquidity && <p className="text-xs">{t('publicPaymentPrerequisites')}</p>}
   </section>;
 }

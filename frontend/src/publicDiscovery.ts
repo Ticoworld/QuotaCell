@@ -43,33 +43,48 @@ function argsFor(publicKey: string) { return c.hashCkb(c.bytesFrom(publicKey)).s
 const policyScripts = new Map<string, Script>();
 const rpcReads = new Map<string, Promise<unknown>>();
 let rpcActive = 0;
+const scopedReads = new WeakMap<AbortSignal, Map<string, Promise<unknown>>>();
 const rpcQueue: (() => void)[] = [];
 const historyQueue: (() => void)[] = [];
 const safetyQueue: (() => void)[] = [];
 
-export function httpRpc<T>(method: string, params: unknown[] = [], purpose: 'safety' | 'financial' | 'history' = 'financial'): Promise<T> {
+export function httpRpc<T>(method: string, params: unknown[] = [], purpose: 'safety' | 'financial' | 'history' = 'financial', signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  const reads = signal ? scopedReads.get(signal) ?? new Map<string, Promise<unknown>>() : rpcReads;
+  if (signal) scopedReads.set(signal, reads);
   const read = method.startsWith('get_');
   const key = JSON.stringify([method, params]);
-  const current = read && rpcReads.get(key);
+  const current = read && reads.get(key);
   if (current) return current as Promise<T>;
   const queue = purpose === 'history' ? historyQueue : purpose === 'safety' ? safetyQueue : rpcQueue;
   const task = (async () => {
-    if (rpcActive >= 6) await new Promise<void>(resolve => queue.push(resolve));
+    const queued = performance.now();
+    if (rpcActive >= 6) await new Promise<void>((resolve, reject) => {
+      const admit = () => { signal?.removeEventListener('abort', cancel); resolve(); };
+      const cancel = () => {
+        const index = queue.indexOf(admit);
+        if (index >= 0) queue.splice(index, 1);
+        reject(signal?.reason);
+      };
+      queue.push(admit);
+      signal?.addEventListener('abort', cancel, { once: true });
+    });
     else rpcActive++;
     const start = performance.now();
-    try { return await requestRpc<T>(method, params, purpose); }
+    performance.measure('quotacell.queue.' + method, { start: queued, end: start });
+    try { signal?.throwIfAborted(); return await requestRpc<T>(method, params, purpose, RPC_URL, signal); }
     finally {
       performance.measure('quotacell.rpc.' + method, { start, end: performance.now() });
       const next = safetyQueue.shift() ?? rpcQueue.shift() ?? historyQueue.shift();
       if (next) next();
       else rpcActive--;
     }
-  })().finally(() => { if (read) rpcReads.delete(key); });
-  if (read) rpcReads.set(key, task);
+  })().finally(() => { if (read) reads.delete(key); });
+  if (read) reads.set(key, task);
   return task;
 }
 
-async function requestRpc<T>(method: string, params: unknown[], purpose: string, url = RPC_URL): Promise<T> {
+async function requestRpc<T>(method: string, params: unknown[], purpose: string, url = RPC_URL, signal?: AbortSignal): Promise<T> {
   const start = performance.now();
   const request = JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method, params });
   let responseBytes = 0;
@@ -77,7 +92,7 @@ async function requestRpc<T>(method: string, params: unknown[], purpose: string,
   try {
     const response = await fetch(url, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: request, signal: AbortSignal.timeout(15000), cache: 'no-store',
+      body: request, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000), cache: 'no-store',
     });
     outcome = String(response.status);
     if (!response.ok) throw new Error(`Public CKB read failed (${response.status}).`);
@@ -153,7 +168,7 @@ function isTransientDiscoveryError(error: unknown): boolean {
   return /Public CKB read failed \((?:408|429|5\d\d)\)|Failed to fetch|fetch failed|Load failed|NetworkError|TimeoutError|AbortError|timed out|indexer is too far behind|Invalid node or indexer tip/i.test(detail);
 }
 
-async function discoverWithFallback(publicKey: string | undefined, targetPocket: string | undefined, rpc: Rpc): Promise<Discovery[]> {
+async function discoverWithFallback(publicKey: string | undefined, targetPocket: string | undefined, rpc: Rpc, signal?: AbortSignal): Promise<Discovery[]> {
   try { return await discover(publicKey, targetPocket, rpc); }
   catch (primaryError) {
     // Do not hide a malformed Cell, noncanonical chain, or other safety failure.
@@ -174,16 +189,18 @@ export async function discoverPublicPockets(publicKey: string, rpc: Rpc = httpRp
   return discoverWithFallback(publicKey, undefined, rpc);
 }
 
-export async function discoverPublicPocket(pocketId: string, rpc: Rpc = httpRpc, actor?: string): Promise<Discovery> {
+export async function discoverPublicPocket(pocketId: string, rpc: Rpc = httpRpc, actor?: string, signal?: AbortSignal): Promise<Discovery> {
   if (!/^0x[0-9a-f]{64}$/i.test(pocketId)) throw new Error('Invalid Pocket ID.');
-  const found = await discoverWithFallback(actor, pocketId.toLowerCase(), rpc);
+  const found = await (signal ? discover(actor, pocketId.toLowerCase(), rpc, signal) : discoverWithFallback(actor, pocketId.toLowerCase(), rpc));
   const exact = found.find((item) => item.pocket.toLowerCase() === pocketId.toLowerCase());
   if (!exact) throw new Error('Pocket was not found on Pudge.');
   if (found.length !== 1) throw new Error('Ambiguous live Pocket.');
   return exact;
 }
 
-async function discover(publicKey: string | undefined, targetPocket: string | undefined, rpc: Rpc): Promise<Discovery[]> {
+async function discover(publicKey: string | undefined, targetPocket: string | undefined, rpc: Rpc, signal?: AbortSignal): Promise<Discovery[]> {
+  const defaultRpc = rpc === httpRpc;
+  if (defaultRpc && signal) rpc = <T>(method: string, params?: unknown[]) => httpRpc<T>(method, params, 'financial', signal);
   if ((await rpc<string | null>('get_block_hash', ['0x0']))?.toLowerCase() !== GENESIS) throw new Error('Public RPC is not the verified Pudge testnet.');
   const [tip, indexed] = await Promise.all([rpc<any>('get_tip_header'), rpc<any>('get_indexer_tip')]);
   if (!tip || !indexed || !/^0x[0-9a-f]{64}$/i.test(tip.hash) || !/^0x[0-9a-f]{64}$/i.test(indexed.block_hash)) throw new Error('Invalid node or indexer tip.');
@@ -191,7 +208,7 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
   if (indexerHeight > nodeHeight || nodeHeight - indexerHeight > MAX_INDEXER_LAG) throw new Error('Pudge indexer is too far behind the node.');
   const canonicalTips = await Promise.all([rpc<string>('get_block_hash', [indexed.block_number]), rpc<string>('get_block_hash', [tip.number])]);
   if (canonicalTips[0].toLowerCase() !== indexed.block_hash.toLowerCase() || canonicalTips[1].toLowerCase() !== tip.hash.toLowerCase()) throw new Error('Node or indexer tip is not canonical.');
-  const knownScript = rpc === httpRpc && targetPocket ? policyScripts.get(targetPocket) : undefined;
+  const knownScript = defaultRpc && targetPocket ? policyScripts.get(targetPocket) : undefined;
   const key = { filter: { block_range: ['0x0', '0x' + (indexerHeight + 1n).toString(16)] }, script: knownScript || { code_hash: POLICY_CODE, hash_type: 'data2', args: '0x' }, script_type: 'type', script_search_mode: knownScript ? 'exact' : 'prefix', with_data: true };
   const candidates: Array<Discovery & { cell: any }> = [];
   const seen = new Set<string>();
@@ -250,7 +267,7 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
     const live = await rpc<any>('get_live_cell', [candidate.outPoint, true]);
     if (live?.status !== 'live' || live.cell.data?.content !== candidate.cell.data.content || !equal(normalizeOutput(live.cell.output), normalizeOutput(candidate.cell.output))) throw new Error('Pocket changed during discovery.');
   }
-  if (rpc === httpRpc) {
+  if (defaultRpc) {
     for (const candidate of candidates) {
       if (policyScripts.size >= 128) policyScripts.delete(policyScripts.keys().next().value!);
       policyScripts.set(candidate.pocket, candidate.policyScript);
