@@ -162,9 +162,9 @@ async function main() {
               }
             }, role);
             releasePreparation();
-            await page.waitForFunction(pocket => Object.entries(localStorage)
-              .some(([key, value]) => key.endsWith(':' + pocket) && value.includes('"state":"prepared"')), created.pocket);
-            await page.waitForTimeout(200);
+            await dialog.waitFor({ state: 'hidden' });
+            assert.equal(await page.evaluate(pocket => Object.entries(localStorage)
+              .some(([key, value]) => key.endsWith(':' + pocket) && value.includes('"state":"prepared"')), created.pocket), false);
             assert.equal(await page.locator('.transaction-review').count(), 0, role);
             console.log('PASS rejection', role);
             continue;

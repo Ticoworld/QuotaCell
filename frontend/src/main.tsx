@@ -539,18 +539,32 @@ function App() {
     const scope = refreshScope.current;
     const walletKey = identity.publicKey;
     const current = () => location.href === route && refreshScope.current === scope;
+    const pocket = new URL(route).searchParams.get('pocket')?.toLowerCase();
+    let request: PreparedTransaction | undefined;
+    const discardAbandoned = async () => {
+      const journal = request?.journalScope ?? pocket;
+      if (browserMode && request && journal) {
+        await cancelBrowserIntent(journal, request.id, true);
+        if (readSavedPaymentIntent()?.id === request.id) {
+          clearPaymentIntent();
+          setResumePayment(null);
+        }
+      }
+      setIntent(null);
+    };
     setWorking(true); setOperationError('');
     try {
-      const request = intent.operation === 'pay' ? await preparePayment(body) : await prepareOwnerAction(body);
-      if (!current()) { setIntent(null); return; }
+      request = intent.operation === 'pay' ? await preparePayment(body) : await prepareOwnerAction(body);
+      if (!current()) { await discardAbandoned(); return; }
       const signer = await wallet.identity();
       if (!current() || signer.publicKey.toLowerCase() !== walletKey.toLowerCase()) {
-        setIntent(null);
+        await discardAbandoned();
         return;
       }
       setPrepared(request);
     } catch (cause) {
-      if (!current()) { setIntent(null); return; }
+      if (!current()) { await discardAbandoned(); return; }
+      if (request) await discardAbandoned();
       const message = cause instanceof Error ? cause.message : String(cause);
       const localized = localizedError(message, t);
       setOperationError(cause instanceof ApiError && localized.startsWith(`${t('actionFailed')} `) ? t('preparationFailed') : localized);

@@ -305,7 +305,7 @@ async function unchangedPublicSnapshot(pocket: string, previous: PocketState, rp
     { ...query, script_search_mode: 'exact', filter: { block_range: range } }, 'asc', '0x1',
   ])));
   // Only a complete empty range permits reuse. Any event requires fresh enumeration.
-  if (!activity.every(result => Array.isArray(result?.objects) && !result.objects.length && typeof result.last_cursor === 'string')) return;
+  if (!activity.every(result => Array.isArray(result?.objects) && !result.objects.length && result.last_cursor === '0x')) return;
   const [closing, closingNode, openingHash, closingHash] = await Promise.all([
     rpc<DisplayCheckpoint>('get_indexer_tip'),
     rpc<{ number: string; hash: string }>('get_tip_header'),
@@ -564,11 +564,11 @@ export function persistBrowserSignature(pocket: string, id: string, bytes: strin
   });
 }
 
-export function cancelBrowserIntent(pocket: string, id: string) {
+export function cancelBrowserIntent(pocket: string, id: string, unsignedOnly = false) {
   return locked(pocket, async () => {
     const journal = entries(pocket);
     const entry = journal.find(item => item.payment.id === id);
-    if (entry && ['prepared', 'signed'].includes(entry.state)) save(pocket, journal.filter(item => item !== entry));
+    if (entry && (entry.state === 'prepared' || (!unsignedOnly && entry.state === 'signed'))) save(pocket, journal.filter(item => item !== entry));
     return { state: entry?.state === 'uncertain' ? 'uncertain' : 'cancelled' };
   });
 }

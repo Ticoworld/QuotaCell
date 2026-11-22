@@ -20,6 +20,16 @@ async function main() {
   const fundScript = ledger[1].transaction.outputs[0].lock;
   assert.equal(JsonRpcTransformers.scriptTo(policyScript).hash(), pocket);
   assert.equal(fundScript.args, pocket);
+  // Add a second deposit in the recorded deposit block. This is replay-only evidence.
+  const extraDeposit = structuredClone(ledger[1].transaction);
+  extraDeposit.inputs[0].previous_output.tx_hash = '0x' + 'fe'.repeat(32);
+  extraDeposit.hash = JsonRpcTransformers.transactionTo(extraDeposit).hash();
+  const extra = { transaction: extraDeposit, hash: extraDeposit.hash, height: ledger[1].height,
+    tx_status: { ...ledger[1].tx_status, tx_index: '0x2' } };
+  entries.push({ transaction: extra.transaction, tx_status: extra.tx_status });
+  ledger.splice(2, 0, extra);
+  let incompleteActivity = false;
+  let activityRejected = false;
   const allOutputs = new Map();
   for (const row of ledger) {
     assert(headers.some(header => header.hash === row.tx_status.block_hash && BigInt(header.number) === row.height));
@@ -84,6 +94,11 @@ async function main() {
           const [start, end] = arg.filter.block_range.map(BigInt);
           const items = method === 'get_transactions' ? activity[arg.script_type] : [...live.values()].filter(cell =>
             arg.script_type === 'type' ? same(cell.output.type, policyScript) : same(cell.output.lock, fundScript));
+          if (incompleteActivity && method === 'get_transactions' && params[2] === '0x1') {
+            activityRejected = true;
+            result = { objects: [], last_cursor: '0x10' };
+            break;
+          }
           const offset = Number(params[3] || 0);
           const objects = items.filter(item => BigInt(item.block_number) >= start && BigInt(item.block_number) < end)
             .slice(offset, offset + Number(params[2]));
@@ -106,8 +121,9 @@ async function main() {
     const bytes = Buffer.from(policy.output_data.slice(2), 'hex');
     const u128 = offset => bytes.readBigUInt64LE(offset) + (bytes.readBigUInt64LE(offset + 8) << 64n);
     const balance = page.getByRole('heading', { name: 'Protected balance', exact: true }).locator('..');
-    await balance.getByText((capacity / 100000000n) + ' CKB', { exact: true }).waitFor();
+    await balance.getByText((capacity / 100000000n) + ' CKB', { exact: true }).waitFor().catch(async e => { console.error(await page.locator('body').innerText()); throw e; });
     assert((await balance.innerText()).includes(height.toString()));
+    assert((await balance.innerText()).includes('occupy ' + (73 * funds.length) + ' CKB'));
     const used = u128(24) / 100000000n;
     await page.getByText(used + ' used of ' + u128(8) / 100000000n + ' CKB', { exact: true }).waitFor();
     const indexedHashes = new Set([...activity.type, ...activity.lock].map(hit => hit.tx_hash));
@@ -128,13 +144,16 @@ async function main() {
 
   try {
     const incremental = await open();
-    for (const row of ledger) {
+    // Skip the standalone deposit stage first so one refresh spans creation and consumption.
+    for (const row of [ledger[0], ledger[3], ledger[4], ledger[5], ledger[1]]) {
+      incompleteActivity = row === ledger[3];
       height = row.height;
       if (row !== ledger[0]) await incremental.getByRole('button', { name: 'Refresh', exact: true }).first().click();
       const observed = await observation(incremental);
       const cold = await open();
       assert.deepEqual(await observation(cold), observed);
       await cold.close();
+      if (incompleteActivity) assert(activityRejected);
       console.log(hex(height), observed.capacity, observed.count, observed.sharedUsed, observed.hashes.length);
     }
   } finally {

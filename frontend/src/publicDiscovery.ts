@@ -240,8 +240,8 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
   if (!tip || !indexed || !/^0x[0-9a-f]{64}$/i.test(tip.hash) || !/^0x[0-9a-f]{64}$/i.test(indexed.block_hash)) throw new Error('Invalid node or indexer tip.');
   const nodeHeight = BigInt(tip.number), indexerHeight = BigInt(indexed.block_number);
   if (indexerHeight > nodeHeight || nodeHeight - indexerHeight > MAX_INDEXER_LAG) throw new Error('Pudge indexer is too far behind the node.');
-  const canonicalTips = await Promise.all([rpc<string>('get_block_hash', [indexed.block_number]), rpc<string>('get_block_hash', [tip.number])]);
-  if (canonicalTips[0].toLowerCase() !== indexed.block_hash.toLowerCase() || canonicalTips[1].toLowerCase() !== tip.hash.toLowerCase()) throw new Error('Node or indexer tip is not canonical.');
+  const canonicalTips = await Promise.all([rpc<string | null>('get_block_hash', [indexed.block_number]), rpc<string | null>('get_block_hash', [tip.number])]);
+  if (canonicalTips[0]?.toLowerCase() !== indexed.block_hash.toLowerCase() || canonicalTips[1]?.toLowerCase() !== tip.hash.toLowerCase()) throw new Error('Node or indexer tip is not canonical.');
   const knownScript = defaultRpc && targetPocket ? policyScripts.get(targetPocket) : undefined;
   const key = { filter: { block_range: ['0x0', '0x' + (indexerHeight + 1n).toString(16)] }, script: knownScript || { code_hash: POLICY_CODE, hash_type: 'data2', args: '0x' }, script_type: 'type', script_search_mode: knownScript ? 'exact' : 'prefix', with_data: true };
   const candidates: Array<Discovery & { cell: any }> = [];
@@ -274,7 +274,7 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
       if (transaction?.tx_status?.status !== 'committed' || !transaction.tx_status.block_hash) throw new Error('Indexed policy transaction is not committed.');
       if (!transaction.transaction || JsonRpcTransformers.transactionTo(transaction.transaction).hash() !== point.tx_hash) throw new Error('Policy transaction hash mismatch.');
       const header = await rpc<any>('get_header', [transaction.tx_status.block_hash]);
-      if (!header || header.hash !== transaction.tx_status.block_hash || header.number !== item.block_number || (await rpc<string>('get_block_hash', [header.number])).toLowerCase() !== header.hash.toLowerCase()) throw new Error('Indexed policy transaction is not canonical.');
+      if (!header || header.hash !== transaction.tx_status.block_hash || header.number !== item.block_number || (await rpc<string | null>('get_block_hash', [header.number]))?.toLowerCase() !== header.hash.toLowerCase()) throw new Error('Indexed policy transaction is not canonical.');
       const outputIndex = Number(BigInt(point.index));
       if (!equal(normalizeOutput(transaction.transaction.outputs[outputIndex]), normalizeOutput(live.cell.output)) || transaction.transaction.outputs_data[outputIndex] !== live.cell.data.content) throw new Error('Canonical policy transaction output mismatch.');
       if (defaultRpc) rememberDisplayEvidence(point.tx_hash, transaction, header, signal);
@@ -296,8 +296,8 @@ async function discover(publicKey: string | undefined, targetPocket: string | un
     const finalCanonical = await rpc<string | null>('get_block_hash', [finalIndex.block_number]);
     if (finalCanonical?.toLowerCase() !== finalIndex.block_hash.toLowerCase()) throw new Error('Pudge indexer tip is not canonical after discovery.');
   }
-  const finalTips = await Promise.all([rpc<string>('get_block_hash', [indexed.block_number]), rpc<string>('get_block_hash', [tip.number])]);
-  if (finalTips[0].toLowerCase() !== indexed.block_hash.toLowerCase() || finalTips[1].toLowerCase() !== tip.hash.toLowerCase()) throw new Error('Pudge chain changed during discovery.');
+  const finalTips = await Promise.all([rpc<string | null>('get_block_hash', [indexed.block_number]), rpc<string | null>('get_block_hash', [tip.number])]);
+  if (finalTips[0]?.toLowerCase() !== indexed.block_hash.toLowerCase() || finalTips[1]?.toLowerCase() !== tip.hash.toLowerCase()) throw new Error('Pudge chain changed during discovery.');
   for (const candidate of candidates) {
     const live = await rpc<any>('get_live_cell', [candidate.outPoint, true]);
     if (live?.status !== 'live' || live.cell.data?.content !== candidate.cell.data.content || !equal(normalizeOutput(live.cell.output), normalizeOutput(candidate.cell.output))) throw new Error('Pocket changed during discovery.');
