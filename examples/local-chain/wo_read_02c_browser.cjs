@@ -36,6 +36,3 @@ await p.screenshot({path:output+'/02c-'+width+'.png',fullPage:true});
 if(width===1250){failure=true;await p.getByRole('button',{name:'Refresh',exact:true}).first().click();await p.getByText(/Pudge is temporarily unavailable/).waitFor({timeout:15000});assert(await p.getByText('Last verified protected balance').isVisible());assert(await p.locator('.public-permissions').isVisible());await p.screenshot({path:output+'/02c-settled-failure.png',fullPage:true});}
 fs.writeFileSync(output+'/02c-'+width+'.json',JSON.stringify({policy,funds,history,historyStart,calls,errors,queue:await p.evaluate(()=>performance.getEntriesByType('measure').filter(x=>x.name.startsWith('quotacell.queue.')).map(x=>[x.name,x.duration]))},null,2));console.log({width,policy,funds,history,historyStart,count:calls.length,errors});await p.close();
 }}finally{await b.close()}})().catch(e=>{console.error(e);process.exitCode=1});
-
-
-
