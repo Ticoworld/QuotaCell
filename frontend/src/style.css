@@ -492,3 +492,40 @@
     *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   }
 }
+
+/* Compact app entrance and progressive public Pocket. */
+.pocket-entrance{width:min(510px,calc(100% - 36px));margin:96px auto 90px}.pocket-entrance h1{margin:0 0 12px;font-size:32px;letter-spacing:-.035em;color:#17243a}.pocket-entrance>p{color:#52647d;margin:0 0 28px}.example-entry{width:100%;display:flex;align-items:center;justify-content:space-between;gap:18px;text-align:left;border:1px solid #cbd8eb;border-radius:10px;background:#fff;padding:19px 20px;color:#17243a;box-shadow:0 3px 12px #18335a0a}.example-entry:hover{border-color:#7494d0;background:#f9fbff}.example-entry strong,.example-entry small{display:block}.example-entry strong{font-size:16px}.example-entry small{margin-top:5px;color:#52647d;font-size:13px}.example-entry b{color:#2455cb;white-space:nowrap}.entrance-options-label{margin:26px 0 10px;color:#52647d;font-size:13px;font-weight:600}.entrance-options{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:36px}.entrance-network{color:#5e6e84}.pocket-opening{padding:32px 0 80px}.pocket-opening .pocket-heading{display:block}.pocket-opening h1{font-size:28px}.pocket-opening .loading-section{margin:30px 0;border-bottom:1px solid #dce3ee;padding-bottom:20px}.loading-section h2{font-size:17px}.loading-section p{color:#59677c;font-size:13px}.number-placeholder{width:150px;max-width:80%;height:35px;margin:12px 0;border-radius:5px;background:linear-gradient(90deg,#e9eef6 25%,#f5f8fc 50%,#e9eef6 75%);background-size:200% 100%;animation:fund-shimmer 1.8s ease-in-out infinite}@keyframes fund-shimmer{to{background-position:-200% 0}}.public-person{width:100%;display:flex;gap:12px;align-items:center;padding:14px 2px;border:0;border-top:1px solid #dce3ee;background:transparent;text-align:left;color:#17243a}.public-person:hover{background:#edf3fb}.public-person>span:nth-child(2){flex:1;min-width:0}.public-person strong,.public-person small{display:block}.public-person small{font-size:13px;color:#52647d}.public-person>span:last-child{font-size:13px}.inspection-list dt{font-weight:600;margin-top:14px}.inspection-list dd{margin:4px 0;overflow-wrap:anywhere}.dialog-close{margin-top:20px}.verification-trigger{margin-top:24px}.history-description span,.history-state,.history-hash{font-size:12px}.metric h2{font-size:13px;color:#52647d;font-weight:600}.metric p,.metric small{font-size:13px}.dialog-content dl dd{overflow-wrap:anywhere}.dialog-content form input{width:100%}.dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}@media(max-width:600px){.pocket-entrance{margin-top:70px}.pocket-entrance h1{font-size:27px}.example-entry{align-items:flex-start;flex-direction:column;gap:14px}.example-entry b{white-space:normal}.entrance-options>*{flex:1 1 auto}.public-person{align-items:flex-start}.history-description span,.history-state,.history-hash{font-size:12px}}@media(prefers-reduced-motion:reduce){.number-placeholder{animation:none}}
+
+.stale-banner{display:flex;align-items:center;justify-content:space-between;gap:12px}.stale-banner .secondary-button{flex:none}@media(max-width:480px){.stale-banner{align-items:flex-start;flex-direction:column}}
+
+.app-page .metrics{gap:0;border:1px solid #dce3ee;border-radius:10px;background:#fff;overflow:hidden}.app-page .metrics .metric{border:0;border-radius:0}.app-page .metrics .metric+ .metric{border-left:1px solid #dce3ee}@media(max-width:600px){.app-page .metrics .metric+ .metric{border-left:0;border-top:1px solid #dce3ee}}
+
+.balance-details{margin:8px 0 0 -8px}
+
+/* Workspace alignment */
+.topbar{padding-inline:36px}
+.pocket-entrance{width:min(600px,calc(100% - 48px));margin:96px 0 90px max(24px,calc((100vw - 1300px)/2))}
+.app-page{width:min(1320px,calc(100% - 80px));margin-inline:auto}
+.pocket-content-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:48px;align-items:start}
+.pocket-content-columns .public-permissions,.pocket-content-columns .history-section{margin-top:28px}
+.pocket-content-columns .history-section .section-title{min-height:26px}
+@media(max-width:767px){.topbar{padding-inline:16px}.pocket-entrance{width:calc(100% - 32px);margin:70px 16px 80px}.app-page{width:calc(100% - 32px)}.pocket-content-columns{grid-template-columns:minmax(0,1fr);gap:0}}
+@media(max-width:350px){.topbar{padding-inline:10px}}
+
+/* Visual hierarchy in the public workspace */
+.pocket-entrance h1{font-weight:700;letter-spacing:-.04em}
+.example-entry{padding:22px;min-height:96px;border-color:#aebfdb}
+.example-entry b{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:9px 15px;border-radius:7px;background:#2455cb;color:#fff;font-size:13px}
+.example-entry:hover b{background:#1c46b0}
+.app-page .metric{padding:26px 28px;min-height:175px}
+.app-page .metric-value{font-size:clamp(36px,3.3vw,46px);line-height:1.12;letter-spacing:-.045em;margin:12px 0 5px}
+.app-page .metric h2,.app-page .metric>span{font-size:14px;color:#425674}
+.app-page .metric small,.app-page .metric p{color:#52647d;font-size:13px}
+.public-permissions h2,.history-section .section-title h2,.loading-section h2{font-size:19px;font-weight:700;letter-spacing:-.025em;color:#17243a}
+.pocket-content-columns .public-permissions,.pocket-content-columns .history-section{margin-top:32px}
+.public-person{min-height:68px;padding:15px 4px}.public-person strong{font-size:15px}.public-person small{margin-top:3px;line-height:1.45}.public-person>span:last-child{color:#52647d;white-space:nowrap}
+.history-section .history-list{background:transparent;border:0;border-radius:0}.history-section .history-row{min-height:64px;border-top:1px solid #dce3ee;padding:13px 4px}.history-section .history-row:first-child{border-top:1px solid #dce3ee}.history-description strong{font-size:14px}.history-description span,.history-state{font-size:12px;color:#52647d}.history-state.is-confirmed{color:#17643f}.empty-history{color:#52647d;font-size:13px}
+.verification-trigger{margin-left:-8px}.app-page .number-placeholder{height:43px;width:160px}
+@media(max-width:600px){.example-entry{gap:16px}.example-entry b{min-width:135px}.app-page .metric{padding:21px 20px;min-height:150px}.app-page .metric-value{font-size:36px}.public-permissions h2,.history-section .section-title h2{font-size:18px}.public-person{min-height:68px}.history-section .history-row{padding:12px 2px}.history-description strong{font-size:13px}.history-description span,.history-state{font-size:12px}}
+
+.example-entry b{gap:6px}.history-description span,.history-state{font-size:13px}@media(max-width:600px){.history-description span,.history-state{font-size:13px}}
