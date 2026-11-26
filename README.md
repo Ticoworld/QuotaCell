@@ -1,6 +1,6 @@
 # QuotaCell
 
-QuotaCell is an experimental CKB spending policy that lets two delegates draw from one shared cumulative allowance. Each delegate uses an independently controlled key and an approved recipient. The owner can revoke either delegate, close the Pocket, and recover supported protected funds. Deposits do not reset spent authority.
+QuotaCell is an experimental CKB spending policy for a shared Pocket: an owner sets a shared cumulative allowance and individual limits for two delegates, with approved recipients. This addresses the risk of separate wallets spending beyond a common budget. The CKB contract enforces the policy; deposits do not reset spent authority. The owner retains shared administrative authority while delegates have bounded, individual spending authority.
 
 ## Verified public Pudge Pocket
 
@@ -10,12 +10,17 @@ The public lifecycle is evidence of contract enforcement, not a production secur
 
 See the [WO18 public closeout and transaction evidence](examples/local-chain/WO18_PUBLIC_CLOSEOUT_20261115.md) for canonical transaction and block identities, capacity accounting, verification results, limitations, and reproduction commands. The documented reproduction uses the preserved local runtime for audit inputs; that runtime, its SQLite journal, and any local credentials are not part of the public release and must not be shared.
 
+## Current application
+
+The public Pudge beta supports native QCN4/QCT4 Pocket lookup and role based owner/delegate workflows. The live wallet and static viewer are available at the links below. The tested public lifecycle is documented evidence, not evidence that every hosted action or every wallet configuration is qualified. Agent integration, multiple wallet/network profiles, and mainnet readiness are not delivered capabilities.
+
 ## Build and inspect
 
 - [QCN4 contract source](policy/c/allowance_native_v2.c) and [policy profile](policy/c/profile.h).
 - [Pocket genesis builder](examples/local-chain/pocket_genesis.mjs), [payment builder](examples/local-chain/pocket_payment.ts), and [wallet signing boundary](examples/local-chain/pocket_signing.mjs).
 - [Working Pocket backend](examples/local-chain/working_pocket_server.mjs) and [WO18 public closeout](examples/local-chain/WO18_PUBLIC_CLOSEOUT_20261115.md).
 - [Build and test instructions](docs/BUILD_AND_TEST.md), [dependencies](docs/DEPENDENCIES.md), and [security model](docs/SECURITY.md).
+- [Architecture](docs/ARCHITECTURE.md), [roadmap](docs/ROADMAP.md), and [project handoff](PROJECT_HANDOFF.md).
 - The historical [xUDT prototype](evidence/local-node) is a separate profile and is not evidence for the native QCN4 public lifecycle.
 
 ## Limits
