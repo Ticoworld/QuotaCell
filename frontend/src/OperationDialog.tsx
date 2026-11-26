@@ -19,6 +19,8 @@ type Props = {
   history: HistoryItem[];
   recipientAddresses: Record<string, string>;
   working: boolean;
+  playgroundActive: boolean;
+  operationPhase: 'verification' | 'signing' | 'submission' | 'confirmation' | null;
   error: string;
   resumePayment: SavedPaymentIntent | null;
   onPrepare: (body: Record<string, unknown>) => Promise<void>;
@@ -31,7 +33,7 @@ type Props = {
   onClose: () => void;
 };
 
-export function OperationDialog({ intent, prepared, pendingSigned, state, identity, delegates, history, recipientAddresses, working, error, resumePayment, onPrepare, onCancelPreparation, onSign, onSubmitSigned, onDiscardSigned, canSubmitSigned, onConnectSigner, onClose }: Props) {
+export function OperationDialog({ intent, prepared, pendingSigned, state, identity, delegates, history, recipientAddresses, working, playgroundActive, operationPhase, error, resumePayment, onPrepare, onCancelPreparation, onSign, onSubmitSigned, onDiscardSigned, canSubmitSigned, onConnectSigner, onClose }: Props) {
   const { t, i18n } = useTranslation();
   const [paymentAmount, setPaymentAmount] = useState('');
   const [depositAmount, setDepositAmount] = useState('');
@@ -271,7 +273,7 @@ export function OperationDialog({ intent, prepared, pendingSigned, state, identi
           </details>
           {error && <p className="form-error rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-xs leading-5 text-red-800" role="alert">{error}</p>}
           {history.some((item) => item.state === 'uncertain') && <p className="readonly-notice rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900">{t('unresolvedBody')}</p>}
-          <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2">{pendingSigned ? <><button className="secondary-button" type="button" disabled={working} onClick={onDiscardSigned}>{t('discardSignature')}</button><button className="primary-button" type="button" disabled={working || !canSubmitSigned} onClick={() => void onSubmitSigned(pendingSigned)}>{working ? t('submitting') : intent.operation === 'pay' ? t('sendToPudge') : title}</button></> : <>{intent.operation === 'pay' && paymentRequestBound && (savedPayment || resumePayment) && <button className="text-button" type="button" disabled={working} onClick={() => void discardPreparation()}>{t('discardUnsignedPreparation')}</button>}<Dialog.Close asChild><button className="secondary-button" type="button" disabled={working}>{t('cancel')}</button></Dialog.Close><button className="primary-button" type="button" disabled={working || readOnly || prepareOnly || !signerMatches} onClick={() => void onSign(prepared)}>{working ? t('walletApproval') : prepareOnly ? t('signingDisabled') : networkMode === 'pudge-browser' ? intent.operation === 'pay' ? t('signAndSendPayment') : title : t('continueWallet')} <span aria-hidden="true">→</span></button></>}</div>
+          <div className="dialog-actions mt-4 flex flex-wrap justify-end gap-2">{pendingSigned ? <><button className="secondary-button" type="button" disabled={working} onClick={onDiscardSigned}>{t('discardSignature')}</button><button className="primary-button" type="button" disabled={working || !canSubmitSigned} onClick={() => void onSubmitSigned(pendingSigned)}>{working ? playgroundActive ? t(operationPhase === 'verification' ? 'playgroundVerifying' : operationPhase === 'confirmation' ? 'playgroundConfirming' : 'playgroundSubmitting') : t('submitting') : intent.operation === 'pay' ? t('sendToPudge') : title}</button></> : <>{intent.operation === 'pay' && paymentRequestBound && (savedPayment || resumePayment) && <button className="text-button" type="button" disabled={working} onClick={() => void discardPreparation()}>{t('discardUnsignedPreparation')}</button>}<Dialog.Close asChild><button className="secondary-button" type="button" disabled={working}>{t('cancel')}</button></Dialog.Close><button className="primary-button" type="button" disabled={working || readOnly || prepareOnly || !signerMatches} onClick={() => void onSign(prepared)}>{working ? playgroundActive ? t(operationPhase === 'verification' ? 'playgroundVerifying' : operationPhase === 'submission' ? 'playgroundSubmitting' : operationPhase === 'confirmation' ? 'playgroundConfirming' : 'playgroundSigning') : t('walletApproval') : prepareOnly ? t('signingDisabled') : networkMode === 'pudge-browser' ? intent.operation === 'pay' ? t('signAndSendPayment') : title : t('continueWallet')} <span aria-hidden="true">→</span></button></>}</div>
         </div>}
       </Dialog.Content>
     </Dialog.Portal>

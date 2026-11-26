@@ -190,11 +190,11 @@ export class CkbWalletSession {
     return this.validateSigner(signer, this.walletName);
   }
 
-  async sign(transactionHex: string, expectedPublicKey: string): Promise<string> {
+  async sign(transactionHex: string, expectedPublicKey: string, onPlaygroundSigning?:()=>void): Promise<string> {
     if(this.playgroundSigner) {
       await this.identity();
       const {signPreparedPlaygroundTransaction}=await import('./playground-signing');
-      return signPreparedPlaygroundTransaction(this.playgroundSigner,transactionHex,expectedPublicKey);
+      return signPreparedPlaygroundTransaction(this.playgroundSigner,transactionHex,expectedPublicKey,onPlaygroundSigning);
     }
     const connector = await this.connector();
     const before = await this.identity();

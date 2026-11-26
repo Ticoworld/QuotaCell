@@ -25,6 +25,13 @@ import { PocketPicker, pocketNameKey } from './PocketPicker';
 import { createPocketDraft, listPocketDrafts, pocketDraftIndexKey, removePocketDraft } from './drafts';
 import { clearPaymentIntent, paymentRequestFromIntent, readSavedPaymentIntent, type SavedPaymentIntent } from './paymentIntent';
 
+async function boundedPlaygroundStep<T>(work: Promise<T>, enabled: boolean): Promise<T> {
+  if (!enabled) return work;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Verification or signing timed out. No transaction was submitted. Retry the same preparation.')), 60000); })]); }
+  finally { if (timer) clearTimeout(timer); }
+}
+
 type ActorRole = 'owner' | 'alice' | 'ben' | 'unrecognized';
 type SignedPending = { transaction: string; hash: string };
 type TransactionNotice = { actor?: string; state: string; hash?: string; detail?: string; phase?: string; technicalError?: string; operation?: string; draftIndexKey?: string; draftId?: string };
@@ -117,6 +124,14 @@ function App() {
   const [resumePayment, setResumePayment] = useState<SavedPaymentIntent | null>(() => readSavedPaymentIntent());
   const [prepared, setPrepared] = useState<PreparedTransaction | null>(null);
   const [working, setWorking] = useState(false);
+  const [operationPhase, setOperationPhase] = useState<'verification'|'signing'|'submission'|'confirmation'|null>(null);
+  const phaseStarted = useRef<number | null>(null);
+  const changePhase = (phase: 'verification'|'signing'|'submission'|'confirmation'|null) => {
+    const now = performance.now();
+    if (phaseStarted.current !== null) performance.measure('quotacell.transaction.phase', {start: phaseStarted.current, end: now, detail: {phase: phaseRef.current}});
+    phaseRef.current = phase; phaseStarted.current = phase ? now : null; setOperationPhase(phase);
+  };
+  const phaseRef = useRef<string | null>(null);
   const [operationError, setOperationError] = useState('');
   const [rawTransactionNotice, setTransactionNotice] = useState<TransactionNotice | null>(() => restorePendingTransaction());
   const transactionNotice = browserMode && rawTransactionNotice?.operation === 'genesis' &&
@@ -736,16 +751,22 @@ function App() {
       if (!browserMode) toast.loading(t('submitting'), { id: 'quotacell-transaction-submit' });
     }
     setWorking(true); setOperationError('');
+    if (playgroundActive) changePhase('verification');
     try {
       let result: TransactionResult;
       for (let attempt = 0; ; attempt++) {
         try {
-          result = await submitTransaction(reviewed.id, transaction, hash ? {
-            hash, publicKey: reviewed.publicKey, verifySigner: async () => {
+          const controller = playgroundActive ? new AbortController() : undefined;
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          const submitted = submitTransaction(reviewed.id, transaction, hash ? {
+            hash, publicKey: reviewed.publicKey, signal: controller?.signal, onPhase: playgroundActive ? phase => { if (!controller?.signal.aborted) changePhase(phase); } : undefined, verifySigner: async () => {
               if (!isCreationScope(pocket) && pocket !== requireBrowserPocket()) throw new Error(t('signerMismatch'));
               return (await wallet.identity()).publicKey;
             },
           } : undefined, pocket);
+          try {
+            result = controller ? await Promise.race([submitted, new Promise<TransactionResult>(resolve => { timeout = setTimeout(() => { controller.abort(); resolve({state:'uncertain',txHash:hash ?? '',reason:'Timed out; check transaction status before retrying.'}); }, 60000); })]) : await submitted;
+          } finally { if (timeout) clearTimeout(timeout); }
           break;
         } catch (cause) {
           if (!(cause instanceof ApiError) || !cause.retryable || attempt >= 1) throw cause;
@@ -754,8 +775,10 @@ function App() {
         }
       }
       const resultHash = result.txHash || hash;
+      if (playgroundActive) changePhase('confirmation');
       let checkedOutcome: Awaited<ReturnType<typeof resolvePudgeTransaction>> | undefined;
-      if (pudge && result.state === 'uncertain' && resultHash) {
+      const timedOut = result.reason === 'Timed out; check transaction status before retrying.';
+      if (pudge && result.state === 'uncertain' && resultHash && !timedOut) {
         for (let attempt = 0; attempt < 2; attempt++) {
           if (attempt) await new Promise<void>((resolve) => window.setTimeout(resolve, 800 * attempt));
           try {
@@ -795,7 +818,7 @@ function App() {
         if (browserMode) setSelectedPocketId(result.pocket);
         setShowCreation(false); setActiveDraftId(''); setShowPocketList(false);
       }
-      await refresh(true);
+      if (timedOut) void refresh(true); else await refresh(true);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       let resolved: Awaited<ReturnType<typeof resolvePudgeTransaction>> | undefined;
@@ -839,7 +862,7 @@ function App() {
       setOperationError(localizedError(message, t));
       setPrepared(null); setIntent(null); setPendingSigned(null);
       await refresh(true);
-    } finally { setWorking(false); }
+    } finally { setWorking(false); if (playgroundActive) changePhase(null); }
   };
 
   useEffect(() => {
@@ -875,13 +898,17 @@ function App() {
     if (stateStale || fundsPending) { setOperationError(t('stateRefreshPaused')); return; }
     if (pudgePrepareOnly) { setOperationError(t('prepareOnlyNotice')); return; }
     setWorking(true); setOperationError('');
+    if (playgroundActive) changePhase('verification');
     try {
       if (!identity || request.publicKey.toLowerCase() !== identity.publicKey.toLowerCase()) throw new Error(t('signerMismatch'));
       const pocket = browserMode ? request.journalScope || requireBrowserPocket() : undefined;
       const { Transaction } = await import('@ckb-ccc/connector');
       const approvedHash = Transaction.fromBytes(request.transaction).hash();
-      if (pocket) await validateBeforeSigning(pocket, request);
-      const signed = await wallet.sign(request.transaction, request.publicKey);
+      if (pocket) await boundedPlaygroundStep(validateBeforeSigning(pocket, request), playgroundActive);
+      let signingActive = true;
+      let signed: string;
+      try { signed = await boundedPlaygroundStep(wallet.sign(request.transaction, request.publicKey, playgroundActive ? () => { if (signingActive) changePhase('signing'); } : undefined), playgroundActive); }
+      finally { signingActive = false; }
       const hash = Transaction.fromBytes(signed).hash();
       if (pocket) {
         if (approvedHash !== hash) throw new Error('Wallet altered transaction');
@@ -901,7 +928,7 @@ function App() {
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       setOperationError(localizedError(message, t));
-    } finally { setWorking(false); }
+    } finally { setWorking(false); if (playgroundActive) changePhase(null); }
   };
 
   const discardPending = async () => {
@@ -1187,7 +1214,7 @@ function App() {
 
     {state && !state.empty && !state.discovery && !state.connectRequired && !showPocketList && !selectedPocketLoading && !selectedPocketError && (!browserMode || identity) && <footer className="app-footer mx-auto flex w-[min(100%-2rem,64rem)] flex-col justify-between gap-2 pb-6 text-[11px] text-slate-500 sm:flex-row sm:gap-5"><span className="max-w-2xl">{t(browserMode ? 'browserDisclosure' : 'localDisclosure')}</span></footer>}
 
-    {state && <OperationDialog intent={intent} prepared={prepared} pendingSigned={pendingSigned} state={state} identity={identity} delegates={delegates} history={history} recipientAddresses={recipientAddresses} working={working} error={operationError} resumePayment={resumePayment} onPrepare={prepareOperation} onCancelPreparation={cancelPaymentPreparation} onSign={signPrepared} onSubmitSigned={({ transaction, hash }) => submitSigned(transaction, hash)} onDiscardSigned={discardPending} canSubmitSigned={!pudgeActionsDisabled} onConnectSigner={connectExpectedSigner} onClose={closeDialog}/>}
+    {state && <OperationDialog intent={intent} prepared={prepared} pendingSigned={pendingSigned} state={state} identity={identity} delegates={delegates} history={history} recipientAddresses={recipientAddresses} working={working} playgroundActive={playgroundActive} operationPhase={operationPhase} error={operationError} resumePayment={resumePayment} onPrepare={prepareOperation} onCancelPreparation={cancelPaymentPreparation} onSign={signPrepared} onSubmitSigned={({ transaction, hash }) => submitSigned(transaction, hash)} onDiscardSigned={discardPending} canSubmitSigned={!pudgeActionsDisabled} onConnectSigner={connectExpectedSigner} onClose={closeDialog}/>}
     {editPerson && <EditParticipantDialog participant={editPerson} initial={metadata[editPerson.publicKey]} onClose={() => setEditPerson(null)} onSave={saveName} t={t}/>}
 
     <AlertDialog.Root open={retryDialogOpen} onOpenChange={(open) => { if (!retryBusy) setRetryDialogOpen(open); }}>

@@ -3,7 +3,7 @@ import * as c from '@ckb-ccc/core';
 /** Sign a reviewed transaction with the testnet identity without changing its
  * QCN4 action witness. The caller must perform the normal live-input and role
  * checks before signing and again before submission. */
-export async function signPreparedPlaygroundTransaction(signer:c.SignerCkbPrivateKey, transactionHex:string, expectedPublicKey:string) {
+export async function signPreparedPlaygroundTransaction(signer:c.SignerCkbPrivateKey, transactionHex:string, expectedPublicKey:string, onSigning?:()=>void) {
   const genesis=await signer.client.getBlockByNumber(0);
   if(genesis?.header.hash?.toLowerCase()!=='0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606') throw new Error('Playground signing requires Pudge.');
   if(signer.publicKey.toLowerCase()!==expectedPublicKey.toLowerCase()) throw new Error('Prepared identity does not match the required role.');
@@ -11,6 +11,7 @@ export async function signPreparedPlaygroundTransaction(signer:c.SignerCkbPrivat
   const address=await signer.getRecommendedAddressObj();
   const info=await prepared.getSignHashInfo(address.script,signer.client);
   if(!info) throw new Error('The prepared transaction does not contain the expected signer.');
+  onSigning?.();
   const signed=await signer.signOnlyTransaction(c.Transaction.fromBytes(prepared.toBytes()));
   const expected=c.Transaction.fromBytes(prepared.toBytes());
   const witness=signed.getWitnessArgs(info.position);

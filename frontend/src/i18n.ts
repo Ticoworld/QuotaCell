@@ -3,6 +3,7 @@ import { initReactI18next } from 'react-i18next';
 
 const resources = {
   en: { translation: {
+    playgroundVerifying: 'Verifying transaction…', playgroundSigning: 'Signing with test account…', playgroundSubmitting: 'Submitting transaction…', playgroundConfirming: 'Checking transaction status…',
     playgroundRestore: 'To restore test access after a refresh, return to your Trycove tab and select Resume access. Check the transaction status before attempting another payment.',
     playgroundRestoreFailed: 'Access could not be restored. Return to your Trycove tab and select Resume access.',
     sharePocketLink: 'Copy Pocket access link', sendResponseToOwner: 'Send the response link to the Pocket owner.',
@@ -72,6 +73,7 @@ const resources = {
     reconnect: 'Reconnect wallet', connectAllPeopleError: 'Connect the owner and both delegates before continuing.', differentRecipientsError: 'Each delegate needs a different approved recipient.', recipientMustBeDifferentError: 'Approved recipients must differ from the owner and delegate wallets.', paymentEffect: 'This payment reduces the delegate’s remaining limit and the shared allowance.', depositConsequences: 'Adding funds increases protected balance. It does not restore spent spending authority.', sweepConsequences: 'Only supported late deposits are sent to the owner. Unsupported Cells remain on chain.', standardRecipientError: 'Enter a standard CKB testnet address for the approved recipient.',
   } },
   'zh-Hans': { translation: {
+    playgroundVerifying: '正在验证交易…', playgroundSigning: '正在使用测试账户签名…', playgroundSubmitting: '正在提交交易…', playgroundConfirming: '正在查询交易状态…',
     playgroundRestore: '刷新后如需恢复测试访问，请返回 Trycove 标签页并选择恢复访问。再次付款前请先检查交易状态。',
     playgroundRestoreFailed: '无法恢复访问。请返回 Trycove 标签页并选择恢复访问。',
     sharePocketLink: '复制 Pocket 访问链接', sendResponseToOwner: '将响应链接发给 Pocket 所有者。',

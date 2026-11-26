@@ -19,6 +19,8 @@ test('reloaded signed intents require fresh exact-hash consent and uncertain int
     assert.equal(readBrowserIntent(pocket, publicKey).hash, hash);
     await assert.rejects(submitBrowserPayment(pocket, id, 'fixture bytes'), /Broadcast approval required/);
     const verifySigner = async () => publicKey;
+    const controller = new AbortController(); controller.abort();
+    await assert.rejects(submitBrowserPayment(pocket, id, 'fixture bytes', {hash, publicKey, verifySigner, signal:controller.signal}), /abort/i);
     await assert.rejects(submitBrowserPayment(pocket, id, 'fixture bytes', { hash: 'wrong hash', publicKey, verifySigner }), /Broadcast approval required/);
     await assert.rejects(submitBrowserPayment(pocket, id, 'fixture bytes', { hash, publicKey: 'wrong signer', verifySigner }), /Broadcast approval required/);
     await assert.rejects(submitBrowserPayment(pocket, id, 'different bytes', { hash, publicKey, verifySigner }), /Unknown or expired/);

@@ -538,7 +538,7 @@ async function validatePaymentInputs(pocket: string, tx: c.Transaction, entry: E
   requireCondition(fee > 0n && fee <= 1000000n && fee === BigInt(entry.prepared.fee), 'Transaction fee is outside policy bounds');
 }
 
-export type BroadcastConsent = { hash: string; publicKey: string; verifySigner: () => Promise<string> };
+export type BroadcastConsent = { hash: string; publicKey: string; verifySigner: () => Promise<string>; onPhase?: (phase: 'verification' | 'submission') => void; signal?: AbortSignal };
 
 export function validateBeforeSigning(pocket: string, request: PreparedTransaction) {
   return locked(pocket, async () => {
@@ -581,14 +581,17 @@ export function submitBrowserPayment(pocket: string, id: string, bytes: string, 
     requireCondition(entry?.signed === bytes, 'Unknown or expired signing request');
     if (entry.state !== 'signed') return { txHash: entry.hash, state: entry.state };
     requireCondition(consent?.hash === entry.hash && consent.publicKey.toLowerCase() === entry.payment.publicKey, 'Broadcast approval required');
+    consent.signal?.throwIfAborted();
     checkReservations(journal, entry);
     const signed = verifiedSignature(entry, bytes);
     const raw = rpcFormat.transactionFrom(signed);
     try {
+      consent.onPhase?.('verification');
       await validatePaymentInputs(pocket, signed, entry);
       await httpRpc('dry_run_transaction', [raw]);
       await httpRpc('test_tx_pool_accept', [raw]);
       requireCondition((await consent.verifySigner()).toLowerCase() === entry.payment.publicKey, 'Connected account changed');
+      consent.signal?.throwIfAborted();
     } catch (cause) {
       if (String(cause).includes('Input is stale')) { entry.state = 'conflict'; save(pocket, journal); }
       return { txHash: entry.hash, state: 'error', notSent: true, phase: 'input-fee-check', error: String(cause) };
@@ -596,6 +599,7 @@ export function submitBrowserPayment(pocket: string, id: string, bytes: string, 
     entry.state = 'uncertain';
     save(pocket, journal);
     try {
+      consent.onPhase?.('submission');
       const hash = await httpRpc('send_transaction', [raw]);
       requireCondition(hash === entry.hash, 'RPC returned a different transaction hash');
       return { txHash: entry.hash, state: 'submitted' };
