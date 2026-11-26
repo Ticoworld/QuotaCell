@@ -1,5 +1,37 @@
 # Build and test
 
+This section separates current native application checks from historical synthetic xUDT reproduction. Current frontend and engine checks do not replay the November 15 or November 20 public lifecycles.
+
+## Current native CKB application checks
+
+From `frontend/`, use the installed lockfile dependencies:
+
+```powershell
+npm run build
+```
+
+Focused browser Pudge, payment construction, signing and recovery regressions from the repository root:
+
+```powershell
+node --experimental-strip-types --test frontend/src/browserPudge.test.mjs frontend/src/paymentIntent.test.mjs examples/local-chain/pocket_payment_test.mjs examples/local-chain/pocket_signing_test.mjs examples/local-chain/pocket_creation_recovery_test.mjs examples/local-chain/wo15d_public_tx_test.mjs
+```
+
+Local engine and isolated supervisor regressions:
+
+```powershell
+node --experimental-strip-types --test examples/local-chain/pocket_payment_test.mjs examples/local-chain/pocket_signing_test.mjs examples/local-chain/pocket_creation_recovery_test.mjs examples/local-chain/working_pocket_supervisor_engine_integration_test.mjs examples/local-chain/pocket_supervisor_isolation_test.mjs examples/local-chain/pocket_indexed_discovery_retry_test.mjs examples/local-chain/wo15d_public_tx_test.mjs
+```
+
+These run disposable/local tests; they do not launch a public testnet lifecycle.
+
+## Pudge public-only runtime
+
+The hosted Netlify build sets `VITE_QUOTACELL_BROWSER=1`; `frontend/src/api.ts` dispatches to the browser Pudge implementation. For a local read-only inspection, use the existing Pudge public runtime setup documented in the current-state [`PROJECT_HANDOFF.md`](../PROJECT_HANDOFF.md) and [`PUBLIC_BETA.md`](PUBLIC_BETA.md). Keep transaction preparation/signing/broadcast disabled for public-only inspection; do not point a test at a preserved historical runtime or its credentials. Public-only checks must not broadcast transactions.
+
+## Historical synthetic xUDT reproduction
+
+The commands below apply to the separate October 2026 xUDT prototype and its saved local evidence, not the current native Pocket application.
+
 Run these commands from the checkout root. Python 3 is sufficient for offline checks; the signature check needs the locked npm dependencies. Windows/PowerShell is the executed path. Existing toolchains may be reused; there is no requirement to install duplicate toolchains or do a large fresh build for source review.
 
 ## Offline historical checks

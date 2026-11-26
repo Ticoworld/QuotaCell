@@ -1,6 +1,6 @@
 # QuotaCell
 
-QuotaCell is an experimental CKB spending policy for a shared Pocket: an owner sets a shared cumulative allowance and individual limits for two delegates, with approved recipients. This addresses the risk of separate wallets spending beyond a common budget. The CKB contract enforces the policy; deposits do not reset spent authority. The owner retains shared administrative authority while delegates have bounded, individual spending authority.
+QuotaCell is experimental CKB-native shared spending infrastructure with a public Pudge wallet application. It addresses the risk of separate wallets spending beyond a common budget: an owner sets a shared cumulative allowance and individual limits for two delegates, with approved recipients. The CKB contract enforces the policy; deposits do not reset spent authority. The owner retains shared administrative authority while delegates have bounded, individual spending authority.
 
 ## Verified public Pudge Pocket
 
@@ -12,7 +12,7 @@ See the [WO18 public closeout and transaction evidence](examples/local-chain/WO1
 
 ## Current application
 
-The public Pudge beta supports native QCN4/QCT4 Pocket lookup and role based owner/delegate workflows. The live wallet and static viewer are available at the links below. The tested public lifecycle is documented evidence, not evidence that every hosted action or every wallet configuration is qualified. Agent integration, multiple wallet/network profiles, and mainnet readiness are not delivered capabilities.
+The public Pudge beta provides human-wallet Pocket discovery and owner/delegate workflows, including creation, funding, payments and lifecycle management through compatible Pudge wallets. The hosted browser can prepare, validate, submit and reconcile operations while wallet signing remains with the user. Agent/headless integration and multiple wallet/network profiles are planned, not delivered; mainnet readiness is not claimed.
 
 ## Build and inspect
 
@@ -25,7 +25,7 @@ The public Pudge beta supports native QCN4/QCT4 Pocket lookup and role based own
 
 ## Limits
 
-The interface remains developer-grade. Public lifecycle acceptance used one configured Pudge RPC endpoint; it is not an independent multi-provider audit or a security audit. The verified public lifecycle used UTXO Global Wallet. Reorganization handling, multi-fund consolidation, independent recovery, and descriptor-free cross-device Pocket operation remain limited. The owner key is required for owner recovery and its loss can strand funds. The public evidence records nine transactions, not broad production adoption.
+Public lifecycle evidence used a configured Pudge RPC endpoint; it is not an independent multi-provider audit or a security audit. The documented November 15 lifecycle used UTXO Global Wallet. Reorganization handling, multi-fund consolidation, independent recovery, and descriptor-free cross-device Pocket operation remain limited. The owner key is required for owner recovery and its loss can strand funds. The November 15 record documents nine transactions, with a separate November 20 real-wallet lifecycle reported in the community progress update.
 
 QuotaCell is licensed under [Apache-2.0](LICENSE), Copyright 2026 Ticoworld. Upstream components retain their own terms; see [third-party notices](THIRD_PARTY_NOTICES.md).
 

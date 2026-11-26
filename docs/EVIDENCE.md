@@ -1,5 +1,14 @@
 # Evidence and verification scope
 
+## Current native QCN4/QCT4 evidence (November 2026)
+
+- **Repository-recorded canonical evidence:** [WO18 public closeout](../examples/local-chain/WO18_PUBLIC_CLOSEOUT_20261115.md) records nine committed canonical Pudge transactions, with transaction/block identities, capacity accounting and verification scope. [Pudge deployment manifest](../evidence/wo15/pudge-deployment.json) records deployment identities. This audit used one configured RPC endpoint and is not independent security qualification.
+- **First-party browser observation/report:** the [November 20 Nervos Talk progress report](https://talk.nervos.org/t/quotacell-let-your-team-spend-without-handing-over-the-treasury/11002/23) describes a separate real-wallet hosted lifecycle, including payments, permission changes and closure. It reports 78 CKB returned funds and 466 CKB released policy capacity. The post is a first-party report, not a repository-preserved canonical audit bundle.
+- **Independent community feedback:** feedback in the Nervos Talk discussion is external review and product feedback, not transaction verification or a security audit.
+- **Independent security qualification:** none is claimed. No independent security audit or adversarial qualification has been completed.
+
+The November 15 and November 20 runs are separate testnet lifecycles. Historical xUDT evidence below is for a separate profile and must not be conflated with native QCN4/QCT4 evidence. Preserve all historical records as-is.
+
 **October 30 addition:** [owner-control evidence](../evidence/owner-control-2026-10-30/README.md)
 contains a separate actual signed local-node revocation, disabled-delegate
 rejection, closure/recovery and late sweep. Its [reproduction guide](../evidence/owner-control-2026-10-30/REPRODUCE.md)
