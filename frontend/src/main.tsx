@@ -163,7 +163,7 @@ function App() {
         setIdentity(connected);setPlaygroundActive(true);setIdentityError('');
         window.history.replaceState(null,'',`${window.location.pathname}?${new URLSearchParams({pocket:data.pocket})}`);
         setSelectedPocketId(data.pocket.toLowerCase());
-      } catch {setIdentityError('Access could not be restored. Return to your Trycove tab and select Resume access.');}
+      } catch {setIdentityError(t('playgroundRestoreFailed'));}
     };
     window.addEventListener('message',receive);window.opener.postMessage({type:'trycove-playground-ready',version:1},origin);
     return()=>window.removeEventListener('message',receive);
@@ -1100,7 +1100,7 @@ function App() {
 
     <Toaster position="top-right" theme="light" richColors closeButton visibleToasts={3} offset={72} toastOptions={{ className: 'quotacell-toast', duration: 5000 }}/>
 
-    {import.meta.env.DEV && import.meta.env.VITE_QUOTACELL_PLAYGROUND==='1' && !playgroundActive && <p className="mx-auto mt-4 w-[min(calc(100%-2rem),64rem)]">To restore test access after a refresh, return to your Trycove tab and select Resume access. Check the transaction status before attempting another payment.</p>}
+    {import.meta.env.DEV && import.meta.env.VITE_QUOTACELL_PLAYGROUND==='1' && !playgroundActive && <p className="mx-auto mt-4 w-[min(calc(100%-2rem),64rem)]">{t('playgroundRestore')}</p>}
     {identityError && <div className="wallet-connection-alert inline-alert mx-auto mt-4 w-[min(calc(100%-2rem),64rem)] rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm leading-5 text-red-800" role="alert">{identityError}</div>}
     {stateStale && !selectedPocketError && !showPocketList && <div className="stale-banner mx-auto mt-3 w-[min(calc(100%-2rem),64rem)] rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-5 text-amber-900" role="status"><span>{t(waitingForIndex ? 'confirmedIndexing' : 'stateRefreshPaused')}</span><button className="secondary-button" disabled={refreshing} onClick={() => void refresh()}>{t('retry')}</button></div>}
     {(showCreation || browserMode && !selectedPocketId) && transactionNotice && <TransactionNoticePanel notice={transactionNotice} title={noticeTitle} pudge={pudge} explorerUrl={explorerUrl} t={t} className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)]" onCheckStatus={() => void checkNoticeStatus()} checkingStatus={noticeCheckBusy}/>}
