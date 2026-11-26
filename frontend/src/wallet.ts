@@ -54,6 +54,8 @@ export function hasUtxoGlobalCkbProvider(value: unknown) {
 }
 
 export class CkbWalletSession {
+  private playgroundSigner?: import('@ckb-ccc/core').SignerCkbPrivateKey;
+  private playgroundExpiresAt=0;
   private state: ConnectorState | undefined;
   private signer: Signer | undefined;
   private walletName = '';
@@ -64,7 +66,7 @@ export class CkbWalletSession {
   private connectionEpoch = 0;
   private restoreInFlight?: Promise<WalletIdentity | null>;
 
-  get hasSigner() { return Boolean(this.signer); }
+  get hasSigner() { return Boolean(this.signer || this.playgroundSigner); }
   get connectorReady() { return Boolean(this.state?.ready); }
 
   private connector() {
@@ -182,12 +184,18 @@ export class CkbWalletSession {
   }
 
   async identity(): Promise<WalletIdentity> {
+    if(this.playgroundSigner) {if(Date.now()>=this.playgroundExpiresAt)throw new Error('Playground access expired.'); return {publicKey:this.playgroundSigner.publicKey,address:await this.playgroundSigner.getRecommendedAddress()};}
     const signer = this.signer;
     if (!signer) throw new Error('Wallet disconnected. Connect again to continue.');
     return this.validateSigner(signer, this.walletName);
   }
 
   async sign(transactionHex: string, expectedPublicKey: string): Promise<string> {
+    if(this.playgroundSigner) {
+      await this.identity();
+      const {signPreparedPlaygroundTransaction}=await import('./playground-signing');
+      return signPreparedPlaygroundTransaction(this.playgroundSigner,transactionHex,expectedPublicKey);
+    }
     const connector = await this.connector();
     const before = await this.identity();
     if (before.publicKey.toLowerCase() !== expectedPublicKey.toLowerCase()) throw new Error('Connected wallet does not match the required Pocket role.');
@@ -206,6 +214,8 @@ export class CkbWalletSession {
   }
 
   disconnect() {
+    this.playgroundSigner=undefined;
+    this.playgroundExpiresAt=0;
     this.explicitDisconnect = true;
     this.connectionEpoch += 1;
     this.signerReplacementCleanup?.();
@@ -214,6 +224,17 @@ export class CkbWalletSession {
     this.walletName = '';
     this.emit();
     void this.state?.disconnect();
+  }
+
+  async activatePlayground(privateKey:string,expiresAt:string) {
+    if(!import.meta.env.DEV || import.meta.env.VITE_QUOTACELL_PLAYGROUND!=='1') throw new Error('Playground mode is unavailable.');
+    const c=await import('@ckb-ccc/core');
+    const signer=new c.SignerCkbPrivateKey(new c.ClientPublicTestnet({url:'https://testnet.ckb.dev/',fallbacks:[]}),privateKey);
+    const genesis=await signer.client.getBlockByNumber(0);
+    if(genesis?.header.hash?.toLowerCase()!==PUDGE_GENESIS)throw new Error('Playground requires Pudge.');
+    const expiry=Date.parse(expiresAt);if(!Number.isFinite(expiry)||expiry<=Date.now())throw new Error('Playground access expired.');
+    this.disconnect();this.playgroundSigner=signer;this.playgroundExpiresAt=expiry;
+    return this.identity();
   }
 }
 

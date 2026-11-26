@@ -102,6 +102,7 @@ function App() {
   const [stateActor, setStateActor] = useState<string | null>(null);
   const stateActorRef = useRef<string | null>(null);
   const [identity, setIdentity] = useState<WalletIdentity | null>(null);
+  const [playgroundActive,setPlaygroundActive] = useState(false);
   const readController = useRef<AbortController>();
   const refreshScope = useRef({ actor: identity?.publicKey.toLowerCase() ?? null, generation: 0 });
   useLayoutEffect(() => {
@@ -143,6 +144,30 @@ function App() {
   const [noticeCheckBusy, setNoticeCheckBusy] = useState(false);
   const [retryBusy, setRetryBusy] = useState(false);
   const [retryDialogOpen, setRetryDialogOpen] = useState(false);
+
+  useEffect(()=>{
+    if(!import.meta.env.DEV || import.meta.env.VITE_QUOTACELL_PLAYGROUND!=='1' || !window.opener)return;
+    const origin=import.meta.env.VITE_TRYCOVE_PLAYGROUND_ORIGIN;
+    if(typeof origin!=='string'||!/^http:\/\/127\.0\.0\.1:\d+$/.test(origin))return;
+    let accepted=false;
+    const receive=async(event:MessageEvent)=>{
+      if(accepted || event.source!==window.opener || event.origin!==origin || event.data?.type!=='trycove-playground-handoff' || typeof event.data.token!=='string')return;
+      accepted=true;
+      try {
+        const response=await fetch('/__playground/redeem',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:event.data.token}),cache:'no-store'});
+        if(!response.ok)throw new Error('Playground handoff is unavailable.');
+        const data=await response.json();
+        if(typeof data.privateKey!=='string'||typeof data.expiresAt!=='string'||!/^0x[0-9a-f]{64}$/i.test(data.pocket))throw new Error('Playground handoff is invalid.');
+        const connected=await wallet.activatePlayground(data.privateKey,data.expiresAt);
+        data.privateKey='';
+        setIdentity(connected);setPlaygroundActive(true);setIdentityError('');
+        window.history.replaceState(null,'',`${window.location.pathname}?${new URLSearchParams({pocket:data.pocket})}`);
+        setSelectedPocketId(data.pocket.toLowerCase());
+      } catch {setIdentityError('The Playground handoff could not be verified.');}
+    };
+    window.addEventListener('message',receive);window.opener.postMessage({type:'quotacell-playground-ready'},origin);
+    return()=>window.removeEventListener('message',receive);
+  },[]);
 
   const refresh = useCallback(async (quiet = false) => {
     const actor = identity?.publicKey.toLowerCase() ?? null;
@@ -1064,12 +1089,12 @@ function App() {
   ) : null;
 
   return <>
-    <header className="topbar sticky top-0 z-40 flex h-16 w-full items-center justify-between gap-3 border-b border-line bg-white/95 backdrop-blur"><a className="brand inline-flex shrink-0 items-center gap-2.5 text-lg font-bold text-navy no-underline" href="#home" aria-label={t('brand')}><img src={brandLogo} width="27" height="25" alt=""/><span>{t('brand')}</span></a>
+    <header className="topbar sticky top-0 z-40 flex h-16 w-full items-center justify-between gap-3 border-b border-line bg-white/95 backdrop-blur"><a className="brand inline-flex shrink-0 items-center gap-2.5 text-lg font-bold text-navy no-underline" href="#home" aria-label={t('brand')}><img src={brandLogo} width="27" height="25" alt=""/><span>{t('brand')}</span></a>{playgroundActive&&<strong>Playground · Pudge test identity</strong>}
       <div className="topbar-controls flex min-w-0 items-center justify-end gap-1.5 sm:gap-3">
         {state && <div className={`network-state ${pudgeActionsDisabled ? 'is-readonly' : ''}`} role="status" aria-label={`${pudge ? t('networkPudge') : t('networkLocal')}${pudgeReadOnly ? ` · ${t('readOnly')}` : pudgePrepareOnly ? ` · ${t('prepareOnly')}` : ''}`}><i aria-hidden="true"/><span className="network-full" aria-hidden="true">{pudge ? t('networkPudge') : t('networkLocal')}</span><span className="network-compact" aria-hidden="true">{pudge ? t('networkPudgeShort') : t('networkLocalShort')}</span>{pudgeReadOnly && <small>{t('readOnly')}</small>}{pudgePrepareOnly && <small>{t('prepareOnly')}</small>}</div>}
         <label className="language-control"><span className="sr-only">{t('language')}</span><select value={i18n.language === 'zh-Hans' ? 'zh-Hans' : 'en'} onChange={(event) => void i18n.changeLanguage(event.target.value)} aria-label={t('language')}><option value="en">EN</option><option value="zh-Hans">简</option></select></label>
         <button className="icon-button refresh-button" type="button" onClick={() => selectedPocketId ? void loadSelectedPocket(selectedPocketId) : void refresh()} disabled={refreshing || selectedPocketLoading} aria-label={refreshing || selectedPocketLoading ? t('refreshing') : t('refresh')} title={t('refresh')}>{refreshing || selectedPocketLoading ? '…' : '↻'}</button>
-        {identity ? <div className="connected-account"><div><strong>{displayIdentityRole || t('connected')}</strong><code dir="ltr">{shortHash(identity.address, 12, 7)}</code></div><button className="text-button disconnect-button" onClick={() => { wallet.disconnect(); setIdentity(null); setIdentityError(''); }} type="button">×</button></div> : !(browserMode && !selectedPocketId) && <button className="connect-button" type="button" disabled={walletBusy} onClick={() => void connectWallet()}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button>}
+        {identity ? <div className="connected-account"><div><strong>{displayIdentityRole || t('connected')}</strong><code dir="ltr">{shortHash(identity.address, 12, 7)}</code></div><button className="text-button disconnect-button" onClick={() => { wallet.disconnect(); setPlaygroundActive(false); setIdentity(null); setIdentityError(''); }} type="button">×</button></div> : !(browserMode && !selectedPocketId) && <button className="connect-button" type="button" disabled={walletBusy} onClick={() => void connectWallet()}>{walletBusy ? t('connectingWallet') : t('disconnected')}</button>}
       </div>
     </header>
 
