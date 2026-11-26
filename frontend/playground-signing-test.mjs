@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import {randomBytes} from 'node:crypto';
+import * as c from '@ckb-ccc/core';
+import {signPreparedPlaygroundTransaction} from './src/playground-signing.ts';
+
+const client=new c.ClientPublicTestnet({url:'http://127.0.0.1:1',fallbacks:[]});
+client.getBlockByNumber=async()=>({header:{hash:'0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606'}});
+const signer=new c.SignerCkbPrivateKey(client,randomBytes(32));
+const address=await signer.getRecommendedAddressObj();
+const outPoint={txHash:'0x'+'11'.repeat(32),index:0};
+await client.cache.recordCells([{outPoint,cellOutput:{capacity:10000000000n,lock:address.script},outputData:'0x'}]);
+const tx=c.Transaction.from({inputs:[{previousOutput:outPoint,since:0}],outputs:[{capacity:9999990000n,lock:address.script}],outputsData:['0x'],witnesses:['0x']});
+tx.setWitnessArgs(0,{lock:'0x'+'00'.repeat(65),inputType:'0x5143413101000000'});
+const signed=c.Transaction.fromBytes(await signPreparedPlaygroundTransaction(signer,tx.toHex(),signer.publicKey));
+assert.equal(signed.hash(),tx.hash());
+assert.equal(signed.getWitnessArgs(0).inputType,tx.getWitnessArgs(0).inputType);
+await assert.rejects(()=>signPreparedPlaygroundTransaction(signer,tx.toHex(),'0x02'+'00'.repeat(32)),/required role/);
+client.getBlockByNumber=async()=>({header:{hash:'0x'+'00'.repeat(32)}});
+await assert.rejects(()=>signPreparedPlaygroundTransaction(signer,tx.toHex(),signer.publicKey),/requires Pudge/);
+console.log('PASS: native signer preserves QCN4 action witness and rejects a different actor. Offline fixture only.');
