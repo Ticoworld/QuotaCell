@@ -1,0 +1,15 @@
+[build]
+  command = "npm ci && npm run build -- --base=/"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "22"
+  VITE_QUOTACELL_BROWSER = "1"
+  VITE_QUOTACELL_PLAYGROUND = "1"
+  VITE_TRYCOVE_PLAYGROUND_ORIGIN = "https://trycove-pg03b-isolated.netlify.app"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

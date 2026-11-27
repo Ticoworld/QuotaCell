@@ -161,9 +161,9 @@ function App() {
   const [retryDialogOpen, setRetryDialogOpen] = useState(false);
 
   useEffect(()=>{
-    if(!import.meta.env.DEV || import.meta.env.VITE_QUOTACELL_PLAYGROUND!=='1' || !window.opener)return;
+    if(import.meta.env.VITE_QUOTACELL_PLAYGROUND!=='1' || !window.opener)return;
     const origin=import.meta.env.VITE_TRYCOVE_PLAYGROUND_ORIGIN;
-    if(typeof origin!=='string'||!/^http:\/\/127\.0\.0\.1:\d+$/.test(origin))return;
+    if(typeof origin!=='string'||!((origin.startsWith('https://') && new URL(origin).origin===origin) || (import.meta.env.DEV && /^http:\/\/127\.0\.0\.1:\d+$/.test(origin))))return;
     let accepted=false;
     const receive=async(event:MessageEvent)=>{
       if(accepted || event.source!==window.opener || event.origin!==origin || event.data?.type!=='trycove-playground-handoff' || typeof event.data.token!=='string')return;
@@ -1127,7 +1127,7 @@ function App() {
 
     <Toaster position="top-right" theme="light" richColors closeButton visibleToasts={3} offset={72} toastOptions={{ className: 'quotacell-toast', duration: 5000 }}/>
 
-    {import.meta.env.DEV && import.meta.env.VITE_QUOTACELL_PLAYGROUND==='1' && !playgroundActive && <p className="mx-auto mt-4 w-[min(calc(100%-2rem),64rem)]">{t('playgroundRestore')}</p>}
+    {import.meta.env.VITE_QUOTACELL_PLAYGROUND==='1' && !playgroundActive && <p className="mx-auto mt-4 w-[min(calc(100%-2rem),64rem)]">{t('playgroundRestore')}</p>}
     {identityError && <div className="wallet-connection-alert inline-alert mx-auto mt-4 w-[min(calc(100%-2rem),64rem)] rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm leading-5 text-red-800" role="alert">{identityError}</div>}
     {stateStale && !selectedPocketError && !showPocketList && <div className="stale-banner mx-auto mt-3 w-[min(calc(100%-2rem),64rem)] rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-5 text-amber-900" role="status"><span>{t(waitingForIndex ? 'confirmedIndexing' : 'stateRefreshPaused')}</span><button className="secondary-button" disabled={refreshing} onClick={() => void refresh()}>{t('retry')}</button></div>}
     {(showCreation || browserMode && !selectedPocketId) && transactionNotice && <TransactionNoticePanel notice={transactionNotice} title={noticeTitle} pudge={pudge} explorerUrl={explorerUrl} t={t} className="mx-auto mt-3 w-[min(calc(100%-2rem),64rem)]" onCheckStatus={() => void checkNoticeStatus()} checkingStatus={noticeCheckBusy}/>}

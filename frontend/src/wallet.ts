@@ -227,7 +227,7 @@ export class CkbWalletSession {
   }
 
   async activatePlayground(privateKey:string,expiresAt:string) {
-    if(!import.meta.env.DEV || import.meta.env.VITE_QUOTACELL_PLAYGROUND!=='1') throw new Error('Playground mode is unavailable.');
+    if(import.meta.env.VITE_QUOTACELL_PLAYGROUND!=='1') throw new Error('Playground mode is unavailable.');
     const c=await import('@ckb-ccc/core');
     const signer=new c.SignerCkbPrivateKey(new c.ClientPublicTestnet({url:'https://testnet.ckb.dev/',fallbacks:[]}),privateKey);
     const genesis=await signer.client.getBlockByNumber(0);
