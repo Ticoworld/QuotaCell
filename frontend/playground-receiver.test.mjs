@@ -1,6 +1,32 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import handler from './netlify/functions/playground-redeem.mjs';
+import {createHandler} from './netlify/functions/playground-redeem.mjs';
+import {createHandler as createReadiness} from './netlify/functions/playground-readiness.mjs';
+import {importInventory} from './netlify/inventory-import.mjs';
+import {inventoryStore} from './netlify/playground-inventory.mjs';
+const handler=createHandler(async()=>null);
+test('inventory import retries are idempotent and conflicting writes are rejected',async()=>{
+ const values=new Map();
+ const store={setJSON:async(id,value,options)=>{assert.equal(options.onlyIfNew,true);if(values.has(id))return {modified:false};values.set(id,value);return {modified:true}},get:async(id,options)=>{assert.equal(options.consistency,'strong');return values.get(id)}};
+ const identity={key:'0x'+'a'.repeat(64),pocket:'0x'+'b'.repeat(64)};
+ await importInventory({fixture:identity},store);await importInventory({fixture:identity},store);
+ await assert.rejects(importInventory({fixture:{...identity,pocket:'0x'+'c'.repeat(64)}},store));
+ assert.deepEqual(values.get('fixture'),identity);
+});
+test('preview and unrelated deployments cannot open the inventory store',()=>{
+ process.env.QUOTACELL_PLAYGROUND_ORIGIN='https://play.example';
+ for(const context of [undefined,{deploy:{context:'deploy-preview',published:false},site:{id:'9c6caa64-65d2-492f-bc6c-15edf1357ac2',url:'https://play.example'}},{deploy:{context:'production',published:true},site:{id:'other',url:'https://play.example'}}])assert.throws(()=>inventoryStore(context));
+});
+test('readiness is authenticated and bound to application and resource',async()=>{
+ process.env.QUOTACELL_PLAYGROUND_SECRET='x'.repeat(40);process.env.QUOTACELL_PLAYGROUND_APPLICATION_ID='fixture';
+ const readiness=createReadiness(async id=>id==='present'?{key:'secret'}:null);
+ const request=(auth,applicationId,resourceId)=>new Request('https://play.example/__playground/readiness',{method:'POST',headers:{authorization:`Bearer ${auth}`,'content-type':'application/json'},body:JSON.stringify({applicationId,resourceId})});
+ for(const args of [['wrong','fixture','present'],['x'.repeat(40),'other','present'],['x'.repeat(40),'fixture','missing']])assert.equal((await readiness(request(...args))).status,404);
+ const response=await readiness(request('x'.repeat(40),'fixture','present'));
+ assert.deepEqual(await response.json(),{applicationId:'fixture',resourceId:'present',ready:true});
+ process.env.QUOTACELL_PLAYGROUND_IDENTITIES=JSON.stringify({present:{key:'different',pocket:'different'}});
+ try{assert.equal((await readiness(request('x'.repeat(40),'fixture','present'))).status,404);}finally{delete process.env.QUOTACELL_PLAYGROUND_IDENTITIES;}
+});
 test('rejects untrusted origins and invalid tokens without contacting issuer', async()=>{
  process.env.QUOTACELL_PLAYGROUND_ORIGIN='https://play.example';process.env.QUOTACELL_PLAYGROUND_ISSUER='https://issuer.example';process.env.QUOTACELL_PLAYGROUND_SECRET='x'.repeat(40);process.env.QUOTACELL_PLAYGROUND_APPLICATION_ID='fixture';
  const old=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error('unexpected')};

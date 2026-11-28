@@ -1,5 +1,6 @@
+import {readIdentity} from '../playground-inventory.mjs';
 // Server-side receiver for the separate Playground site. No credentials are logged.
-export default async function handler(request) {
+export function createHandler(read=readIdentity) { return async function handler(request,context) {
  const headers={'Cache-Control':'no-store','Content-Type':'application/json'};
  const fail=()=>new Response('{}',{status:404,headers});
  try {
@@ -15,12 +16,16 @@ export default async function handler(request) {
   if(!response.ok)return fail();
   const allocation=await response.json();
   const identities=JSON.parse(process.env.QUOTACELL_PLAYGROUND_IDENTITIES || '{}');
-  const inventory=JSON.parse(process.env.QUOTACELL_PLAYGROUND_IDENTITY_INVENTORY || '{}');
-  if(!identities || typeof identities!=='object' || Array.isArray(identities) || !inventory || typeof inventory!=='object' || Array.isArray(inventory))return fail();
-  if(Object.keys(inventory).some(resourceId=>Object.hasOwn(identities,resourceId)))return fail();
-  const identity=inventory[allocation.resourceId] ?? identities[allocation.resourceId];
+  const legacyInventory=JSON.parse(process.env.QUOTACELL_PLAYGROUND_IDENTITY_INVENTORY || '{}');
+  if(!identities || typeof identities!=='object' || Array.isArray(identities) || !legacyInventory || typeof legacyInventory!=='object' || Array.isArray(legacyInventory))return fail();
+  if(Object.hasOwn(identities,allocation.resourceId) && Object.hasOwn(legacyInventory,allocation.resourceId))return fail();
+  const stored=await read(allocation.resourceId,context);
+  const legacy=identities[allocation.resourceId] ?? legacyInventory[allocation.resourceId];
+  if(stored && legacy && (stored.key!==legacy.key || stored.pocket!==legacy.pocket))return fail();
+  const identity=stored ?? legacy;
   if(!identity || !/^0x[0-9a-f]{64}$/i.test(identity.key) || !/^0x[0-9a-f]{64}$/i.test(identity.pocket) || !Number.isFinite(Date.parse(allocation.expiresAt)) || Date.parse(allocation.expiresAt)<=Date.now())return fail();
   return new Response(JSON.stringify({privateKey:identity.key,pocket:identity.pocket,expiresAt:allocation.expiresAt}),{headers});
  } catch {return fail();}
-}
+}; }
+export default createHandler();
 export const config={path:'/__playground/redeem'};

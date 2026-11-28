@@ -9,7 +9,7 @@ import { rememberDisplayEvidence, discoverPublicPocket, discoverPublicPockets, h
 import { parseCkb } from './amount';
 import type { PocketState, PreparedTransaction, TransactionResult } from './domain';
 
-export const browserMode = import.meta.env?.VITE_QUOTACELL_BROWSER === '1' || (import.meta.env.DEV && import.meta.env.VITE_QUOTACELL_PLAYGROUND === '1');
+export const browserMode = import.meta.env?.VITE_QUOTACELL_BROWSER === '1' || (import.meta.env?.DEV && import.meta.env?.VITE_QUOTACELL_PLAYGROUND === '1');
 export const demoPocket = '0x7b3d89c22431e061814fbe61cc09e6c888b44a7076b782a75c3f1612d1597cc0';
 const client = new c.ClientPublicTestnet({ url: publicDiscoveryNetwork.rpc, fallbacks: [] });
 const standard = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
