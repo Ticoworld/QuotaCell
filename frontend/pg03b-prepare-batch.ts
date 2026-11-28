@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import * as c from '@ckb-ccc/core';
 import {lock} from 'proper-lockfile';
 import {signPreparedPlaygroundTransaction} from './src/playground-signing';
+import {reconcileRecordedTransaction} from './src/provision-reconciliation';
 
 const CKB=100_000_000n;
 const PUDGE_GENESIS='0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606';
@@ -52,14 +53,7 @@ async function waitCommitted(hash:string){
 }
 
 async function reconcileRaw(intent:{hash:string;signed:string}){
- const signed=c.Transaction.fromBytes(intent.signed);
- if(signed.hash()!==intent.hash)throw new Error('Saved transaction identity is invalid.');
- const observed=await client.getTransaction(intent.hash);
- if(!observed){
-  // Re-submit only the exact journaled transaction, never construct a replacement.
-  try {if(await client.sendTransaction(signed)!==intent.hash)throw new Error('Transaction hash mismatch.');} catch { /* Reconcile the original hash below. */ }
- }
- return waitCommitted(intent.hash);
+ return reconcileRecordedTransaction(intent,{hash:bytes=>c.Transaction.fromBytes(bytes).hash(),lookup:hash=>client.getTransaction(hash),send:bytes=>client.sendTransaction(c.Transaction.fromBytes(bytes)),wait:waitCommitted});
 }
 
 type BrowserPudgeModule=typeof import('./src/browserPudge');
